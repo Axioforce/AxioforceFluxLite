@@ -1,0 +1,74 @@
+import os
+from dataclasses import dataclass
+from typing import Tuple
+
+
+# Connection defaults
+SOCKET_HOST: str = os.environ.get("SOCKET_HOST", "http://localhost")
+SOCKET_PORT: int = int(os.environ.get("SOCKET_PORT", "3000"))
+HTTP_PORT: int = int(os.environ.get("HTTP_PORT", "3001"))
+
+
+# Drawing and scaling defaults
+PX_PER_MM: float = float(os.environ.get("PX_PER_MM", "0.8"))
+GRID_MM_SPACING: int = 100
+AXIS_THICKNESS_PX: int = 2
+ORIGIN_Y_FRACTION: float = float(os.environ.get("ORIGIN_Y_FRACTION", "0.65"))
+
+
+# Plate footprints (mm) full width x full height (updated real measurements)
+# Width corresponds to world Y (right on screen), Height to world X (up on screen)
+TYPE06_W_MM: float = 404.0
+TYPE06_H_MM: float = 353.2
+TYPE07_W_MM: float = 353.3
+TYPE07_H_MM: float = 607.3
+TYPE08_W_MM: float = 658.1
+TYPE08_H_MM: float = 607.3
+
+# Precompute half-extents
+TYPE06_HALF_W_MM: float = TYPE06_W_MM / 2.0
+TYPE06_HALF_H_MM: float = TYPE06_H_MM / 2.0
+TYPE07_HALF_W_MM: float = TYPE07_W_MM / 2.0
+TYPE07_HALF_H_MM: float = TYPE07_H_MM / 2.0
+TYPE08_HALF_W_MM: float = TYPE08_W_MM / 2.0
+TYPE08_HALF_H_MM: float = TYPE08_H_MM / 2.0
+
+
+# Landing zone placements (mm) - exact centers
+LAUNCH_CENTER_MM: Tuple[float, float] = (0.0, 0.0)
+# New spec: launch->landing midpoint 1402.6 mm; landing plates have 17 mm gap
+LANDING_MID_Y_MM: float = 1402.6
+LANDING_OFFSET_Y_MM: float = 337.6  # center-to-plate-center offset along +Y/-Y
+LANDING_LOWER_CENTER_MM: Tuple[float, float] = (0.0, LANDING_MID_Y_MM - LANDING_OFFSET_Y_MM)
+LANDING_UPPER_CENTER_MM: Tuple[float, float] = (0.0, LANDING_MID_Y_MM + LANDING_OFFSET_Y_MM)
+
+
+# COP visualization
+COP_R_MIN_PX: float = 4.0
+COP_R_MAX_PX: float = 40.0
+COP_SCALE_K: float = float(os.environ.get("COP_SCALE_K", "0.01"))  # px per Newton
+
+# Data smoothing and noise suppression
+FZ_THRESHOLD_N: float = 22.0
+SMOOTH_ALPHA: float = 0.2  # EWMA weight
+
+
+# Colors as RGB tuples for cross-backend use
+COLOR_BG: Tuple[int, int, int] = (18, 18, 20)
+COLOR_GRID: Tuple[int, int, int] = (60, 60, 68)
+COLOR_AXIS_X: Tuple[int, int, int] = (200, 80, 80)
+COLOR_AXIS_Y: Tuple[int, int, int] = (80, 160, 80)
+COLOR_PLATE: Tuple[int, int, int] = (90, 110, 140)
+COLOR_PLATE_OUTLINE: Tuple[int, int, int] = (180, 200, 230)
+COLOR_COP_LAUNCH: Tuple[int, int, int] = (70, 140, 255)
+COLOR_COP_LANDING: Tuple[int, int, int] = (80, 210, 120)
+COLOR_TEXT: Tuple[int, int, int] = (220, 220, 230)
+
+
+@dataclass
+class UiFlags:
+    show_plates: bool = True
+    show_markers: bool = True
+    show_labels: bool = False
+
+
