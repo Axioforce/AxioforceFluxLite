@@ -23,6 +23,7 @@ class Controller:
         self._active_devices: dict[str, float] = {}  # device_id -> last_seen_timestamp
         self._state_lock = threading.Lock()
         self._overrun_count = 0
+        self._pending_force_vector: Optional[tuple[str, int, float, float, float]] = None  # (device_id, t_ms, fx, fy, fz)
         
         # Pitching mound configuration
         self._mound_definition: Optional[dict] = None
@@ -71,6 +72,8 @@ class Controller:
                 if self._single_last_selected_id != normalized:
                     self._single_last_selected_id = normalized
                     self._single_state = None
+                    with self._state_lock:
+                        self._pending_force_vector = None
         except Exception:
             pass
 
@@ -105,6 +108,8 @@ class Controller:
                         self._single_last_selected_id = selected_id
                     # Compute Fz total (prefer Sum)
                     sensors = data.get("sensors") or []
+                    fx_total = 0.0
+                    fy_total = 0.0
                     fz_total = 0.0
                     sum_entry = None
                     for s in sensors:
@@ -116,12 +121,18 @@ class Controller:
                             continue
                     if sum_entry is not None:
                         try:
+                            fx_total = float(sum_entry.get("x", 0.0))
+                            fy_total = float(sum_entry.get("y", 0.0))
                             fz_total = float(sum_entry.get("z", 0.0))
                         except Exception:
+                            fx_total = 0.0
+                            fy_total = 0.0
                             fz_total = 0.0
                     else:
                         for s in sensors:
                             try:
+                                fx_total += float(s.get("x", 0.0))
+                                fy_total += float(s.get("y", 0.0))
                                 fz_total += float(s.get("z", 0.0))
                             except Exception:
                                 continue
@@ -142,6 +153,12 @@ class Controller:
                                 self.view.bridge.single_snapshot_ready.emit(snap)
                             except Exception:
                                 pass
+                        # Store latest force vector; throttled emission happens in 60 Hz tick
+                        try:
+                            with self._state_lock:
+                                self._pending_force_vector = (str(dev_id), int(time_ms), float(fx_total), float(fy_total), float(fz_total))
+                        except Exception:
+                            pass
                 else:
                     # Ignore non-matching messages; keep last snapshot to avoid flicker
                     pass
@@ -464,6 +481,20 @@ class Controller:
                     self.view.bridge.active_devices_ready.emit(active_ids)
                 except Exception:
                     pass
+
+            # Throttled force vector emission for Sensor View at ~60 Hz
+            try:
+                fv: Optional[tuple[str, int, float, float, float]]
+                with self._state_lock:
+                    fv = self._pending_force_vector
+                if fv and hasattr(self.view, "bridge"):
+                    try:
+                        dev_id, t_ms, fx, fy, fz = fv
+                        self.view.bridge.force_vector_ready.emit(dev_id, t_ms, fx, fy, fz)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
             elapsed = time.time() - t0
             sleep_s = max(0.0, target_dt - elapsed)

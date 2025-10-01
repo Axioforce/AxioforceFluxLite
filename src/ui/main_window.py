@@ -9,6 +9,7 @@ from .bridge import UiBridge
 from .state import ViewState
 from .widgets.world_canvas import WorldCanvas
 from .panels.control_panel import ControlPanel
+from .widgets.force_plot import ForcePlotWidget
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -35,11 +36,8 @@ class MainWindow(QtWidgets.QMainWindow):
         sensor_left = QtWidgets.QWidget()
         sll = QtWidgets.QVBoxLayout(sensor_left)
         sll.setContentsMargins(0, 0, 0, 0)
-        lbl_sens_l = QtWidgets.QLabel("Sensor View (coming soon)")
-        lbl_sens_l.setAlignment(QtCore.Qt.AlignCenter)
-        sll.addStretch(1)
-        sll.addWidget(lbl_sens_l)
-        sll.addStretch(1)
+        self.sensor_plot_left = ForcePlotWidget()
+        sll.addWidget(self.sensor_plot_left)
         self.top_tabs_left.addTab(sensor_left, "Sensor View")
         
 
@@ -47,11 +45,8 @@ class MainWindow(QtWidgets.QMainWindow):
         sensor_right = QtWidgets.QWidget()
         srl = QtWidgets.QVBoxLayout(sensor_right)
         srl.setContentsMargins(0, 0, 0, 0)
-        lbl_sens_r = QtWidgets.QLabel("Sensor View (coming soon)")
-        lbl_sens_r.setAlignment(QtCore.Qt.AlignCenter)
-        srl.addStretch(1)
-        srl.addWidget(lbl_sens_r)
-        srl.addStretch(1)
+        self.sensor_plot_right = ForcePlotWidget()
+        srl.addWidget(self.sensor_plot_right)
         self.top_tabs_right.addTab(sensor_right, "Sensor View")
         self.top_tabs_right.setCurrentWidget(sensor_right)
 
@@ -93,6 +88,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bridge.plate_device_id_ready.connect(self.set_plate_device_id)
         self.bridge.available_devices_ready.connect(self.set_available_devices)
         self.bridge.active_devices_ready.connect(self.update_active_devices)
+        self.bridge.force_vector_ready.connect(self._on_force_vector)
 
     def on_snapshots(self, snaps: Dict[str, Tuple[float, float, float, int, bool, float, float]], hz_text: Optional[str]) -> None:
         if hz_text:
@@ -139,6 +135,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.canvas_right._fit_done = False
         self.canvas_left.update()
         self.canvas_right.update()
+        try:
+            self.sensor_plot_left.clear()
+            self.sensor_plot_right.clear()
+        except Exception:
+            pass
 
     def _on_mound_device_selected(self, position_id: str, device_id: str) -> None:
         if hasattr(self, "_on_mound_device_cb") and callable(self._on_mound_device_cb):
@@ -162,4 +163,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def set_plate_device_id(self, plate_name: str, device_id: str) -> None:
         self.state.plate_device_ids[plate_name] = device_id
+
+    def _on_force_vector(self, device_id: str, t_ms: int, fx: float, fy: float, fz: float) -> None:
+        try:
+            # In single-device mode, controller already filters to selected device
+            if hasattr(self, "sensor_plot_left") and self.sensor_plot_left is not None:
+                self.sensor_plot_left.add_point(t_ms, fx, fy, fz)
+            if hasattr(self, "sensor_plot_right") and self.sensor_plot_right is not None:
+                self.sensor_plot_right.add_point(t_ms, fx, fy, fz)
+        except Exception:
+            pass
 
