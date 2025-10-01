@@ -8,7 +8,7 @@ from . import config
 
 def run_qt() -> int:
     from PySide6 import QtWidgets  # type: ignore
-    from .view_qt import MainWindow
+    from .ui.main_window import MainWindow
     from .controller import Controller
 
     app = QtWidgets.QApplication(sys.argv)

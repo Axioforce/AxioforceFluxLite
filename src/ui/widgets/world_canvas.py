@@ -1,0 +1,483 @@
+from __future__ import annotations
+
+from typing import Dict, List, Optional, Tuple
+
+from PySide6 import QtCore, QtGui, QtWidgets
+
+from ... import config
+from ...model import LAUNCH_NAME, LANDING_NAME
+from ..state import ViewState
+from ..dialogs.device_picker import DevicePickerDialog
+
+
+class WorldCanvas(QtWidgets.QWidget):
+    mound_device_selected = QtCore.Signal(str, str)  # position_id, device_id
+
+    def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.state = state
+        self._snapshots: Dict[str, Tuple[float, float, float, int, bool, float, float]] = {}
+        self._single_snapshot: Optional[Tuple[float, float, float, int, bool, float, float]] = None
+        self.setMinimumSize(800, 600)
+        self.setAutoFillBackground(True)
+        self.WORLD_X_MIN, self.WORLD_X_MAX = -1.0, 1.0
+        self.WORLD_Y_MIN, self.WORLD_Y_MAX = -1.0, 1.0
+        self.MARGIN_PX = 20
+        self._fit_done = False
+        self._x_mid = 0.0
+        self._y_mid = 0.0
+        self._available_devices: List[Tuple[str, str, str]] = []
+        self._active_device_ids: set = set()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # noqa: N802
+        self._fit_done = False
+        super().showEvent(event)
+        self.update()
+
+    def set_snapshots(self, snaps: Dict[str, Tuple[float, float, float, int, bool, float, float]]) -> None:
+        self._snapshots = snaps
+        sid = (self.state.selected_device_id or "").strip()
+        if sid and sid in self._snapshots:
+            self._single_snapshot = self._snapshots.get(sid)
+        self.update()
+
+    def set_single_snapshot(self, snap: Optional[Tuple[float, float, float, int, bool, float, float]]) -> None:
+        self._single_snapshot = snap
+        if self.state.display_mode == "single":
+            self.update()
+
+    def set_available_devices(self, devices: List[Tuple[str, str, str]]) -> None:
+        self._available_devices = devices
+
+    def update_active_devices(self, active_device_ids: set) -> None:
+        self._active_device_ids = active_device_ids
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
+        self._fit_done = False
+        super().resizeEvent(event)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if self.state.display_mode != "mound" or event.button() != QtCore.Qt.LeftButton:
+            return super().mousePressEvent(event)
+        pos = event.pos()
+        clicked_position = self._get_clicked_position(pos)
+        if clicked_position:
+            self._show_device_picker(clicked_position)
+        super().mousePressEvent(event)
+
+    def _compute_world_bounds(self) -> None:
+        if self.state.display_mode == "single":
+            is_07 = (self.state.selected_device_type or "").strip() == "07"
+            half_w = (config.TYPE07_W_MM if is_07 else config.TYPE08_W_MM) / 2.0
+            half_h = (config.TYPE07_H_MM if is_07 else config.TYPE08_H_MM) / 2.0
+            margin_mm = 200.0
+            self.WORLD_X_MIN, self.WORLD_X_MAX = -half_h - margin_mm, half_h + margin_mm
+            self.WORLD_Y_MIN, self.WORLD_Y_MAX = -half_w - margin_mm, half_w + margin_mm
+            return
+        s07_w = config.TYPE07_W_MM / 2.0
+        s07_h = config.TYPE07_H_MM / 2.0
+        s08_w = config.TYPE08_W_MM / 2.0
+        s08_h = config.TYPE08_H_MM / 2.0
+        x_min = -max(s07_h, s08_h)
+        x_max = max(s07_h, s08_h)
+        y_edges = [
+            -s07_w, s07_w,
+            config.LANDING_LOWER_CENTER_MM[1] - s08_w, config.LANDING_LOWER_CENTER_MM[1] + s08_w,
+            config.LANDING_UPPER_CENTER_MM[1] - s08_w, config.LANDING_UPPER_CENTER_MM[1] + s08_w,
+        ]
+        y_min = min(y_edges)
+        y_max = max(y_edges)
+        margin_mm = 150.0
+        self.WORLD_X_MIN, self.WORLD_X_MAX = x_min - margin_mm, x_max + margin_mm
+        self.WORLD_Y_MIN, self.WORLD_Y_MAX = y_min - margin_mm, y_max + margin_mm
+
+    def _compute_fit(self) -> None:
+        w, h = self.width(), self.height()
+        self._compute_world_bounds()
+        world_w = self.WORLD_Y_MAX - self.WORLD_Y_MIN
+        world_h = self.WORLD_X_MAX - self.WORLD_X_MIN
+        s = min((w - 2 * self.MARGIN_PX) / world_w, (h - 2 * self.MARGIN_PX) / world_h)
+        self.state.px_per_mm = max(0.01, s)
+        self._y_mid = (self.WORLD_Y_MIN + self.WORLD_Y_MAX) / 2.0
+        self._x_mid = (self.WORLD_X_MIN + self.WORLD_X_MAX) / 2.0
+        self._fit_done = True
+
+    def _to_screen(self, x_mm: float, y_mm: float) -> Tuple[int, int]:
+        w, h = self.width(), self.height()
+        s = self.state.px_per_mm
+        assert s > 0
+        cx, cy = w * 0.5, h * 0.5
+        if self.state.display_mode == "single":
+            sx = int(cx + (x_mm - self._x_mid) * s)
+            sy = int(cy - (y_mm - self._y_mid) * s)
+        else:
+            sx = int(cx + (y_mm - self._y_mid) * s)
+            sy = int(cy - (x_mm - self._x_mid) * s)
+        return sx, sy
+
+    def _draw_grid(self, p: QtGui.QPainter) -> None:
+        w = self.width()
+        h = self.height()
+        scale = self.state.px_per_mm
+        step = max(12, int(config.GRID_MM_SPACING * scale))
+        p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_GRID), 1))
+        for x in range(0, w, step):
+            p.drawLine(x, 0, x, h)
+        for y in range(0, h, step):
+            p.drawLine(0, y, w, y)
+        base_x, base_y = 12, h - 12
+        length = 60
+        if self.state.display_mode == "single":
+            p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_AXIS_X), config.AXIS_THICKNESS_PX))
+            p.drawLine(base_x, base_y, base_x + length, base_y)
+            p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_AXIS_Y), config.AXIS_THICKNESS_PX))
+            p.drawLine(base_x, base_y, base_x, base_y - length)
+            p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_TEXT)))
+            p.drawText(base_x + length + 6, base_y + 4, "X")
+            p.drawText(base_x - 10, base_y - length - 6, "Y")
+        else:
+            p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_AXIS_Y), config.AXIS_THICKNESS_PX))
+            p.drawLine(base_x, base_y, base_x + length, base_y)
+            p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_AXIS_X), config.AXIS_THICKNESS_PX))
+            p.drawLine(base_x, base_y, base_x, base_y - length)
+            p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_TEXT)))
+            p.drawText(base_x + length + 6, base_y + 4, "Y+")
+            p.drawText(base_x - 10, base_y - length - 6, "X+")
+
+    def _draw_plate(self, p: QtGui.QPainter, center_mm: Tuple[float, float], w_mm: float, h_mm: float) -> None:
+        cx, cy = self._to_screen(center_mm[0], center_mm[1])
+        scale = self.state.px_per_mm
+        w_px = int(w_mm * scale)
+        h_px = int(h_mm * scale)
+        rect = QtCore.QRect(int(cx - w_px / 2), int(cy - h_px / 2), w_px, h_px)
+        p.setBrush(QtGui.QColor(*config.COLOR_PLATE))
+        p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_PLATE_OUTLINE), 2))
+        p.drawRect(rect)
+        if self.state.flags.show_labels:
+            p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_TEXT)))
+            label = f"{center_mm} {w_mm:.2f}x{h_mm:.2f}"
+            p.drawText(cx + 6, cy - 6, label)
+        if self.state.display_mode == "single" and (self.state.selected_device_id or "").strip():
+            full_id = (self.state.selected_device_id or "").strip()
+            dev_type = (self.state.selected_device_type or "").strip()
+            try:
+                if "-" in full_id:
+                    prefix, tail = full_id.split("-", 1)
+                else:
+                    prefix, tail = full_id[:2], full_id
+                suffix = tail[-2:] if len(tail) >= 2 else tail
+                type_prefix = dev_type if dev_type in ("06", "07", "08") else (prefix if prefix in ("06", "07", "08") else "")
+                short = f"{type_prefix}-{suffix}" if type_prefix else suffix
+            except Exception:
+                short = full_id[-2:] if len(full_id) >= 2 else full_id
+            p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_TEXT)))
+            top_y = int(cy - h_px / 2) - 26
+            p.drawText(int(cx - 100), top_y, 200, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, short)
+
+    def _draw_plate_logo_single(self, p: QtGui.QPainter, center_mm: Tuple[float, float], w_mm: float, h_mm: float, dev_type: str) -> None:
+        if self.state.display_mode != "single":
+            return
+        cx, cy = self._to_screen(center_mm[0], center_mm[1])
+        scale = self.state.px_per_mm
+        w_px = int(w_mm * scale)
+        h_px = int(h_mm * scale)
+        left_x = int(cx - w_px / 2)
+        top_y = int(cy - h_px / 2)
+        bottom_y = int(cy + h_px / 2)
+        text = "Axioforce"
+        p.save()
+        p.setPen(QtGui.QPen(QtGui.QColor(30, 30, 30)))
+        font = p.font()
+        font.setPointSize(max(9, int(10 * scale / max(scale, 1))))
+        p.setFont(font)
+        if dev_type == "07":
+            inset_px = max(6, int(0.04 * w_px) + 5)
+            pivot_x = left_x + inset_px
+            pivot_y = int((top_y + bottom_y) / 2)
+            p.translate(pivot_x, pivot_y)
+            p.rotate(-90)
+            p.drawText(-int(h_px / 2), -12, h_px, 24, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, text)
+        elif dev_type == "08":
+            p.drawText(int(cx - w_px / 2), top_y + 30, w_px, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, text)
+        p.restore()
+
+    def _draw_connection_port_single(self, p: QtGui.QPainter, center_mm: Tuple[float, float], w_mm: float, h_mm: float, dev_type: str) -> None:
+        if self.state.display_mode != "single" or dev_type not in ("07", "06"):
+            return
+        cx, cy = self._to_screen(center_mm[0], center_mm[1])
+        scale = self.state.px_per_mm
+        w_px = int(w_mm * scale)
+        h_px = int(h_mm * scale)
+        port_h_mm = 4.5 * 25.4
+        port_w_mm = 2.25 * 25.4
+        port_h_px = int(port_h_mm * scale)
+        port_w_px = int(port_w_mm * scale)
+        right_x = int(cx + w_px / 2)
+        inset_px = max(12, int(0.03 * w_px))
+        rect_left = right_x - inset_px - port_w_px
+        rect_top = int(cy - port_h_px / 2)
+        rect = QtCore.QRect(rect_left, rect_top, port_w_px, port_h_px)
+        pen = QtGui.QPen(QtGui.QColor(30, 30, 30))
+        pen.setStyle(QtCore.Qt.DashLine)
+        pen.setWidth(2)
+        p.save()
+        p.setPen(pen)
+        p.setBrush(QtCore.Qt.NoBrush)
+        corner_radius = max(6, int(min(port_w_px, port_h_px) * 0.1))
+        p.drawRoundedRect(rect, corner_radius, corner_radius)
+        p.restore()
+
+    def _draw_placeholder_plate(self, p: QtGui.QPainter) -> None:
+        w_mm = config.TYPE07_H_MM
+        h_mm = config.TYPE07_H_MM
+        cx, cy = self._to_screen(0.0, 0.0)
+        scale = self.state.px_per_mm
+        w_px = int(w_mm * scale)
+        h_px = int(h_mm * scale)
+        rect = QtCore.QRect(int(cx - w_px / 2), int(cy - h_px / 2), w_px, h_px)
+        grey_fill = QtGui.QColor(80, 80, 80, 150)
+        grey_outline = QtGui.QColor(100, 100, 100)
+        p.setBrush(grey_fill)
+        p.setPen(QtGui.QPen(grey_outline, 2, QtCore.Qt.DashLine))
+        p.drawRect(rect)
+        text_color = QtGui.QColor(180, 180, 180)
+        p.setPen(QtGui.QPen(text_color))
+        font = p.font()
+        font.setPointSize(14)
+        font.setBold(True)
+        p.setFont(font)
+        text = "Choose a device below"
+        text_rect = QtCore.QRect(int(cx - w_px / 2), int(cy - 20), w_px, 40)
+        p.drawText(text_rect, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, text)
+
+    def _draw_mound_placeholder(self, p: QtGui.QPainter, center_mm: Tuple[float, float], w_mm: float, h_mm: float, label: str) -> None:
+        cx, cy = self._to_screen(center_mm[0], center_mm[1])
+        scale = self.state.px_per_mm
+        w_px = int(w_mm * scale)
+        h_px = int(h_mm * scale)
+        rect = QtCore.QRect(int(cx - w_px / 2), int(cy - h_px / 2), w_px, h_px)
+        grey_fill = QtGui.QColor(80, 80, 80, 150)
+        grey_outline = QtGui.QColor(120, 120, 120)
+        p.setBrush(grey_fill)
+        p.setPen(QtGui.QPen(grey_outline, 2, QtCore.Qt.DashLine))
+        p.drawRect(rect)
+        text_color = QtGui.QColor(180, 180, 180)
+        p.setPen(QtGui.QPen(text_color))
+        font = p.font()
+        font.setPointSize(10)
+        p.setFont(font)
+        p.drawText(rect, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, label)
+
+    def _draw_plate_logo_mound(self, p: QtGui.QPainter, center_mm: Tuple[float, float], w_mm: float, h_mm: float) -> None:
+        if self.state.display_mode != "mound":
+            return
+        cx, cy = self._to_screen(center_mm[0], center_mm[1])
+        scale = self.state.px_per_mm
+        w_px = int(w_mm * scale)
+        h_px = int(h_mm * scale)
+        right_x = int(cx + w_px / 2)
+        top_y = int(cy - h_px / 2)
+        bottom_y = int(cy + h_px / 2)
+        text = "Axioforce"
+        p.save()
+        p.setPen(QtGui.QPen(QtGui.QColor(30, 30, 30)))
+        font = p.font()
+        font.setPointSize(max(9, int(10 * scale / max(scale, 1))))
+        p.setFont(font)
+        inset_px = max(8, int(0.04 * w_px))
+        pivot_x = right_x - inset_px
+        pivot_y = int((top_y + bottom_y) / 2)
+        p.translate(pivot_x, pivot_y)
+        p.rotate(90)
+        p.drawText(-int(h_px / 2), -12, h_px, 24, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, text)
+        p.restore()
+
+    def _get_plate_dimensions(self, device_id: str) -> Tuple[float, float]:
+        if not device_id:
+            return config.TYPE07_W_MM, config.TYPE07_H_MM
+        for name, axf_id, dev_type in self._available_devices:
+            if axf_id == device_id:
+                if dev_type == "06":
+                    return config.TYPE06_W_MM, config.TYPE06_H_MM
+                elif dev_type == "07":
+                    return config.TYPE07_W_MM, config.TYPE07_H_MM
+                elif dev_type == "08":
+                    return config.TYPE08_W_MM, config.TYPE08_H_MM
+        return config.TYPE07_W_MM, config.TYPE07_H_MM
+
+    def _draw_plates(self, p: QtGui.QPainter) -> None:
+        if not self.state.flags.show_plates:
+            return
+        if self.state.display_mode == "single":
+            if not (self.state.selected_device_id or "").strip():
+                self._draw_placeholder_plate(p)
+                return
+            dev_type = (self.state.selected_device_type or "").strip()
+            if dev_type == "06":
+                w_mm = config.TYPE06_W_MM
+                h_mm = config.TYPE06_H_MM
+            elif dev_type == "07":
+                w_mm = config.TYPE07_W_MM
+                h_mm = config.TYPE07_H_MM
+            else:
+                w_mm = config.TYPE08_W_MM
+                h_mm = config.TYPE08_H_MM
+            self._draw_plate(p, (0.0, 0.0), w_mm, h_mm)
+            self._draw_plate_logo_single(p, (0.0, 0.0), w_mm, h_mm, dev_type)
+            self._draw_connection_port_single(p, (0.0, 0.0), w_mm, h_mm, dev_type)
+            return
+        launch_device = self.state.mound_devices.get("Launch Zone")
+        if launch_device:
+            w_mm, h_mm = self._get_plate_dimensions(launch_device)
+            self._draw_plate(p, (0.0, 0.0), w_mm, h_mm)
+            self._draw_plate_logo_mound(p, (0.0, 0.0), w_mm, h_mm)
+        else:
+            self._draw_mound_placeholder(p, (0.0, 0.0), config.TYPE07_W_MM, config.TYPE07_H_MM, "Launch Zone\n(Click to select)")
+        lower_device = self.state.mound_devices.get("Lower Landing Zone")
+        if lower_device:
+            w_mm, h_mm = self._get_plate_dimensions(lower_device)
+            self._draw_plate(p, config.LANDING_LOWER_CENTER_MM, w_mm, h_mm)
+            self._draw_plate_logo_mound(p, config.LANDING_LOWER_CENTER_MM, w_mm, h_mm)
+        else:
+            self._draw_mound_placeholder(p, config.LANDING_LOWER_CENTER_MM, config.TYPE08_W_MM, config.TYPE08_H_MM, "Lower Landing\n(Click to select)")
+        upper_device = self.state.mound_devices.get("Upper Landing Zone")
+        if upper_device:
+            w_mm, h_mm = self._get_plate_dimensions(upper_device)
+            self._draw_plate(p, config.LANDING_UPPER_CENTER_MM, w_mm, h_mm)
+            self._draw_plate_logo_mound(p, config.LANDING_UPPER_CENTER_MM, w_mm, h_mm)
+        else:
+            self._draw_mound_placeholder(p, config.LANDING_UPPER_CENTER_MM, config.TYPE08_W_MM, config.TYPE08_H_MM, "Upper Landing\n(Click to select)")
+
+    def _draw_cop(self, p: QtGui.QPainter, name: str, snap: Tuple[float, float, float, int, bool, float, float]) -> None:
+        if not self.state.flags.show_markers:
+            return
+        x_mm, y_mm, fz_n, _, is_visible, raw_x_mm, raw_y_mm = snap
+        if not is_visible:
+            return
+        color = config.COLOR_COP_LAUNCH if name == LAUNCH_NAME else config.COLOR_COP_LANDING
+        cx, cy = self._to_screen(x_mm, y_mm)
+        r_px = max(config.COP_R_MIN_PX, min(config.COP_R_MAX_PX, self.state.cop_scale_k * abs(fz_n)))
+        p.setBrush(QtGui.QColor(*color))
+        p.setPen(QtGui.QPen(QtCore.Qt.black, 1))
+        p.drawEllipse(QtCore.QPoint(cx, cy), int(r_px), int(r_px))
+        p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_TEXT)))
+        label = f"{x_mm:.1f}, {y_mm:.1f}"
+        p.drawText(cx - 60, int(cy - r_px - 24), 120, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, label)
+        zone_cx_mm = 0.0
+        zone_cy_mm = 0.0 if name == LAUNCH_NAME else config.LANDING_MID_Y_MM
+        zx, zy = self._to_screen(zone_cx_mm, zone_cy_mm)
+        p.drawText(zx - 70, int(zy - self.state.px_per_mm * (config.TYPE07_H_MM if name == LAUNCH_NAME else config.TYPE08_H_MM) * 0.6),
+                   140, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
+                   f"raw {raw_x_mm:.1f}, {raw_y_mm:.1f}")
+
+    def _draw_cop_single(self, p: QtGui.QPainter, snap: Tuple[float, float, float, int, bool, float, float]) -> None:
+        x_mm, y_mm, fz_n, _, is_visible, raw_x_mm, raw_y_mm = snap
+        if not is_visible:
+            return
+        cx, cy = self._to_screen(x_mm, y_mm)
+        r_px = max(config.COP_R_MIN_PX, min(config.COP_R_MAX_PX, self.state.cop_scale_k * abs(fz_n)))
+        p.setBrush(QtGui.QColor(*config.COLOR_COP_LAUNCH))
+        p.setPen(QtGui.QPen(QtCore.Qt.black, 1))
+        p.drawEllipse(QtCore.QPoint(cx, cy), int(r_px), int(r_px))
+        p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_TEXT)))
+        label = f"{x_mm:.1f}, {y_mm:.1f}"
+        p.drawText(cx - 60, int(cy - r_px - 24), 120, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, label)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        p.fillRect(0, 0, self.width(), self.height(), QtGui.QColor(*config.COLOR_BG))
+        p.setPen(QtGui.QPen(QtGui.QColor(80, 80, 88)))
+        p.drawRect(0, 0, max(0, self.width() - 1), max(0, self.height() - 1))
+        if not self._fit_done and self.width() > 0 and self.height() > 0:
+            self._compute_fit()
+        self._draw_grid(p)
+        self._draw_plates(p)
+        if self.state.display_mode == "single":
+            if self._single_snapshot is not None:
+                self._draw_cop_single(p, self._single_snapshot)
+        else:
+            all_configured = all(self.state.mound_devices.get(pos) for pos in ["Launch Zone", "Upper Landing Zone", "Lower Landing Zone"])
+            if all_configured:
+                for name, snap in self._snapshots.items():
+                    if name in (LAUNCH_NAME, LANDING_NAME):
+                        self._draw_cop(p, name, snap)
+        self._draw_plate_names(p)
+        p.end()
+
+    def _draw_plate_names(self, p: QtGui.QPainter) -> None:
+        return
+
+    def _short_id_from_full(self, full_id: str, dev_type_hint: Optional[str] = None) -> str:
+        full = (full_id or "").strip()
+        if not full:
+            return ""
+        try:
+            if "-" in full:
+                prefix, tail = full.split("-", 1)
+            else:
+                prefix, tail = full[:2], full
+            suffix = tail[-2:] if len(tail) >= 2 else tail
+            type_prefix = dev_type_hint if dev_type_hint in ("06", "07", "08") else (prefix if prefix in ("06", "07", "08") else "")
+            return f"{type_prefix}-{suffix}" if type_prefix else suffix
+        except Exception:
+            return full[-2:] if len(full) >= 2 else full
+
+    def _draw_short_ids_mound(self, p: QtGui.QPainter) -> None:
+        p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_TEXT)))
+        scale = self.state.px_per_mm
+        cx, cy = self._to_screen(0.0, 0.0)
+        h_px_launch = int(config.TYPE07_H_MM * scale)
+        sid_launch = self._short_id_from_full(self.state.mound_devices.get("Launch Zone", ""), "07")
+        p.drawText(int(cx - 100), int(cy - h_px_launch / 2) - 26, 200, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, sid_launch)
+        llx, lly = self._to_screen(config.LANDING_LOWER_CENTER_MM[0], config.LANDING_LOWER_CENTER_MM[1])
+        h_px_l = int(config.TYPE08_H_MM * scale)
+        sid_lower = self._short_id_from_full(self.state.mound_devices.get("Lower Landing Zone", ""), "08")
+        p.drawText(int(llx - 100), int(lly - h_px_l / 2) - 26, 200, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, sid_lower)
+        lux, luy = self._to_screen(config.LANDING_UPPER_CENTER_MM[0], config.LANDING_UPPER_CENTER_MM[1])
+        sid_upper = self._short_id_from_full(self.state.mound_devices.get("Upper Landing Zone", ""), "08")
+        p.drawText(int(lux - 100), int(luy - h_px_l / 2) - 26, 200, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, sid_upper)
+
+    def _get_clicked_position(self, pos: QtCore.QPoint) -> Optional[str]:
+        if not self._fit_done:
+            return None
+        scale = self.state.px_per_mm
+        cx, cy = self._to_screen(0.0, 0.0)
+        w_px = int(config.TYPE07_W_MM * scale)
+        h_px = int(config.TYPE07_H_MM * scale)
+        rect = QtCore.QRect(int(cx - w_px / 2), int(cy - h_px / 2), w_px, h_px)
+        label_rect = QtCore.QRect(int(cx - 100), int(cy - h_px / 2) - 26, 200, 18)
+        if rect.contains(pos) or label_rect.contains(pos):
+            return "Launch Zone"
+        llx, lly = self._to_screen(config.LANDING_LOWER_CENTER_MM[0], config.LANDING_LOWER_CENTER_MM[1])
+        w_px_l = int(config.TYPE08_W_MM * scale)
+        h_px_l = int(config.TYPE08_H_MM * scale)
+        rect = QtCore.QRect(int(llx - w_px_l / 2), int(lly - h_px_l / 2), w_px_l, h_px_l)
+        label_rect = QtCore.QRect(int(llx - 100), int(lly - h_px_l / 2) - 26, 200, 18)
+        if rect.contains(pos) or label_rect.contains(pos):
+            return "Lower Landing Zone"
+        lux, luy = self._to_screen(config.LANDING_UPPER_CENTER_MM[0], config.LANDING_UPPER_CENTER_MM[1])
+        rect = QtCore.QRect(int(lux - w_px_l / 2), int(luy - h_px_l / 2), w_px_l, h_px_l)
+        label_rect = QtCore.QRect(int(lux - 100), int(luy - h_px_l / 2) - 26, 200, 18)
+        if rect.contains(pos) or label_rect.contains(pos):
+            return "Upper Landing Zone"
+        return None
+
+    def _show_device_picker(self, position_id: str) -> None:
+        if position_id == "Launch Zone":
+            required_type = "07"
+        else:
+            required_type = "08"
+        devices_for_picker: List[Tuple[str, str, str]] = []
+        for name, axf_id, dev_type in self._available_devices:
+            if dev_type == required_type:
+                devices_for_picker.append((name, axf_id, dev_type))
+        dialog = DevicePickerDialog(position_id, required_type, devices_for_picker, self)
+        result = dialog.exec()
+        if result == QtWidgets.QDialog.Accepted and dialog.selected_device:
+            name, axf_id, dev_type = dialog.selected_device
+            self.state.mound_devices[position_id] = axf_id
+            self.mound_device_selected.emit(position_id, axf_id)
+            self.update()
+
+
