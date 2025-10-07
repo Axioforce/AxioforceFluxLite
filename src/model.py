@@ -95,14 +95,11 @@ class Model:
         cop_x_mm = float(cop.get("x", 0.0)) * 1000.0
         cop_y_mm = float(cop.get("y", 0.0)) * 1000.0
         raw_x_mm, raw_y_mm = cop_x_mm, cop_y_mm
-        # Launch Zone: invert X axis
-        if pos == LAUNCH_NAME:
-            cop_x_mm = -cop_x_mm
+        # Launch Zone: keep X as-is (no mirroring)
         time_ms = int(payload.get("time", 0))
 
-        # Landing Zone (unused for now): keep previous orientation fix if drawn later
+        # Landing Zone: translate into landing world coordinates, no X mirroring
         if pos == LANDING_NAME:
-            cop_x_mm = -cop_x_mm
             cop_y_mm = cop_y_mm + config.LANDING_MID_Y_MM
         # Update values and apply 22 N noise filter for visibility
         self.devices[pos].raw_cop_x_mm = raw_x_mm

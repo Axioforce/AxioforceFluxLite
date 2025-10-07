@@ -24,6 +24,8 @@ class Controller:
         self._state_lock = threading.Lock()
         self._overrun_count = 0
         self._pending_force_vector: Optional[tuple[str, int, float, float, float]] = None  # (device_id, t_ms, fx, fy, fz)
+        self._pending_moment_vectors: dict[str, tuple[int, float, float, float]] = {}
+        self._pending_mound_force_vectors: dict[str, tuple[int, float, float, float]] = {}
         
         # Pitching mound configuration
         self._mound_definition: Optional[dict] = None
@@ -74,6 +76,7 @@ class Controller:
                     self._single_state = None
                     with self._state_lock:
                         self._pending_force_vector = None
+                        self._pending_mound_force_vectors.clear()
         except Exception:
             pass
 
@@ -164,6 +167,60 @@ class Controller:
                     pass
         except Exception:
             # Non-fatal; keep streaming
+            pass
+
+        # Mound-mode per-zone force vector capture (Launch vs Landing)
+        try:
+            if hasattr(self.view, "state") and getattr(self.view.state, "display_mode", "") == "mound":
+                # Compute force totals (prefer Sum entry)
+                sensors = data.get("sensors") or []
+                fx_total = 0.0
+                fy_total = 0.0
+                fz_total = 0.0
+                sum_entry = None
+                for s in sensors:
+                    try:
+                        if str(s.get("name", "")).strip().lower() == "sum":
+                            sum_entry = s
+                            break
+                    except Exception:
+                        continue
+                if sum_entry is not None:
+                    try:
+                        fx_total = float(sum_entry.get("x", 0.0))
+                        fy_total = float(sum_entry.get("y", 0.0))
+                        fz_total = float(sum_entry.get("z", 0.0))
+                    except Exception:
+                        fx_total = 0.0
+                        fy_total = 0.0
+                        fz_total = 0.0
+                else:
+                    for s in sensors:
+                        try:
+                            fx_total += float(s.get("x", 0.0))
+                            fy_total += float(s.get("y", 0.0))
+                            fz_total += float(s.get("z", 0.0))
+                        except Exception:
+                            continue
+                time_ms = int(data.get("time", 0))
+                if pos is not None:
+                    with self._state_lock:
+                        self._pending_mound_force_vectors[pos] = (time_ms, fx_total, fy_total, fz_total)
+        except Exception:
+            pass
+
+        # Capture moments for all devices (individual and virtual) for Moments View
+        try:
+            m = data.get("moments") or {}
+            mx = float(m.get("x", 0.0))
+            my = float(m.get("y", 0.0))
+            mz = float(m.get("z", 0.0))
+            t_ms = int(data.get("time", 0))
+            did = str(data.get("deviceId") or data.get("device_id") or "").strip()
+            if did:
+                with self._state_lock:
+                    self._pending_moment_vectors[did] = (t_ms, mx, my, mz)
+        except Exception:
             pass
 
     def connect(self, host: str, port: int) -> None:
@@ -491,6 +548,33 @@ class Controller:
                     try:
                         dev_id, t_ms, fx, fy, fz = fv
                         self.view.bridge.force_vector_ready.emit(dev_id, t_ms, fx, fy, fz)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # Mound-mode batched per-zone force emission at ~60 Hz
+            try:
+                if hasattr(self.view, "state") and getattr(self.view.state, "display_mode", "") == "mound":
+                    snapshot: dict[str, tuple[int, float, float, float]]
+                    with self._state_lock:
+                        snapshot = dict(self._pending_mound_force_vectors)
+                    if snapshot and hasattr(self.view, "bridge"):
+                        try:
+                            self.view.bridge.mound_force_vectors_ready.emit(snapshot)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            # Batched moments emission for Moments View at ~60 Hz
+            try:
+                moments_snapshot: dict[str, tuple[int, float, float, float]]
+                with self._state_lock:
+                    moments_snapshot = dict(self._pending_moment_vectors)
+                if moments_snapshot and hasattr(self.view, "bridge"):
+                    try:
+                        self.view.bridge.moments_ready.emit(moments_snapshot)
                     except Exception:
                         pass
             except Exception:

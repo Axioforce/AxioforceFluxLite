@@ -10,6 +10,7 @@ from .state import ViewState
 from .widgets.world_canvas import WorldCanvas
 from .panels.control_panel import ControlPanel
 from .widgets.force_plot import ForcePlotWidget
+from .widgets.moments_view import MomentsViewWidget
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -39,6 +40,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sensor_plot_left = ForcePlotWidget()
         sll.addWidget(self.sensor_plot_left)
         self.top_tabs_left.addTab(sensor_left, "Sensor View")
+        moments_left = MomentsViewWidget()
+        self.moments_view_left = moments_left
+        self.top_tabs_left.addTab(moments_left, "Moments View")
         
 
         self.top_tabs_right.addTab(self.canvas_right, "Plate View")
@@ -48,6 +52,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sensor_plot_right = ForcePlotWidget()
         srl.addWidget(self.sensor_plot_right)
         self.top_tabs_right.addTab(sensor_right, "Sensor View")
+        moments_right = MomentsViewWidget()
+        self.moments_view_right = moments_right
+        self.top_tabs_right.addTab(moments_right, "Moments View")
         self.top_tabs_right.setCurrentWidget(sensor_right)
 
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
@@ -89,6 +96,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bridge.available_devices_ready.connect(self.set_available_devices)
         self.bridge.active_devices_ready.connect(self.update_active_devices)
         self.bridge.force_vector_ready.connect(self._on_force_vector)
+        self.bridge.moments_ready.connect(self._on_moments_ready)
+        self.bridge.mound_force_vectors_ready.connect(self._on_mound_force_vectors)
 
     def on_snapshots(self, snaps: Dict[str, Tuple[float, float, float, int, bool, float, float]], hz_text: Optional[str]) -> None:
         if hz_text:
@@ -138,6 +147,10 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.sensor_plot_left.clear()
             self.sensor_plot_right.clear()
+            # Show dual-series legend only in mound mode
+            is_mound = getattr(self, "state", None) is not None and getattr(self.state, "display_mode", "") == "mound"
+            self.sensor_plot_left.set_dual_series_enabled(bool(is_mound))
+            self.sensor_plot_right.set_dual_series_enabled(bool(is_mound))
         except Exception:
             pass
 
@@ -171,6 +184,37 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.sensor_plot_left.add_point(t_ms, fx, fy, fz)
             if hasattr(self, "sensor_plot_right") and self.sensor_plot_right is not None:
                 self.sensor_plot_right.add_point(t_ms, fx, fy, fz)
+        except Exception:
+            pass
+
+    def _on_moments_ready(self, moments: dict) -> None:
+        try:
+            if hasattr(self, "moments_view_left") and self.moments_view_left is not None:
+                self.moments_view_left.set_moments(moments)
+            if hasattr(self, "moments_view_right") and self.moments_view_right is not None:
+                self.moments_view_right.set_moments(moments)
+        except Exception:
+            pass
+
+    def _on_mound_force_vectors(self, per_zone: dict) -> None:
+        """per_zone: { 'Launch Zone': (t_ms, fx, fy, fz), 'Landing Zone': (t_ms, fx, fy, fz), ... }"""
+        try:
+            if hasattr(self, "sensor_plot_left") and self.sensor_plot_left is not None:
+                self.sensor_plot_left.set_dual_series_enabled(True)
+                if "Launch Zone" in per_zone:
+                    t_ms, fx, fy, fz = per_zone.get("Launch Zone")
+                    self.sensor_plot_left.add_point_launch(t_ms, fx, fy, fz)
+                if "Landing Zone" in per_zone:
+                    t_ms, fx, fy, fz = per_zone.get("Landing Zone")
+                    self.sensor_plot_left.add_point_landing(t_ms, fx, fy, fz)
+            if hasattr(self, "sensor_plot_right") and self.sensor_plot_right is not None:
+                self.sensor_plot_right.set_dual_series_enabled(True)
+                if "Launch Zone" in per_zone:
+                    t_ms, fx, fy, fz = per_zone.get("Launch Zone")
+                    self.sensor_plot_right.add_point_launch(t_ms, fx, fy, fz)
+                if "Landing Zone" in per_zone:
+                    t_ms, fx, fy, fz = per_zone.get("Landing Zone")
+                    self.sensor_plot_right.add_point_landing(t_ms, fx, fy, fz)
         except Exception:
             pass
 

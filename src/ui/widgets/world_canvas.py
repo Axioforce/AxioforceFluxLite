@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
+import threading
+
+import requests
+import json
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -12,6 +16,7 @@ from ..dialogs.device_picker import DevicePickerDialog
 
 class WorldCanvas(QtWidgets.QWidget):
     mound_device_selected = QtCore.Signal(str, str)  # position_id, device_id
+    mapping_ready = QtCore.Signal(object)  # Dict[str, str]
 
     def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -29,10 +34,28 @@ class WorldCanvas(QtWidgets.QWidget):
         self._available_devices: List[Tuple[str, str, str]] = []
         self._active_device_ids: set = set()
 
+        # Detect-existing-mound button (visible only in mound mode and until configured)
+        self._detect_btn = QtWidgets.QPushButton("Detect Existing Mound Configuration", self)
+        try:
+            self._detect_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        except Exception:
+            pass
+        self._detect_btn.setVisible(False)
+        self._detect_btn.clicked.connect(self._on_detect_clicked)
+        self._detect_btn_visible_last: Optional[bool] = None
+
+        # Cross-thread apply for detection results
+        try:
+            self.mapping_ready.connect(self._on_mapping_ready)
+        except Exception:
+            pass
+
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # noqa: N802
         self._fit_done = False
         super().showEvent(event)
         self.update()
+        self._position_detect_button()
+        self._update_detect_button()
 
     def set_snapshots(self, snaps: Dict[str, Tuple[float, float, float, int, bool, float, float]]) -> None:
         self._snapshots = snaps
@@ -48,6 +71,10 @@ class WorldCanvas(QtWidgets.QWidget):
 
     def set_available_devices(self, devices: List[Tuple[str, str, str]]) -> None:
         self._available_devices = devices
+        try:
+            print(f"[canvas] set_available_devices: count={len(devices)}")
+        except Exception:
+            pass
 
     def update_active_devices(self, active_device_ids: set) -> None:
         self._active_device_ids = active_device_ids
@@ -55,6 +82,8 @@ class WorldCanvas(QtWidgets.QWidget):
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
         self._fit_done = False
         super().resizeEvent(event)
+        self._position_detect_button()
+        self._update_detect_button()
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
         if self.state.display_mode != "mound" or event.button() != QtCore.Qt.LeftButton:
@@ -112,7 +141,8 @@ class WorldCanvas(QtWidgets.QWidget):
             sy = int(cy - (y_mm - self._y_mid) * s)
         else:
             sx = int(cx + (y_mm - self._y_mid) * s)
-            sy = int(cy - (x_mm - self._x_mid) * s)
+            # Flip vertical mapping so X+ renders downward (screen Y increases)
+            sy = int(cy + (x_mm - self._x_mid) * s)
         return sx, sy
 
     def _draw_grid(self, p: QtGui.QPainter) -> None:
@@ -137,12 +167,12 @@ class WorldCanvas(QtWidgets.QWidget):
             p.drawText(base_x - 10, base_y - length - 6, "Y")
         else:
             p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_AXIS_Y), config.AXIS_THICKNESS_PX))
-            p.drawLine(base_x, base_y, base_x + length, base_y)
+            p.drawLine(base_x, base_y, base_x + length, base_y)  # Y+ to the right
             p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_AXIS_X), config.AXIS_THICKNESS_PX))
-            p.drawLine(base_x, base_y, base_x, base_y - length)
+            p.drawLine(base_x, base_y, base_x, base_y + length)  # X+ downward
             p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_TEXT)))
             p.drawText(base_x + length + 6, base_y + 4, "Y+")
-            p.drawText(base_x - 10, base_y - length - 6, "X+")
+            p.drawText(base_x - 10, base_y + length + 14, "X+")
 
     def _draw_plate(self, p: QtGui.QPainter, center_mm: Tuple[float, float], w_mm: float, h_mm: float) -> None:
         cx, cy = self._to_screen(center_mm[0], center_mm[1])
@@ -333,20 +363,21 @@ class WorldCanvas(QtWidgets.QWidget):
             self._draw_plate_logo_mound(p, (0.0, 0.0), w_mm, h_mm)
         else:
             self._draw_mound_placeholder(p, (0.0, 0.0), config.TYPE07_W_MM, config.TYPE07_H_MM, "Launch Zone\n(Click to select)")
-        lower_device = self.state.mound_devices.get("Lower Landing Zone")
-        if lower_device:
-            w_mm, h_mm = self._get_plate_dimensions(lower_device)
-            self._draw_plate(p, config.LANDING_LOWER_CENTER_MM, w_mm, h_mm)
-            self._draw_plate_logo_mound(p, config.LANDING_LOWER_CENTER_MM, w_mm, h_mm)
-        else:
-            self._draw_mound_placeholder(p, config.LANDING_LOWER_CENTER_MM, config.TYPE08_W_MM, config.TYPE08_H_MM, "Lower Landing\n(Click to select)")
+        # Swap: render Upper closest to Launch, Lower farther away
         upper_device = self.state.mound_devices.get("Upper Landing Zone")
         if upper_device:
             w_mm, h_mm = self._get_plate_dimensions(upper_device)
+            self._draw_plate(p, config.LANDING_LOWER_CENTER_MM, w_mm, h_mm)
+            self._draw_plate_logo_mound(p, config.LANDING_LOWER_CENTER_MM, w_mm, h_mm)
+        else:
+            self._draw_mound_placeholder(p, config.LANDING_LOWER_CENTER_MM, config.TYPE08_W_MM, config.TYPE08_H_MM, "Upper Landing\n(Click to select)")
+        lower_device = self.state.mound_devices.get("Lower Landing Zone")
+        if lower_device:
+            w_mm, h_mm = self._get_plate_dimensions(lower_device)
             self._draw_plate(p, config.LANDING_UPPER_CENTER_MM, w_mm, h_mm)
             self._draw_plate_logo_mound(p, config.LANDING_UPPER_CENTER_MM, w_mm, h_mm)
         else:
-            self._draw_mound_placeholder(p, config.LANDING_UPPER_CENTER_MM, config.TYPE08_W_MM, config.TYPE08_H_MM, "Upper Landing\n(Click to select)")
+            self._draw_mound_placeholder(p, config.LANDING_UPPER_CENTER_MM, config.TYPE08_W_MM, config.TYPE08_H_MM, "Lower Landing\n(Click to select)")
 
     def _draw_cop(self, p: QtGui.QPainter, name: str, snap: Tuple[float, float, float, int, bool, float, float]) -> None:
         if not self.state.flags.show_markers:
@@ -393,6 +424,7 @@ class WorldCanvas(QtWidgets.QWidget):
             self._compute_fit()
         self._draw_grid(p)
         self._draw_plates(p)
+        self._update_detect_button()
         if self.state.display_mode == "single":
             if self._single_snapshot is not None:
                 self._draw_cop_single(p, self._single_snapshot)
@@ -430,13 +462,14 @@ class WorldCanvas(QtWidgets.QWidget):
         h_px_launch = int(config.TYPE07_H_MM * scale)
         sid_launch = self._short_id_from_full(self.state.mound_devices.get("Launch Zone", ""), "07")
         p.drawText(int(cx - 100), int(cy - h_px_launch / 2) - 26, 200, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, sid_launch)
-        llx, lly = self._to_screen(config.LANDING_LOWER_CENTER_MM[0], config.LANDING_LOWER_CENTER_MM[1])
+        # Swap label positions: Upper near Launch (lower center), Lower farther (upper center)
+        ulx, uly = self._to_screen(config.LANDING_LOWER_CENTER_MM[0], config.LANDING_LOWER_CENTER_MM[1])
         h_px_l = int(config.TYPE08_H_MM * scale)
+        sid_upper = self._short_id_from_full(self.state.mound_devices.get("Upper Landing Zone", ""), "08")
+        p.drawText(int(ulx - 100), int(uly - h_px_l / 2) - 26, 200, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, sid_upper)
+        llx, lly = self._to_screen(config.LANDING_UPPER_CENTER_MM[0], config.LANDING_UPPER_CENTER_MM[1])
         sid_lower = self._short_id_from_full(self.state.mound_devices.get("Lower Landing Zone", ""), "08")
         p.drawText(int(llx - 100), int(lly - h_px_l / 2) - 26, 200, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, sid_lower)
-        lux, luy = self._to_screen(config.LANDING_UPPER_CENTER_MM[0], config.LANDING_UPPER_CENTER_MM[1])
-        sid_upper = self._short_id_from_full(self.state.mound_devices.get("Upper Landing Zone", ""), "08")
-        p.drawText(int(lux - 100), int(luy - h_px_l / 2) - 26, 200, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, sid_upper)
 
     def _get_clicked_position(self, pos: QtCore.QPoint) -> Optional[str]:
         if not self._fit_done:
@@ -449,18 +482,19 @@ class WorldCanvas(QtWidgets.QWidget):
         label_rect = QtCore.QRect(int(cx - 100), int(cy - h_px / 2) - 26, 200, 18)
         if rect.contains(pos) or label_rect.contains(pos):
             return "Launch Zone"
-        llx, lly = self._to_screen(config.LANDING_LOWER_CENTER_MM[0], config.LANDING_LOWER_CENTER_MM[1])
+        # Swap click targets: Upper near Launch (lower center), Lower farther (upper center)
+        ulx, uly = self._to_screen(config.LANDING_LOWER_CENTER_MM[0], config.LANDING_LOWER_CENTER_MM[1])
         w_px_l = int(config.TYPE08_W_MM * scale)
         h_px_l = int(config.TYPE08_H_MM * scale)
+        rect = QtCore.QRect(int(ulx - w_px_l / 2), int(uly - h_px_l / 2), w_px_l, h_px_l)
+        label_rect = QtCore.QRect(int(ulx - 100), int(uly - h_px_l / 2) - 26, 200, 18)
+        if rect.contains(pos) or label_rect.contains(pos):
+            return "Upper Landing Zone"
+        llx, lly = self._to_screen(config.LANDING_UPPER_CENTER_MM[0], config.LANDING_UPPER_CENTER_MM[1])
         rect = QtCore.QRect(int(llx - w_px_l / 2), int(lly - h_px_l / 2), w_px_l, h_px_l)
         label_rect = QtCore.QRect(int(llx - 100), int(lly - h_px_l / 2) - 26, 200, 18)
         if rect.contains(pos) or label_rect.contains(pos):
             return "Lower Landing Zone"
-        lux, luy = self._to_screen(config.LANDING_UPPER_CENTER_MM[0], config.LANDING_UPPER_CENTER_MM[1])
-        rect = QtCore.QRect(int(lux - w_px_l / 2), int(luy - h_px_l / 2), w_px_l, h_px_l)
-        label_rect = QtCore.QRect(int(lux - 100), int(luy - h_px_l / 2) - 26, 200, 18)
-        if rect.contains(pos) or label_rect.contains(pos):
-            return "Upper Landing Zone"
         return None
 
     def _show_device_picker(self, position_id: str) -> None:
@@ -479,5 +513,128 @@ class WorldCanvas(QtWidgets.QWidget):
             self.state.mound_devices[position_id] = axf_id
             self.mound_device_selected.emit(position_id, axf_id)
             self.update()
+            self._update_detect_button()
+
+    # --- Detect existing mound configuration (HTTP to backend) ---
+    def _position_detect_button(self) -> None:
+        try:
+            hint = self._detect_btn.sizeHint()
+            w = min(max(220, hint.width() + 20), max(260, int(self.width() * 0.7)))
+            h = max(26, hint.height() + 6)
+            x = int((self.width() - w) / 2)
+            y = 8  # top padding
+            self._detect_btn.setGeometry(x, y, w, h)
+        except Exception:
+            pass
+
+    def _update_detect_button(self) -> None:
+        try:
+            is_mound = (self.state.display_mode == "mound")
+            all_configured = all(self.state.mound_devices.get(pos) for pos in ["Launch Zone", "Upper Landing Zone", "Lower Landing Zone"])
+            visible = bool(is_mound and not all_configured)
+            if self._detect_btn_visible_last is None or self._detect_btn_visible_last != visible:
+                self._detect_btn_visible_last = visible
+                print(f"[canvas] detect button visible -> {visible} (is_mound={is_mound}, configured={all_configured}, mound_devices={self.state.mound_devices})")
+            self._detect_btn.setVisible(visible)
+        except Exception:
+            pass
+
+    def _http_base(self) -> str:
+        base = str(getattr(config, "SOCKET_HOST", "http://localhost") or "http://localhost")
+        port = int(getattr(config, "HTTP_PORT", 3001))
+        base = base.rstrip("/")
+        if ":" in base.split("//", 1)[-1]:
+            # Host already has a port; replace with HTTP_PORT
+            try:
+                head, tail = base.split("://", 1)
+                host_only = tail.split(":")[0]
+                base = f"{head}://{host_only}:{port}"
+            except Exception:
+                base = f"{base}:{port}"
+        else:
+            base = f"{base}:{port}"
+        try:
+            print(f"[canvas] http base resolved: {base}")
+        except Exception:
+            pass
+        return base
+
+    def _on_detect_clicked(self) -> None:
+        print("[canvas] detect clicked")
+        self._detect_btn.setEnabled(False)
+        t = threading.Thread(target=self._detect_worker, daemon=True)
+        t.start()
+
+    def _detect_worker(self) -> None:
+        base = self._http_base()
+        mapping: Dict[str, str] = {}
+        try:
+            # Prefer groups for explicit configuration label
+            url_g = f"{base}/api/get-groups"
+            print(f"[canvas] GET {url_g}")
+            resp = requests.get(url_g, timeout=4)
+            if resp.ok:
+                payload = resp.json() or {}
+                try:
+                    print(f"[canvas] get-groups ok: keys={list(payload.keys())}")
+                except Exception:
+                    pass
+                groups = payload.get("response") or payload.get("groups") or []
+                print(f"[canvas] get-groups: groups_count={len(groups)}")
+                for g in groups:
+                    cfg = str(g.get("group_configuration") or g.get("configuration") or "").lower()
+                    try:
+                        print(f"[canvas] group cfg={cfg} name={g.get('name')} id={g.get('axf_id') or g.get('axfId')}")
+                    except Exception:
+                        pass
+                    if "pitching" in cfg and "mound" in cfg:
+                        # Extract devices
+                        for d in (g.get("devices") or []):
+                            # Accept both key styles
+                            name = str(d.get("name") or d.get("plateName") or "").strip()
+                            device_id = str(d.get("axf_id") or d.get("deviceId") or "").strip()
+                            pos_id = str(d.get("position_id") or d.get("positionId") or name).strip()
+                            is_virtual = bool(d.get("is_virtual"))
+                            print(f"[canvas] groups device: name={name} pos_id={pos_id} id={device_id} virtual={is_virtual}")
+                            if pos_id in ("Upper Landing Zone", "Lower Landing Zone") and not is_virtual:
+                                mapping[pos_id] = device_id
+                            if pos_id == "Launch Zone" and not is_virtual:
+                                mapping["Launch Zone"] = device_id
+                        break
+            else:
+                print(f"[canvas] get-groups failed: status={resp.status_code} body={str(resp.text)[:200]}")
+        except Exception as e:
+            print(f"[canvas] get-groups error: {e}")
+        # Emit to UI thread to apply mapping immediately
+        try:
+            print(f"[canvas] emitting mapping_ready with: {mapping}")
+            self.mapping_ready.emit(mapping)
+        except Exception as ee:
+            print(f"[canvas] mapping emit failed: {ee}")
+
+    def _on_mapping_ready(self, mapping: Dict[str, str]) -> None:
+        try:
+            # Only set fields we found; do not emit selection signals (no group create/update)
+            changed = False
+            print(f"[canvas] applying mapping on UI thread: {mapping}")
+            for key in ("Launch Zone", "Upper Landing Zone", "Lower Landing Zone"):
+                val = mapping.get(key)
+                if val:
+                    if self.state.mound_devices.get(key) != val:
+                        self.state.mound_devices[key] = val
+                        changed = True
+            if changed:
+                print(f"[canvas] mound_devices updated: {self.state.mound_devices}")
+                self.update()
+            else:
+                print("[canvas] no changes to mound_devices")
+        except Exception as e:
+            print(f"[canvas] mapping apply error: {e}")
+        finally:
+            try:
+                self._detect_btn.setEnabled(True)
+                self._update_detect_button()
+            except Exception:
+                pass
 
 
