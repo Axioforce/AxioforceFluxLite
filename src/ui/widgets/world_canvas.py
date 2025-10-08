@@ -11,6 +11,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from ... import config
 from ...model import LAUNCH_NAME, LANDING_NAME
 from ..state import ViewState
+from .grid_overlay import GridOverlay
 from ..dialogs.device_picker import DevicePickerDialog
 
 
@@ -33,6 +34,10 @@ class WorldCanvas(QtWidgets.QWidget):
         self._y_mid = 0.0
         self._available_devices: List[Tuple[str, str, str]] = []
         self._active_device_ids: set = set()
+
+        # Live testing grid overlay
+        self._grid_overlay = GridOverlay(self)
+        self._grid_overlay.hide()
 
         # Detect-existing-mound button (visible only in mound mode and until configured)
         self._detect_btn = QtWidgets.QPushButton("Detect Existing Mound Configuration", self)
@@ -436,6 +441,51 @@ class WorldCanvas(QtWidgets.QWidget):
                         self._draw_cop(p, name, snap)
         self._draw_plate_names(p)
         p.end()
+
+        # Resize overlay to plate bounds in single device mode
+        try:
+            if self.state.display_mode == "single" and (self.state.selected_device_type or "").strip():
+                dev_type = (self.state.selected_device_type or "").strip()
+                if dev_type == "06":
+                    w_mm = config.TYPE06_W_MM
+                    h_mm = config.TYPE06_H_MM
+                elif dev_type == "07":
+                    w_mm = config.TYPE07_W_MM
+                    h_mm = config.TYPE07_H_MM
+                else:
+                    w_mm = config.TYPE08_W_MM
+                    h_mm = config.TYPE08_H_MM
+                cx, cy = self._to_screen(0.0, 0.0)
+                scale = self.state.px_per_mm
+                w_px = int(w_mm * scale)
+                h_px = int(h_mm * scale)
+                rect = QtCore.QRect(int(cx - w_px / 2), int(cy - h_px / 2), w_px, h_px)
+                self._grid_overlay.setGeometry(rect)
+                self._grid_overlay.set_plate_rect_px(QtCore.QRect(0, 0, rect.width(), rect.height()))
+        except Exception:
+            pass
+
+    # Public API for live testing overlay
+    def show_live_grid(self, rows: int, cols: int) -> None:
+        self._grid_overlay.set_grid(rows, cols)
+        self._grid_overlay.show()
+        self.update()
+
+    def hide_live_grid(self) -> None:
+        self._grid_overlay.hide()
+        self.update()
+
+    def set_live_active_cell(self, row: Optional[int], col: Optional[int]) -> None:
+        self._grid_overlay.set_active_cell(row, col)
+
+    def set_live_cell_color(self, row: int, col: int, color: QtGui.QColor) -> None:
+        self._grid_overlay.set_cell_color(row, col, color)
+
+    def set_live_status(self, text: Optional[str]) -> None:
+        self._grid_overlay.set_status(text)
+
+    def clear_live_colors(self) -> None:
+        self._grid_overlay.clear_colors()
 
     def _draw_plate_names(self, p: QtGui.QPainter) -> None:
         return

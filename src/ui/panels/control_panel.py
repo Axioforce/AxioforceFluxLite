@@ -6,6 +6,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ... import config
 from ..state import ViewState
+from .live_testing_panel import LiveTestingPanel
 from ..delegates import DeviceListDelegate
 
 
@@ -227,6 +228,10 @@ class ControlPanel(QtWidgets.QWidget):
         tabs.addTab(connection_tab, "Connection")
         tabs.addTab(interface_tab, "Interface")
         tabs.addTab(demo_tab, "Demo")
+
+        # Live Testing tab
+        self.live_testing_panel = LiveTestingPanel(self.state)
+        tabs.addTab(self.live_testing_panel, "Live Testing")
 
         tare_row = QtWidgets.QHBoxLayout()
         tare_row.addStretch(1)

@@ -53,6 +53,30 @@ FZ_THRESHOLD_N: float = 22.0
 SMOOTH_ALPHA: float = 0.2  # EWMA weight
 
 
+# Live Testing thresholds (N), per model id
+# 06 (Lite): DB=5, BW=8 | 07 (Launch): DB=6, BW=11 | 08 (XL): DB=8, BW=15
+THRESHOLDS_DB_N_BY_MODEL = {
+    "06": 5.0,
+    "07": 6.0,
+    "08": 8.0,
+}
+
+THRESHOLDS_BW_N_BY_MODEL = {
+    "06": 8.0,
+    "07": 11.0,
+    "08": 15.0,
+}
+
+# Cell color bins as multipliers of the passing threshold T
+# green: ≤0.5T, light-green: (0.5T..T], yellow: (T..1.5T], orange: (1.5T..2.5T], red: >2.5T
+COLOR_BIN_MULTIPLIERS = {
+    "green": 0.5,
+    "light_green": 1.0,
+    "yellow": 1.5,
+    "orange": 2.5,
+}
+
+
 # Colors as RGB tuples for cross-backend use
 COLOR_BG: Tuple[int, int, int] = (18, 18, 20)
 COLOR_GRID: Tuple[int, int, int] = (60, 60, 68)
