@@ -12,6 +12,7 @@ from .panels.control_panel import ControlPanel
 from .panels.live_testing_panel import LiveTestingPanel
 from .dialogs.live_test_setup import LiveTestSetupDialog
 from .dialogs.live_test_summary import LiveTestSummaryDialog
+from .dialogs.tare_prompt import TarePromptDialog
 from ..live_testing_model import GRID_BY_MODEL, LiveTestSession, LiveTestStage, GridCellResult, Thresholds
 from .widgets.force_plot import ForcePlotWidget
 from .widgets.moments_view import MomentsViewWidget
@@ -84,9 +85,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(central)
 
         self.status_label = QtWidgets.QLabel("Disconnected")
-        self.rate_label = QtWidgets.QLabel("Hz: --")
         self.statusBar().addPermanentWidget(self.status_label)
-        self.statusBar().addPermanentWidget(self.rate_label)
 
         self.controls.config_changed.connect(self._on_config_changed)
         self.controls.refresh_devices_requested.connect(self._on_refresh_devices)
@@ -105,6 +104,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bridge.force_vector_ready.connect(self._on_force_vector)
         self.bridge.moments_ready.connect(self._on_moments_ready)
         self.bridge.mound_force_vectors_ready.connect(self._on_mound_force_vectors)
+        self.bridge.dynamo_config_ready.connect(self._on_dynamo_config)
 
         # Live testing wiring (bottom panel)
         try:
@@ -125,9 +125,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self._arming_cell: Optional[Tuple[int, int]] = None
         self._arming_start_ms: Optional[int] = None
 
+        # Automated tare scheduler state
+        self._next_tare_due_ms: Optional[int] = None
+        self._tare_dialog: Optional[TarePromptDialog] = None
+        self._tare_active: bool = False
+        self._tare_countdown_remaining_s: int = 0
+        self._tare_last_tick_s: Optional[int] = None
+
         # Initialize live testing start button availability
         try:
             self._update_live_start_enabled()
+        except Exception:
+            pass
+
+        # Reflect backend rate changes to controls
+        try:
+            self.controls.sampling_rate_changed.connect(self._on_sampling_rate_changed)
+            self.controls.emission_rate_changed.connect(self._on_emission_rate_changed)
         except Exception:
             pass
 
@@ -138,13 +152,39 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
 
     def on_snapshots(self, snaps: Dict[str, Tuple[float, float, float, int, bool, float, float]], hz_text: Optional[str]) -> None:
-        if hz_text:
-            self.rate_label.setText(hz_text)
         self.canvas_left.set_snapshots(snaps)
         self.canvas_right.set_snapshots(snaps)
 
     def set_connection_text(self, txt: str) -> None:
         self.status_label.setText(txt)
+
+    def _on_dynamo_config(self, cfg: dict) -> None:
+        try:
+            sampling = int(cfg.get('samplingRate') or 0)
+        except Exception:
+            sampling = 0
+        try:
+            emission = int(cfg.get('emissionRate') or 0)
+        except Exception:
+            emission = 0
+        try:
+            self.controls.set_backend_rates(sampling, emission)
+        except Exception:
+            pass
+
+    def _on_sampling_rate_changed(self, hz: int) -> None:
+        if hasattr(self, '_on_sampling_cb') and callable(self._on_sampling_cb):
+            try:
+                self._on_sampling_cb(int(hz))
+            except Exception:
+                pass
+
+    def _on_emission_rate_changed(self, hz: int) -> None:
+        if hasattr(self, '_on_emission_cb') and callable(self._on_emission_cb):
+            try:
+                self._on_emission_cb(int(hz))
+            except Exception:
+                pass
 
     def on_connect_clicked(self, slot: Callable[[str, int], None]) -> None:
         self.controls.connect_requested.connect(lambda h, p: slot(h, p))
@@ -166,6 +206,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_config_changed(self, slot: Callable[[], None]) -> None:
         self.controls.config_changed.connect(slot)
+
+    def on_sampling_rate_changed(self, slot: Callable[[int], None]) -> None:
+        self._on_sampling_cb = slot
+
+    def on_emission_rate_changed(self, slot: Callable[[int], None]) -> None:
+        self._on_emission_cb = slot
 
     def set_available_devices(self, devices: List[Tuple[str, str]]) -> None:
         self.controls.set_available_devices(devices)
@@ -267,6 +313,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._live_stage_idx = 0
         self._active_cell = None
         self._recent_samples.clear()
+        # Initialize next tare time
+        try:
+            self._next_tare_due_ms = 0  # trigger asap after first few frames
+        except Exception:
+            self._next_tare_due_ms = None
         try:
             self.canvas_left.clear_live_colors()
             self.canvas_right.clear_live_colors()
@@ -376,6 +427,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._arming_cell = None
         self._arming_start_ms = None
         self._active_cell = None
+        # Reset tare guidance state
+        self._tare_active = False
+        self._tare_countdown_remaining_s = 0
+        self._tare_last_tick_s = None
+        self._next_tare_due_ms = None
+        try:
+            if self._tare_dialog is not None:
+                self._tare_dialog.reject()
+        except Exception:
+            pass
+        self._tare_dialog = None
         try:
             self.controls.live_testing_panel.btn_start.setEnabled(True)
             self.controls.live_testing_panel.btn_end.setEnabled(False)
@@ -488,12 +550,23 @@ class MainWindow(QtWidgets.QMainWindow):
             x_mm, y_mm, fz_n, t_ms, is_visible, raw_x_mm, raw_y_mm = snap
         except Exception:
             return
+
+        # Evaluate scheduled tare guidance before modifying arming/stability state
+        self._maybe_run_tare_guidance(fz_n, int(t_ms), bool(is_visible))
+        # Pause arming/stabilization while tare dialog active
+        if self._tare_active:
+            # Keep telemetry updating but skip further processing
+            return
         # Update telemetry
         stability = "tracking" if is_visible else "no load"
         try:
             self.controls.live_testing_panel.set_telemetry(fz_n, x_mm, y_mm, stability)
         except Exception:
             pass
+
+        # Pause arming/stabilization while tare dialog active (telemetry was updated above)
+        if self._tare_active:
+            return
 
         # Do not process if not visible / below threshold
         if not is_visible:
@@ -731,3 +804,125 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception:
                     pass
 
+
+    # --- Automated Tare Guidance -------------------------------------------------
+    def _open_tare_dialog(self) -> None:
+        try:
+            if self._tare_dialog is None:
+                self._tare_dialog = TarePromptDialog(self)
+                # If the user cancels, defer next attempt by a short grace period
+                def _on_reject() -> None:
+                    self._tare_active = False
+                    self._tare_countdown_remaining_s = 0
+                    self._tare_last_tick_s = None
+                    # Push next due out a bit so we don't instantly re-open
+                    try:
+                        self._next_tare_due_ms = int(QtCore.QDateTime.currentMSecsSinceEpoch()) + 30_000
+                    except Exception:
+                        self._next_tare_due_ms = None
+                self._tare_dialog.rejected.connect(_on_reject)
+            # Ensure modal but non-blocking
+            self._tare_dialog.setModal(True)
+            self._tare_dialog.show()
+            self._tare_dialog.raise_()
+            self._tare_dialog.activateWindow()
+        except Exception:
+            pass
+
+    def _close_tare_dialog(self) -> None:
+        try:
+            if self._tare_dialog is not None:
+                self._tare_dialog.hide()
+        except Exception:
+            pass
+
+    def _auto_tare(self) -> None:
+        # Emit existing tare signal path; controller taring uses tareAll
+        try:
+            gid = ""
+            try:
+                # Optional: use configured group id if provided
+                gid = self.controls.group_edit.text().strip()
+            except Exception:
+                gid = ""
+            self.controls.tare_requested.emit(gid)
+            self._log("auto_tare: tare_requested emitted")
+        except Exception:
+            pass
+
+    def _maybe_run_tare_guidance(self, fz_n: float, t_ms: int, is_visible: bool) -> None:
+        # Only in live session and single-device mode
+        if self._live_session is None:
+            return
+        try:
+            # Initialize schedule if needed
+            if self._next_tare_due_ms is None:
+                self._next_tare_due_ms = int(t_ms) + int(getattr(config, "TARE_INTERVAL_S", 90)) * 1000
+
+            # Update dialog if active
+            if self._tare_active:
+                try:
+                    if self._tare_dialog is not None:
+                        self._tare_dialog.set_force(float(fz_n))
+                except Exception:
+                    pass
+                threshold = float(getattr(config, "TARE_STEP_OFF_THRESHOLD_N", 30.0))
+                countdown_seed = int(getattr(config, "TARE_COUNTDOWN_S", 15))
+                below = abs(float(fz_n)) < threshold
+                now_s = int(int(t_ms) / 1000)
+                if below:
+                    # Start or decrement countdown
+                    if self._tare_countdown_remaining_s <= 0:
+                        self._tare_countdown_remaining_s = countdown_seed
+                        self._tare_last_tick_s = now_s
+                    else:
+                        # Decrement on whole-second ticks
+                        if self._tare_last_tick_s is None or now_s > int(self._tare_last_tick_s):
+                            delta = now_s - int(self._tare_last_tick_s or now_s)
+                            if delta > 0:
+                                self._tare_countdown_remaining_s = max(0, int(self._tare_countdown_remaining_s) - int(delta))
+                                self._tare_last_tick_s = now_s
+                    try:
+                        if self._tare_dialog is not None:
+                            self._tare_dialog.set_countdown(int(self._tare_countdown_remaining_s))
+                    except Exception:
+                        pass
+                    # Completed countdown -> perform tare
+                    if self._tare_countdown_remaining_s <= 0:
+                        self._auto_tare()
+                        # Schedule next due from current time
+                        self._next_tare_due_ms = int(t_ms) + int(getattr(config, "TARE_INTERVAL_S", 90)) * 1000
+                        # Close dialog and reset state
+                        self._tare_active = False
+                        self._tare_countdown_remaining_s = 0
+                        self._tare_last_tick_s = None
+                        self._close_tare_dialog()
+                else:
+                    # Above threshold — reset countdown but keep dialog open
+                    self._tare_countdown_remaining_s = countdown_seed
+                    self._tare_last_tick_s = now_s
+                    try:
+                        if self._tare_dialog is not None:
+                            self._tare_dialog.set_countdown(int(self._tare_countdown_remaining_s))
+                    except Exception:
+                        pass
+                return
+
+            # Not active: check if due and safe to show (not mid-stabilization)
+            if self._next_tare_due_ms is not None and int(t_ms) >= int(self._next_tare_due_ms):
+                # Only when no active cell (avoid interrupting stabilization window)
+                if self._active_cell is None:
+                    self._tare_active = True
+                    self._tare_countdown_remaining_s = int(getattr(config, "TARE_COUNTDOWN_S", 15))
+                    self._tare_last_tick_s = int(int(t_ms) / 1000)
+                    self._open_tare_dialog()
+                    # Initialize dialog fields
+                    try:
+                        if self._tare_dialog is not None:
+                            self._tare_dialog.set_force(float(fz_n))
+                            self._tare_dialog.set_countdown(int(self._tare_countdown_remaining_s))
+                    except Exception:
+                        pass
+                # else: keep due time; it will fire as soon as _active_cell clears
+        except Exception:
+            pass

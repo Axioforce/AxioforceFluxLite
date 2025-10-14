@@ -7,6 +7,7 @@ from typing import Tuple
 SOCKET_HOST: str = os.environ.get("SOCKET_HOST", "http://localhost")
 SOCKET_PORT: int = int(os.environ.get("SOCKET_PORT", "3000"))
 HTTP_PORT: int = int(os.environ.get("HTTP_PORT", "3001"))
+UI_TICK_HZ: int = int(os.environ.get("UI_TICK_HZ", "100"))
 
 
 # Drawing and scaling defaults
@@ -47,6 +48,9 @@ LANDING_UPPER_CENTER_MM: Tuple[float, float] = (0.0, LANDING_MID_Y_MM + LANDING_
 COP_R_MIN_PX: float = 4.0
 COP_R_MAX_PX: float = 40.0
 COP_SCALE_K: float = float(os.environ.get("COP_SCALE_K", "0.01"))  # px per Newton
+PLOT_SMOOTH_ALPHA: float = float(os.environ.get("PLOT_SMOOTH_ALPHA", "0.1"))  # EMA for force plot lines
+OVERLAY_SMOOTH_ALPHA: float = float(os.environ.get("OVERLAY_SMOOTH_ALPHA", "0.1"))  # EMA for overlay numbers (legacy)
+OVERLAY_SMOOTH_WINDOW_FRAMES: int = int(os.environ.get("OVERLAY_SMOOTH_WINDOW_FRAMES", "20"))  # Rolling avg frames for overlay numbers
 
 # Data smoothing and noise suppression
 FZ_THRESHOLD_N: float = 22.0
@@ -95,4 +99,13 @@ class UiFlags:
     show_markers: bool = True
     show_labels: bool = False
 
+
+
+# Automated tare guidance (step-off prompt) configuration
+# Interval between step-off prompts while a live session is active
+TARE_INTERVAL_S: int = 90
+# Required continuous step-off time before auto-tare
+TARE_COUNTDOWN_S: int = 15
+# Step-off threshold (absolute |Fz| below this counts as off the plate)
+TARE_STEP_OFF_THRESHOLD_N: float = 30.0
 

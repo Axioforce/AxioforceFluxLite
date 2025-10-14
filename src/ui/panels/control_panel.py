@@ -20,6 +20,8 @@ class ControlPanel(QtWidgets.QWidget):
     flags_changed = QtCore.Signal()
     config_changed = QtCore.Signal()
     refresh_devices_requested = QtCore.Signal()
+    sampling_rate_changed = QtCore.Signal(int)
+    emission_rate_changed = QtCore.Signal(int)
 
     def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -77,6 +79,35 @@ class ControlPanel(QtWidgets.QWidget):
         conn_buttons_layout.addWidget(self.btn_disconnect)
         conn_buttons_layout.addStretch(1)
         conn_layout.addWidget(conn_buttons_row, conn_row, 0, 1, 4)
+        conn_row += 1
+
+        # Data rate controls
+        rate_row = QtWidgets.QWidget()
+        rate_layout = QtWidgets.QHBoxLayout(rate_row)
+        rate_layout.setContentsMargins(0, 0, 0, 0)
+        rate_layout.setSpacing(10)
+        rate_layout.addWidget(QtWidgets.QLabel("Sampling Hz:"))
+        self.sampling_spin = QtWidgets.QSpinBox()
+        self.sampling_spin.setRange(-1, 1200)
+        self.sampling_spin.setValue(1000)
+        _fixh(self.sampling_spin)
+        self.sampling_spin.setMaximumWidth(80)
+        rate_layout.addWidget(self.sampling_spin)
+        self.apply_sampling_btn = QtWidgets.QPushButton("Apply")
+        _fix_btn(self.apply_sampling_btn, 70)
+        rate_layout.addWidget(self.apply_sampling_btn)
+        rate_layout.addWidget(QtWidgets.QLabel("Emission Hz:"))
+        self.emission_spin = QtWidgets.QSpinBox()
+        self.emission_spin.setRange(-1, 500)
+        self.emission_spin.setValue(250)
+        _fixh(self.emission_spin)
+        self.emission_spin.setMaximumWidth(80)
+        rate_layout.addWidget(self.emission_spin)
+        self.apply_emission_btn = QtWidgets.QPushButton("Apply")
+        _fix_btn(self.apply_emission_btn, 70)
+        rate_layout.addWidget(self.apply_emission_btn)
+        rate_layout.addStretch(1)
+        conn_layout.addWidget(rate_row, conn_row, 0, 1, 4)
         conn_row += 1
 
         conn_layout.setRowStretch(conn_row, 1)
@@ -227,6 +258,7 @@ class ControlPanel(QtWidgets.QWidget):
         self._config_tab_index = tabs.addTab(config_tab, "Config")
         tabs.addTab(connection_tab, "Connection")
         tabs.addTab(interface_tab, "Interface")
+        # Ensure Demo tab (Group/Athlete inputs) remains parented to avoid widget deletion
         tabs.addTab(demo_tab, "Demo")
 
         # Live Testing tab
@@ -260,6 +292,38 @@ class ControlPanel(QtWidgets.QWidget):
         self.device_list.currentItemChanged.connect(self._on_device_selected)
         self.btn_refresh_devices.clicked.connect(lambda: self.refresh_devices_requested.emit())
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        # Gate backend updates behind Apply or Enter
+        def _emit_sampling():
+            try:
+                self.sampling_rate_changed.emit(int(self.sampling_spin.value()))
+            except Exception:
+                pass
+        def _emit_emission():
+            try:
+                self.emission_rate_changed.emit(int(self.emission_spin.value()))
+            except Exception:
+                pass
+        self.apply_sampling_btn.clicked.connect(_emit_sampling)
+        self.apply_emission_btn.clicked.connect(_emit_emission)
+        self.sampling_spin.lineEdit().returnPressed.connect(_emit_sampling)
+        self.emission_spin.lineEdit().returnPressed.connect(_emit_emission)
+
+    def set_backend_rates(self, sampling_hz: int, emission_hz: int) -> None:
+        try:
+            self.sampling_spin.blockSignals(True)
+            self.emission_spin.blockSignals(True)
+            if sampling_hz:
+                self.sampling_spin.setValue(int(sampling_hz))
+            if emission_hz:
+                self.emission_spin.setValue(int(emission_hz))
+        except Exception:
+            pass
+        finally:
+            try:
+                self.sampling_spin.blockSignals(False)
+                self.emission_spin.blockSignals(False)
+            except Exception:
+                pass
 
     def _emit_connect(self) -> None:
         host = self.host_edit.text().strip() or config.SOCKET_HOST
@@ -367,7 +431,10 @@ class ControlPanel(QtWidgets.QWidget):
         self.stop_capture_requested.emit(payload)
 
     def _emit_tare(self) -> None:
-        gid = self.group_edit.text().strip()
+        try:
+            gid = self.group_edit.text().strip()
+        except Exception:
+            gid = ""
         self.tare_requested.emit(gid)
 
 
