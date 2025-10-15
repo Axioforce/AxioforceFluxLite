@@ -49,6 +49,15 @@ class Controller:
             self.view.on_stop_capture(self.stop_capture)
         if hasattr(self.view, "on_tare"):
             self.view.on_tare(self.tare)
+        # Model management hooks from view
+        if hasattr(self.view, "on_request_model_metadata"):
+            self.view.on_request_model_metadata(self.request_model_metadata)
+        if hasattr(self.view, "on_package_model"):
+            self.view.on_package_model(self.package_model)
+        if hasattr(self.view, "on_activate_model"):
+            self.view.on_activate_model(self.activate_model)
+        if hasattr(self.view, "on_deactivate_model"):
+            self.view.on_deactivate_model(self.deactivate_model)
         # Optional: discovery handlers wiring
         if hasattr(self.view, "on_request_discovery"):
             self.view.on_request_discovery(self.fetch_discovery)
@@ -82,7 +91,12 @@ class Controller:
 
     # Socket data callback
     def _on_json(self, data: dict) -> None:
-        
+        # Always update rate estimate from incoming payloads
+        try:
+            self.model.update_rate_from_payload(data)
+        except Exception:
+            pass
+
         # Track active devices
         dev_id = data.get("device_id") or data.get("deviceId")
         if dev_id:
@@ -156,10 +170,10 @@ class Controller:
                                 self.view.bridge.single_snapshot_ready.emit(snap)
                             except Exception:
                                 pass
-                        # Store latest force vector; throttled emission happens in 60 Hz tick
+                        # Emit force vector immediately (no throttling)
                         try:
-                            with self._state_lock:
-                                self._pending_force_vector = (str(dev_id), int(time_ms), float(fx_total), float(fy_total), float(fz_total))
+                            if hasattr(self.view, "bridge"):
+                                self.view.bridge.force_vector_ready.emit(str(dev_id), int(time_ms), float(fx_total), float(fy_total), float(fz_total))
                         except Exception:
                             pass
                 else:
@@ -206,6 +220,13 @@ class Controller:
                 if pos is not None:
                     with self._state_lock:
                         self._pending_mound_force_vectors[pos] = (time_ms, fx_total, fy_total, fz_total)
+                    # Emit per-zone forces immediately
+                    try:
+                        if hasattr(self.view, "bridge"):
+                            snapshot = dict(self._pending_mound_force_vectors)
+                            self.view.bridge.mound_force_vectors_ready.emit(snapshot)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -220,6 +241,28 @@ class Controller:
             if did:
                 with self._state_lock:
                     self._pending_moment_vectors[did] = (t_ms, mx, my, mz)
+                # Emit moments immediately
+                try:
+                    if hasattr(self.view, "bridge"):
+                        snapshot = dict(self._pending_moment_vectors)
+                        self.view.bridge.moments_ready.emit(snapshot)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Emit snapshots and active devices immediately on each frame
+        try:
+            with self._state_lock:
+                snaps = self.model.get_snapshot()
+            if hasattr(self.view, "bridge"):
+                self.view.bridge.snapshots_ready.emit(snaps, None)
+        except Exception:
+            pass
+        try:
+            if hasattr(self.view, "bridge"):
+                active_ids = self._get_active_device_ids()
+                self.view.bridge.active_devices_ready.emit(active_ids)
         except Exception:
             pass
 
@@ -233,7 +276,11 @@ class Controller:
             try:
                 self.client.on("getDeviceSettingsStatus", self._on_device_settings)
                 self.client.on("getDeviceTypesStatus", self._on_device_types)
+                # Group definitions (some servers emit 'groupDefinitions' without Status suffix)
                 self.client.on("getGroupDefinitionsStatus", self._on_group_definitions)
+                self.client.on("groupDefinitions", self._on_group_definitions)
+                # Fallback discovery for older/newer backends
+                self.client.on("connectedDeviceList", self._on_connected_device_list)
             except Exception:
                 pass
 
@@ -241,9 +288,9 @@ class Controller:
         self._wakeup_sent = False
         if self.client is not None:
             def _on_first_connect() -> None:
-                # Always set sampling rate on each connect
+                # On connect, fetch backend config (samplingRate/emissionRate)
                 try:
-                    self.client.emit("setSamplingRate", 1000)
+                    self.client.emit("getDynamoConfig")
                 except Exception:
                     pass
                 # One-time backend wakeup
@@ -259,8 +306,23 @@ class Controller:
                     self.fetch_discovery()
                 except Exception:
                     pass
+                # Update connection status
+                try:
+                    if hasattr(self.view, "bridge"):
+                        self.view.bridge.connection_text_ready.emit("Connected")
+                except Exception:
+                    pass
             try:
                 self.client.on("connect", _on_first_connect)
+                # Listen for config status to forward to UI
+                self.client.on("getDynamoConfigStatus", self._on_dynamo_config_status)
+                # Model management listeners
+                self.client.on("modelMetadata", self._on_model_metadata)
+                self.client.on("modelPackageStatus", self._on_model_package_status)
+                self.client.on("modelLoadStatus", self._on_model_load_status)
+                self.client.on("modelActivationStatus", self._on_model_activation_status)
+                # Connection text on disconnect
+                self.client.on("disconnect", lambda *_: getattr(self.view, "bridge", None) and self.view.bridge.connection_text_ready.emit("Disconnected"))
             except Exception:
                 pass
         
@@ -272,11 +334,7 @@ class Controller:
             except Exception:
                 pass
 
-        # Start 60 Hz loop if not running
-        if not self._thread or not self._thread.is_alive():
-            self._stop_flag.clear()
-            self._thread = threading.Thread(target=self._tick_loop, name="ControllerTick", daemon=True)
-            self._thread.start()
+        # No internal throttling loop needed; UI updates emit on each frame
 
     def disconnect(self) -> None:
         if self.client is not None:
@@ -310,11 +368,20 @@ class Controller:
     def tare(self, group_id: str | None = None) -> None:
         if self.client is None:
             return
-        gid = (group_id or "").strip()
-        if gid:
-            self.client.emit("tare", [gid])
-        else:
+        # Reset reference time before taring
+        try:
+            self.client.emit("setReferenceTime", -1)
+        except Exception:
+            pass
+        # Tare all devices/groups (backend handles per-group internally)
+        try:
             self.client.emit("tareAll")
+            try:
+                print("[ctrl] TareAll emitted")
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     # Discovery API
     def fetch_discovery(self) -> None:
@@ -323,6 +390,101 @@ class Controller:
         self.client.emit("getDeviceSettings", {})
         self.client.emit("getDeviceTypes", {})
         self.client.emit("getGroupDefinitions", {})
+        # Fallback discovery event used by some backends
+        self.client.emit("getConnectedDevices")
+
+    # Config API
+    def request_sampling_rate(self, rate_hz: int) -> None:
+        if self.client is not None:
+            try:
+                self.client.emit("setSamplingRate", int(rate_hz))
+            except Exception:
+                pass
+
+    def request_emission_rate(self, rate_hz: int) -> None:
+        if self.client is not None:
+            try:
+                self.client.emit("setDataEmissionRate", int(rate_hz))
+            except Exception:
+                pass
+
+    # --- Model management -------------------------------------------------------
+    def request_model_metadata(self, device_id: str) -> None:
+        if self.client is not None and (device_id or "").strip():
+            try:
+                self.client.emit("getModelMetadata", {"deviceId": str(device_id)})
+            except Exception:
+                pass
+
+    def package_model(self, payload: dict) -> None:
+        if self.client is not None and isinstance(payload, dict):
+            try:
+                self.client.emit("packageModel", {
+                    "forceModelDir": payload.get("forceModelDir", ""),
+                    "momentsModelDir": payload.get("momentsModelDir", ""),
+                    "outputDir": payload.get("outputDir", ""),
+                })
+            except Exception:
+                pass
+
+    def activate_model(self, device_id: str, model_id: str) -> None:
+        if self.client is not None and (device_id or "").strip() and (model_id or "").strip():
+            try:
+                self.client.emit("activateModel", {"deviceId": str(device_id), "modelId": str(model_id)})
+            except Exception:
+                pass
+
+    def deactivate_model(self, device_id: str, model_id: str) -> None:
+        if self.client is not None and (device_id or "").strip() and (model_id or "").strip():
+            try:
+                self.client.emit("deactivateModel", {"deviceId": str(device_id), "modelId": str(model_id)})
+            except Exception:
+                pass
+
+    def _on_model_metadata(self, data: dict | list) -> None:
+        try:
+            if hasattr(self.view, "bridge"):
+                self.view.bridge.model_metadata_ready.emit(data)
+        except Exception:
+            pass
+
+    def _on_model_package_status(self, status: dict) -> None:
+        try:
+            if hasattr(self.view, "bridge"):
+                self.view.bridge.model_package_status_ready.emit(status)
+        except Exception:
+            pass
+
+    def _on_model_load_status(self, status: dict) -> None:
+        try:
+            if hasattr(self.view, "bridge"):
+                self.view.bridge.model_load_status_ready.emit(status)
+        except Exception:
+            pass
+
+    def _on_model_activation_status(self, status: dict) -> None:
+        try:
+            if hasattr(self.view, "bridge"):
+                self.view.bridge.model_activation_status_ready.emit(status)
+        except Exception:
+            pass
+
+    def _on_dynamo_config_status(self, payload: dict) -> None:
+        # Expect: { status, data: { samplingRate, emissionRate, ... } }
+        try:
+            if payload.get("status") == "success":
+                data = payload.get("data") or {}
+                cfg = {
+                    "samplingRate": int(data.get("samplingRate") or 0),
+                    "emissionRate": int(data.get("emissionRate") or 0),
+                }
+                if hasattr(self.view, "bridge"):
+                    try:
+                        self.view.bridge.dynamo_config_ready.emit(cfg)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     def _wakeup_backend(self) -> None:
         if self.client is None:
@@ -360,31 +522,80 @@ class Controller:
         except Exception:
             pass
 
+    def _on_connected_device_list(self, payload: dict | list) -> None:
+        """Fallback handler for 'connectedDeviceList' which may return a list of devices.
+
+        Expected structure (example):
+        [
+          { name, devices: [ { sensors: [...], ... } ], axfId/id, deviceTypeId }
+        ]
+        We extract (display_name, axf_id, device_type) tuples.
+        """
+        try:
+            raw = payload
+            if isinstance(raw, dict):
+                data_list = raw.get("data") or raw.get("devices") or []
+            else:
+                data_list = raw or []
+        except Exception:
+            data_list = []
+        devices: list[tuple[str, str, str]] = []
+        for d in data_list:
+            try:
+                display_name = str(d.get("name") or "").strip() or str(d.get("axfId") or d.get("id") or "").strip()
+                axf_id = str(d.get("axfId") or d.get("id") or "").strip()
+                dev_type = str(d.get("deviceTypeId") or d.get("type") or "").strip()
+                if not axf_id:
+                    continue
+                # If type absent, try to infer from axfId prefix (e.g., '06.')
+                if not dev_type and axf_id and len(axf_id) >= 2 and axf_id[0:2].isdigit():
+                    dev_type = axf_id[0:2]
+                if dev_type and dev_type not in ("06", "07", "08"):
+                    # keep unknowns out of list for now
+                    continue
+                devices.append((display_name, axf_id, dev_type or "06"))
+            except Exception:
+                continue
+        try:
+            if hasattr(self.view, "bridge"):
+                self.view.bridge.available_devices_ready.emit(devices)
+        except Exception:
+            pass
+
     def _on_device_types(self, _payload: dict) -> None:
         # Not used yet; could map friendly names
         return
 
-    def _on_group_definitions(self, payload: dict) -> None:
-        """Handle group definitions response and store PitchingMound definition."""
-        print(f"[ctrl] getGroupDefinitionsStatus received: status={payload.get('status')}")
-        if payload.get("status") != "success":
-            print(f"[ctrl] getGroupDefinitions failed: {payload.get('message')}")
-            return
-        
-        data = payload.get("data") or []
-        print(f"[ctrl] Found {len(data)} group definitions")
+    def _on_group_definitions(self, payload: object) -> None:
+        """Handle group definitions response (dict with status or raw list)."""
+        try:
+            if isinstance(payload, dict):
+                if payload.get("status") != "success":
+                    try:
+                        print(f"[ctrl] getGroupDefinitions failed: {payload.get('message')}")
+                    except Exception:
+                        pass
+                    return
+                data = payload.get("data") or []
+            elif isinstance(payload, list):
+                data = payload
+            else:
+                data = []
+        except Exception:
+            data = []
         for definition in data:
-            name = definition.get("name")
-            print(f"[ctrl]   - Definition: {name}")
-            if name == "Pitching Mound":
-                self._mound_definition = definition
-                required_pos = definition.get("requiredGroupPositions") or []
-                print(f"[ctrl] Found Pitching Mound definition: {definition.get('axfId')}")
-                print(f"[ctrl]   Required positions: {[p.get('positionId') for p in required_pos]}")
-                break
-        
+            try:
+                name = definition.get("name")
+                if name == "Pitching Mound":
+                    self._mound_definition = definition
+                    break
+            except Exception:
+                continue
         if self._mound_definition is None:
-            print("[ctrl] WARNING: Pitching Mound definition not found in response!")
+            try:
+                print("[ctrl] WARNING: Pitching Mound definition not found in response!")
+            except Exception:
+                pass
     
     def set_mound_device(self, position_id: str, device_id: str) -> None:
         """Set device for a specific mound position and create/update group if all positions filled."""
@@ -512,12 +723,16 @@ class Controller:
         return active
 
     def _tick_loop(self) -> None:
-        target_dt = 1.0 / 60.0
+        # Use configurable UI tick rate for throttled UI emissions
+        hz = max(10, int(getattr(config, "UI_TICK_HZ", 60)))
+        target_dt = 1.0 / float(hz)
         while not self._stop_flag.is_set():
             t0 = time.time()
             with self._state_lock:
                 snaps = self.model.get_snapshot()
-                hz_text = f"Hz: {self.model.ema_hz:.1f}" if self.model.ema_hz else "Hz: --"
+                data_hz_text = f"{self.model.ema_hz:.1f}" if getattr(self.model, "ema_hz", 0.0) else "--"
+                ui_hz_text = f"{hz}"
+                hz_text = f"Data Hz: {data_hz_text} | UI Hz: {ui_hz_text}"
             if hasattr(self.view, "bridge"):
                 try:
                     self.view.bridge.snapshots_ready.emit(snaps, hz_text)

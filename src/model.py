@@ -123,6 +123,35 @@ class Model:
         self.last_msg_time_ms = time_ms
         return pos
 
+    def update_rate_from_payload(self, payload: dict) -> None:
+        """Update EMA data rate using payload fields regardless of device mapping.
+
+        Prefers provided dataRate; otherwise estimates from time deltas.
+        """
+        try:
+            provided_hz = payload.get("data_rate") or payload.get("dataRate")
+            if provided_hz is not None:
+                try:
+                    self.ema_hz = float(provided_hz)
+                    # still update last_msg_time_ms from payload time if present
+                    t_ms = int(payload.get("time", 0))
+                    if t_ms:
+                        self.last_msg_time_ms = t_ms
+                    return
+                except Exception:
+                    pass
+            # Fallback to time-based estimate
+            t_ms = int(payload.get("time", 0))
+            if t_ms and self.last_msg_time_ms is not None and t_ms > self.last_msg_time_ms:
+                dt_s = (t_ms - self.last_msg_time_ms) / 1000.0
+                if dt_s > 0:
+                    hz_inst = 1.0 / dt_s
+                    self.ema_hz = _ewma(self.ema_hz, hz_inst, 0.2)
+            if t_ms:
+                self.last_msg_time_ms = t_ms
+        except Exception:
+            pass
+
     def get_snapshot(self) -> Dict[str, Tuple[float, float, float, int, bool]]:
         return {name: ds.snapshot() for name, ds in self.devices.items()}
 

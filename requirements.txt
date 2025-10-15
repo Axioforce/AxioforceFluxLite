@@ -4,7 +4,6 @@ msgpack==1.0.8
 requests>=2.31.0
 websocket-client>=1.7.0
 
-# For Google Sheets integration (service account)
-gspread==5.12.4
-google-auth==2.33.0
+# Microsoft Graph (client credentials)
+msal==1.30.0
 

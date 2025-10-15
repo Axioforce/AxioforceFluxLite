@@ -11,6 +11,9 @@ class LiveTestingPanel(QtWidgets.QWidget):
     start_session_requested = QtCore.Signal()
     end_session_requested = QtCore.Signal()
     next_stage_requested = QtCore.Signal()
+    package_model_requested = QtCore.Signal()
+    activate_model_requested = QtCore.Signal(str)
+    deactivate_model_requested = QtCore.Signal(str)
 
     def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -82,22 +85,46 @@ class LiveTestingPanel(QtWidgets.QWidget):
         tele_layout.addRow("COP (mm):", self.lbl_cop)
         tele_layout.addRow("Stability:", self.lbl_stability)
 
-        # Debug Status (large box)
-        debug_box = QtWidgets.QGroupBox("Debug Status")
-        debug_layout = QtWidgets.QVBoxLayout(debug_box)
-        self.debug_label = QtWidgets.QLabel("—")
-        self.debug_label.setWordWrap(True)
-        debug_layout.addWidget(self.debug_label)
-        debug_layout.addStretch(1)
+        # Model (replaces Debug Status)
+        model_box = QtWidgets.QGroupBox("Model")
+        model_layout = QtWidgets.QVBoxLayout(model_box)
+        model_row = QtWidgets.QHBoxLayout()
+        model_row.addWidget(QtWidgets.QLabel("Current Model:"))
+        self.lbl_current_model = QtWidgets.QLabel("—")
+        model_row.addWidget(self.lbl_current_model)
+        model_row.addStretch(1)
+        model_layout.addLayout(model_row)
+        # Status row
+        status_row = QtWidgets.QHBoxLayout()
+        self.lbl_model_status = QtWidgets.QLabel("")
+        self.lbl_model_status.setStyleSheet("color:#ccc;")
+        status_row.addWidget(self.lbl_model_status)
+        status_row.addStretch(1)
+        model_layout.addLayout(status_row)
+        # Activate/Deactivate controls (use current model label)
+        act_row = QtWidgets.QHBoxLayout()
+        self.btn_activate = QtWidgets.QPushButton("Activate")
+        self.btn_deactivate = QtWidgets.QPushButton("Deactivate")
+        act_row.addWidget(self.btn_activate)
+        act_row.addWidget(self.btn_deactivate)
+        act_row.addStretch(1)
+        model_layout.addLayout(act_row)
+        # Package button below controls
+        self.btn_package_model = QtWidgets.QPushButton("Package Model…")
+        model_layout.addWidget(self.btn_package_model)
+        model_layout.addStretch(1)
 
         # Evenly distribute boxes side-by-side
-        for w in (controls_box, guide_box, meta_box, tele_box, debug_box):
+        for w in (controls_box, guide_box, meta_box, tele_box, model_box):
             w.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
             root.addWidget(w, 1)
 
         self.btn_start.clicked.connect(lambda: self.start_session_requested.emit())
         self.btn_end.clicked.connect(lambda: self.end_session_requested.emit())
         self.btn_next.clicked.connect(lambda: self.next_stage_requested.emit())
+        self.btn_package_model.clicked.connect(lambda: self.package_model_requested.emit())
+        self.btn_activate.clicked.connect(self._emit_activate)
+        self.btn_deactivate.clicked.connect(self._emit_deactivate)
 
     # Overlay is now managed by the canvas; this panel keeps controls only
     def configure_grid(self, rows: int, cols: int) -> None:
@@ -171,7 +198,38 @@ class LiveTestingPanel(QtWidgets.QWidget):
             self.lbl_cop.setText("—")
         self.lbl_stability.setText(stability_text or "—")
 
+    def set_current_model(self, model_text: Optional[str]) -> None:
+        self.lbl_current_model.setText((model_text or "").strip() or "—")
+        # Clear transient status when model label changes externally
+        self.set_model_status("")
+
+    def set_model_status(self, text: Optional[str]) -> None:
+        self.lbl_model_status.setText((text or "").strip())
+
+    def set_model_controls_enabled(self, enabled: bool) -> None:
+        try:
+            self.btn_activate.setEnabled(bool(enabled))
+            self.btn_deactivate.setEnabled(bool(enabled))
+            self.btn_package_model.setEnabled(bool(enabled))
+        except Exception:
+            pass
+
     def set_debug_status(self, text: str | None) -> None:
-        self.debug_label.setText((text or "").strip() or "—")
+        # Debug status deprecated in favor of Model panel; keep as no-op to avoid breaking call sites
+        return
+
+    def _emit_activate(self) -> None:
+        mid = (self.lbl_current_model.text() or "").strip()
+        if mid and mid != "—" and not mid.lower().startswith("loading"):
+            self.set_model_status("Activating…")
+            self.set_model_controls_enabled(False)
+            self.activate_model_requested.emit(mid)
+
+    def _emit_deactivate(self) -> None:
+        mid = (self.lbl_current_model.text() or "").strip()
+        if mid and mid != "—" and not mid.lower().startswith("loading"):
+            self.set_model_status("Deactivating…")
+            self.set_model_controls_enabled(False)
+            self.deactivate_model_requested.emit(mid)
 
 

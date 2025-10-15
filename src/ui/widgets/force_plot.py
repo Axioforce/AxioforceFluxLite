@@ -14,11 +14,8 @@ class ForcePlotWidget(QtWidgets.QWidget):
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(6)
+        # Header removed (no title text on the plot)
         hdr = QtWidgets.QHBoxLayout()
-        self.title = QtWidgets.QLabel("Force Plot (ΣX, ΣY, ΣZ)")
-        self.title.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        hdr.addWidget(self.title)
-        hdr.addStretch(1)
         # Legend toggles for mound dual-series mode (overlay in plot area, top-right)
         self._dual_enabled = False
         self._legend_launch = QtWidgets.QCheckBox("Launch")
@@ -42,7 +39,7 @@ class ForcePlotWidget(QtWidgets.QWidget):
         self._legend_container.setStyleSheet(
             "background: rgba(30,30,35,140); border: 1px solid rgba(200,200,200,60); border-radius: 4px;"
         )
-        root.addLayout(hdr)
+        # No header added to the layout to keep plot minimal
         self._samples: list[tuple[int, float, float, float]] = []  # (t_ms, fx, fy, fz) single-device mode
         self._samples_launch: list[tuple[int, float, float, float]] = []
         self._samples_landing: list[tuple[int, float, float, float]] = []
@@ -50,6 +47,55 @@ class ForcePlotWidget(QtWidgets.QWidget):
         self._auto_scale = True
         self._y_min = -10.0
         self._y_max = 10.0
+        # Smoothed running values for visual stability
+        self._ema_fx: Optional[float] = None
+        self._ema_fy: Optional[float] = None
+        self._ema_fz: Optional[float] = None
+        self._ema_fx_launch: Optional[float] = None
+        self._ema_fy_launch: Optional[float] = None
+        self._ema_fz_launch: Optional[float] = None
+        self._ema_fx_landing: Optional[float] = None
+        self._ema_fy_landing: Optional[float] = None
+        self._ema_fz_landing: Optional[float] = None
+        # Smoothing toggle (affects plotted lines and overlay values)
+        self._smoothing_enabled: bool = True
+        # Last raw/smoothed single values (for overlay)
+        self._last_raw_single: Optional[Tuple[float, float, float]] = None
+        self._last_smoothed_single: Optional[Tuple[float, float, float]] = None
+
+        # Bottom-left overlay for current readings and Smooth toggle
+        self._value_container = QtWidgets.QWidget(self)
+        vl = QtWidgets.QHBoxLayout(self._value_container)
+        vl.setContentsMargins(10, 6, 10, 6)
+        vl.setSpacing(12)
+        self.lbl_fx = QtWidgets.QLabel("Fx: --")
+        self.lbl_fy = QtWidgets.QLabel("Fy: --")
+        self.lbl_fz = QtWidgets.QLabel("Fz: --")
+        for lab in (self.lbl_fx, self.lbl_fy, self.lbl_fz):
+            lab.setStyleSheet("color: rgb(220,220,230); font-size: 15px; font-weight: 600;")
+            # Fixed-size boxes to prevent layout jitter
+            try:
+                lab.setAlignment(QtCore.Qt.AlignCenter)
+            except Exception:
+                pass
+            lab.setFixedWidth(88)
+            lab.setFixedHeight(26)
+        self.chk_smooth = QtWidgets.QCheckBox("Smooth")
+        self.chk_smooth.setChecked(True)
+        self.chk_smooth.setStyleSheet("color: rgb(220,220,230); font-size: 13px;")
+        try:
+            self.chk_smooth.setCursor(QtCore.Qt.PointingHandCursor)
+        except Exception:
+            pass
+        self.chk_smooth.toggled.connect(self._on_smooth_toggled)
+        vl.addWidget(self.lbl_fx)
+        vl.addWidget(self.lbl_fy)
+        vl.addWidget(self.lbl_fz)
+        vl.addWidget(self.chk_smooth)
+        self._value_container.setVisible(True)
+        self._value_container.setStyleSheet(
+            "background: rgba(30,30,35,160); border: 1px solid rgba(200,200,200,90); border-radius: 6px;"
+        )
 
     def _recompute_autoscale(self) -> None:
         if not self._auto_scale:
@@ -99,13 +145,23 @@ class ForcePlotWidget(QtWidgets.QWidget):
         # Reset scale
         self._y_min = -10.0
         self._y_max = 10.0
+        self._ema_fx = self._ema_fy = self._ema_fz = None
+        self._ema_fx_launch = self._ema_fy_launch = self._ema_fz_launch = None
+        self._ema_fx_landing = self._ema_fy_landing = self._ema_fz_landing = None
+        self._last_raw_single = None
+        self._last_smoothed_single = None
         self.update()
 
     def add_point(self, t_ms: int, fx: float, fy: float, fz: float) -> None:
-        self._samples.append((t_ms, fx, fy, fz))
+        # Plot raw live data; overlay handles its own smoothing separately
+        self._last_raw_single = (float(fx), float(fy), float(fz))
+        self._samples.append((t_ms, float(fx), float(fy), float(fz)))
+        # Reset EMAs used previously for plotted series
+        self._ema_fx = self._ema_fy = self._ema_fz = None
         if len(self._samples) > self._max_points:
             self._samples = self._samples[-self._max_points:]
         self._recompute_autoscale()
+        self._update_overlay()
         self.update()
 
     # Dual-series API for mound mode
@@ -115,18 +171,60 @@ class ForcePlotWidget(QtWidgets.QWidget):
         self.update()
 
     def add_point_launch(self, t_ms: int, fx: float, fy: float, fz: float) -> None:
-        self._samples_launch.append((t_ms, fx, fy, fz))
+        # Plot raw in dual mode as well
+        self._samples_launch.append((t_ms, float(fx), float(fy), float(fz)))
+        self._ema_fx_launch = self._ema_fy_launch = self._ema_fz_launch = None
         if len(self._samples_launch) > self._max_points:
             self._samples_launch = self._samples_launch[-self._max_points:]
         self._recompute_autoscale()
         self.update()
 
     def add_point_landing(self, t_ms: int, fx: float, fy: float, fz: float) -> None:
-        self._samples_landing.append((t_ms, fx, fy, fz))
+        # Plot raw in dual mode as well
+        self._samples_landing.append((t_ms, float(fx), float(fy), float(fz)))
+        self._ema_fx_landing = self._ema_fy_landing = self._ema_fz_landing = None
         if len(self._samples_landing) > self._max_points:
             self._samples_landing = self._samples_landing[-self._max_points:]
         self._recompute_autoscale()
         self.update()
+
+    def _on_smooth_toggled(self, checked: bool) -> None:
+        # Toggle only affects numeric overlay; plotting remains smoothed
+        self._smoothing_enabled = bool(checked)
+        self._update_overlay()
+        self.update()
+
+    def _update_overlay(self) -> None:
+        # Only show in single-series mode; hide for dual overlay to reduce clutter
+        show = not self._dual_enabled
+        self._value_container.setVisible(show)
+        if not show:
+            return
+        fx, fy, fz = None, None, None
+        if self._smoothing_enabled and self._last_raw_single is not None:
+            # Rolling average for overlay numbers over window of recent frames
+            rx, ry, rz = self._last_raw_single
+            window = int(getattr(config, "OVERLAY_SMOOTH_WINDOW_FRAMES", 10))
+            if window <= 1:
+                fx, fy, fz = rx, ry, rz
+            else:
+                # Maintain a small buffer of recent raw values within the widget
+                if not hasattr(self, "_overlay_buffer"):
+                    self._overlay_buffer = []  # type: ignore[attr-defined]
+                self._overlay_buffer.append((rx, ry, rz))  # type: ignore[attr-defined]
+                if len(self._overlay_buffer) > window:  # type: ignore[attr-defined]
+                    self._overlay_buffer = self._overlay_buffer[-window:]  # type: ignore[attr-defined]
+                bx = sum(v[0] for v in self._overlay_buffer) / len(self._overlay_buffer)  # type: ignore[attr-defined]
+                by = sum(v[1] for v in self._overlay_buffer) / len(self._overlay_buffer)  # type: ignore[attr-defined]
+                bz = sum(v[2] for v in self._overlay_buffer) / len(self._overlay_buffer)  # type: ignore[attr-defined]
+                fx, fy, fz = bx, by, bz
+        elif not self._smoothing_enabled and self._last_raw_single is not None:
+            fx, fy, fz = self._last_raw_single
+        def _fmt(v: Optional[float]) -> str:
+            return "--" if v is None else f"{v:.2f}"
+        self.lbl_fx.setText(f"Fx: {_fmt(fx)}")
+        self.lbl_fy.setText(f"Fy: {_fmt(fy)}")
+        self.lbl_fz.setText(f"Fz: {_fmt(fz)}")
 
     def paintEvent(self, _e: QtGui.QPaintEvent) -> None:  # noqa: N802
         p = QtGui.QPainter(self)
@@ -229,10 +327,16 @@ class ForcePlotWidget(QtWidgets.QWidget):
                     else:
                         path.lineTo(x, y)
                 p.drawPath(path)
-        p.setPen(QtGui.QColor(200, 200, 200))
-        p.drawText(x0 + 6, y0 + 14, "ΣFx")
-        p.drawText(x0 + 46, y0 + 14, "ΣFy")
-        p.drawText(x0 + 86, y0 + 14, "ΣFz")
         p.end()
+        # Position bottom-left overlay inside plot area
+        try:
+            if self._value_container.isVisible():
+                self._value_container.adjustSize()
+                sz = self._value_container.sizeHint()
+                cx = x0 + 6
+                cy = y0 + ph - sz.height() - 6
+                self._value_container.setGeometry(cx, cy, sz.width(), sz.height())
+        except Exception:
+            pass
 
 
