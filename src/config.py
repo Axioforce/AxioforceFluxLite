@@ -10,6 +10,23 @@ HTTP_PORT: int = int(os.environ.get("HTTP_PORT", "3001"))
 UI_TICK_HZ: int = int(os.environ.get("UI_TICK_HZ", "100"))
 
 
+# Microsoft Graph / OneDrive Excel export configuration
+# Prefer environment variables; fall back to empty/defaults.
+GRAPH_TENANT_ID: str = os.environ.get("GRAPH_TENANT_ID", "")
+GRAPH_CLIENT_ID: str = os.environ.get("GRAPH_CLIENT_ID", "")
+GRAPH_CLIENT_SECRET: str = os.environ.get("GRAPH_CLIENT_SECRET", "")
+# Workbook identification: provide ONE of the following (in order of preference):
+# 1) GRAPH_WORKBOOK_SHARING_URL (full OneDrive/SharePoint sharing URL)
+# 2) GRAPH_WORKBOOK_ITEM_ID (DriveItem id) with GRAPH_DRIVE_ID optional
+# 3) GRAPH_WORKBOOK_PATH (absolute path) with GRAPH_USER_UPN or GRAPH_SITE_PATH
+GRAPH_WORKBOOK_SHARING_URL: str = os.environ.get("GRAPH_WORKBOOK_SHARING_URL", "")
+GRAPH_WORKBOOK_ITEM_ID: str = os.environ.get("GRAPH_WORKBOOK_ITEM_ID", "")
+GRAPH_DRIVE_ID: str = os.environ.get("GRAPH_DRIVE_ID", "")
+GRAPH_WORKBOOK_PATH: str = os.environ.get("GRAPH_WORKBOOK_PATH", "")
+GRAPH_USER_UPN: str = os.environ.get("GRAPH_USER_UPN", "")
+GRAPH_WORKSHEET_NAME: str = os.environ.get("GRAPH_WORKSHEET_NAME", "Summary")
+
+
 # Drawing and scaling defaults
 PX_PER_MM: float = float(os.environ.get("PX_PER_MM", "0.8"))
 GRID_MM_SPACING: int = 100
@@ -19,8 +36,9 @@ ORIGIN_Y_FRACTION: float = float(os.environ.get("ORIGIN_Y_FRACTION", "0.65"))
 
 # Plate footprints (mm) full width x full height (updated real measurements)
 # Width corresponds to world Y (right on screen), Height to world X (up on screen)
-TYPE06_W_MM: float = 404.0
-TYPE06_H_MM: float = 353.2
+# 06 plate had width/height reversed previously; corrected here
+TYPE06_W_MM: float = 353.2
+TYPE06_H_MM: float = 404.0
 TYPE07_W_MM: float = 353.3
 TYPE07_H_MM: float = 607.3
 TYPE08_W_MM: float = 658.1
@@ -78,6 +96,15 @@ COLOR_BIN_MULTIPLIERS = {
     "light_green": 1.0,
     "yellow": 1.5,
     "orange": 2.5,
+}
+
+
+# Live Testing grid dimensions (rows, cols) per model id
+# 06: 3x3, 07: 3x5, 08: 5x5
+GRID_DIMS_BY_MODEL = {
+    "06": (3, 3),
+    "07": (5, 3),
+    "08": (5, 5),
 }
 
 

@@ -17,4 +17,10 @@ class UiBridge(QtCore.QObject):
     mound_force_vectors_ready = QtCore.Signal(object)  # Dict[str, Tuple[int, float, float, float]] by zone
     dynamo_config_ready = QtCore.Signal(object)  # { 'samplingRate': int, 'emissionRate': int }
 
+    # Model management signals
+    model_metadata_ready = QtCore.Signal(object)  # List[dict] | None
+    model_package_status_ready = QtCore.Signal(object)  # StatusUpdate-like dict
+    model_load_status_ready = QtCore.Signal(object)  # StatusUpdate-like dict
+    model_activation_status_ready = QtCore.Signal(object)  # Activation/deactivation status
+
 

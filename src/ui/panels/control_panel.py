@@ -22,6 +22,7 @@ class ControlPanel(QtWidgets.QWidget):
     refresh_devices_requested = QtCore.Signal()
     sampling_rate_changed = QtCore.Signal(int)
     emission_rate_changed = QtCore.Signal(int)
+    live_testing_tab_selected = QtCore.Signal()
 
     def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -263,7 +264,7 @@ class ControlPanel(QtWidgets.QWidget):
 
         # Live Testing tab
         self.live_testing_panel = LiveTestingPanel(self.state)
-        tabs.addTab(self.live_testing_panel, "Live Testing")
+        self._live_tab_index = tabs.addTab(self.live_testing_panel, "Live Testing")
 
         tare_row = QtWidgets.QHBoxLayout()
         tare_row.addStretch(1)
@@ -414,6 +415,8 @@ class ControlPanel(QtWidgets.QWidget):
         try:
             if idx == getattr(self, "_config_tab_index", -1):
                 self.refresh_devices_requested.emit()
+            if idx == getattr(self, "_live_tab_index", -1):
+                self.live_testing_tab_selected.emit()
         except Exception:
             pass
 

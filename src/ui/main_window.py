@@ -13,6 +13,7 @@ from .panels.live_testing_panel import LiveTestingPanel
 from .dialogs.live_test_setup import LiveTestSetupDialog
 from .dialogs.live_test_summary import LiveTestSummaryDialog
 from .dialogs.tare_prompt import TarePromptDialog
+from .dialogs.model_packager import ModelPackagerDialog
 from ..live_testing_model import GRID_BY_MODEL, LiveTestSession, LiveTestStage, GridCellResult, Thresholds
 from .widgets.force_plot import ForcePlotWidget
 from .widgets.moments_view import MomentsViewWidget
@@ -89,8 +90,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.controls.config_changed.connect(self._on_config_changed)
         self.controls.refresh_devices_requested.connect(self._on_refresh_devices)
+        self.controls.live_testing_tab_selected.connect(self._on_live_tab_selected)
         self.canvas_left.mound_device_selected.connect(self._on_mound_device_selected)
         self.canvas_right.mound_device_selected.connect(self._on_mound_device_selected)
+        # Keep rotations in sync across canvases
+        try:
+            self.canvas_left.rotation_changed.connect(lambda k: self.canvas_right.set_rotation_quadrants(k))
+            self.canvas_right.rotation_changed.connect(lambda k: self.canvas_left.set_rotation_quadrants(k))
+        except Exception:
+            pass
         QtCore.QTimer.singleShot(500, lambda: self.controls.refresh_devices_requested.emit())
 
         self.bridge.snapshots_ready.connect(self.on_snapshots)
@@ -105,12 +113,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bridge.moments_ready.connect(self._on_moments_ready)
         self.bridge.mound_force_vectors_ready.connect(self._on_mound_force_vectors)
         self.bridge.dynamo_config_ready.connect(self._on_dynamo_config)
+        # Model management updates
+        self.bridge.model_metadata_ready.connect(self._on_model_metadata)
+        self.bridge.model_package_status_ready.connect(self._on_model_package_status)
+        self.bridge.model_activation_status_ready.connect(self._on_model_activation_status)
 
         # Live testing wiring (bottom panel)
         try:
             self.controls.live_testing_panel.start_session_requested.connect(self._on_live_start)
             self.controls.live_testing_panel.end_session_requested.connect(self._on_live_end)
             self.controls.live_testing_panel.next_stage_requested.connect(self._on_next_stage)
+            self.controls.live_testing_panel.package_model_requested.connect(self._on_package_model_clicked)
+            self.controls.live_testing_panel.activate_model_requested.connect(self._on_activate_model)
+            self.controls.live_testing_panel.deactivate_model_requested.connect(self._on_deactivate_model)
         except Exception:
             pass
 
@@ -144,6 +159,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.emission_rate_changed.connect(self._on_emission_rate_changed)
         except Exception:
             pass
+
+        # Controller callbacks for model events
+        self._request_model_metadata_cb: Optional[Callable[[str], None]] = None
+        self._on_package_model_cb: Optional[Callable[[dict], None]] = None
+        self._on_activate_model_cb: Optional[Callable[[str, str], None]] = None
+        self._on_deactivate_model_cb: Optional[Callable[[str, str], None]] = None
 
     def _log(self, msg: str) -> None:
         try:
@@ -213,6 +234,18 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_emission_rate_changed(self, slot: Callable[[int], None]) -> None:
         self._on_emission_cb = slot
 
+    def on_request_model_metadata(self, slot: Callable[[str], None]) -> None:
+        self._request_model_metadata_cb = slot
+
+    def on_package_model(self, slot: Callable[[dict], None]) -> None:
+        self._on_package_model_cb = slot
+
+    def on_activate_model(self, slot: Callable[[str, str], None]) -> None:
+        self._on_activate_model_cb = slot
+
+    def on_deactivate_model(self, slot: Callable[[str, str], None]) -> None:
+        self._on_deactivate_model_cb = slot
+
     def set_available_devices(self, devices: List[Tuple[str, str]]) -> None:
         self.controls.set_available_devices(devices)
         self.canvas_left.set_available_devices(devices)
@@ -276,7 +309,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         tester, bw_n = dlg.get_values()
         self._log(f"setup_values: tester='{tester}', model_id={model_id}, device_id={dev_id}, bw_n={bw_n:.1f}")
-        rows, cols = GRID_BY_MODEL.get(model_id, (3, 3))
+        # Grid dimensions driven by config (canonical device space)
+        rows, cols = config.GRID_DIMS_BY_MODEL.get(model_id, (3, 3))
 
         # Load per-model thresholds from config
         thresholds = Thresholds(
@@ -334,7 +368,16 @@ class MainWindow(QtWidgets.QMainWindow):
             self.canvas_left.show_live_grid(rows, cols)
             self.canvas_right.show_live_grid(rows, cols)
             self.controls.live_testing_panel.set_stage_progress("Stage 1: 45 lb DB @ A", 0, rows * cols)
-            self.controls.live_testing_panel.set_debug_status("Arming… (need ≥50 N for 2.0 s in one cell)")
+            # Request current model metadata for this device and reflect in panel
+            try:
+                self.controls.live_testing_panel.set_current_model("Loading…")
+            except Exception:
+                pass
+            if self._request_model_metadata_cb and isinstance(dev_id, str) and dev_id.strip():
+                try:
+                    self._request_model_metadata_cb(dev_id)
+                except Exception:
+                    pass
             self._log(f"session_initialized: rows={rows}, cols={cols}, stages={len(self._live_session.stages)}")
         except Exception:
             pass
@@ -415,7 +458,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 dlg.set_values(tester, device_id, model_id, date_text, pass_fail, pass_cells, total_cells, grade_text)
                 if dlg.exec() == LiveTestSummaryDialog.Accepted:
                     edited_tester, _ = dlg.get_values()
-                    self._submit_summary_to_google_sheets(edited_tester, device_id, model_id, date_text, pass_fail)
+                    try:
+                        from ..ms_graph_excel import append_summary_row
+                        append_summary_row(device_id, pass_fail, date_text, edited_tester, model_id)
+                    except Exception as e:
+                        try:
+                            QtWidgets.QMessageBox.warning(self, "Export Failed", f"Could not append to Excel: {e}")
+                        except Exception:
+                            pass
             except Exception:
                 pass
             self._on_live_end()
@@ -447,37 +497,108 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.live_testing_panel.set_telemetry(None, None, None, "—")
             self.canvas_left.hide_live_grid()
             self.canvas_right.hide_live_grid()
-            self.controls.live_testing_panel.set_debug_status(None)
+            try:
+                self.controls.live_testing_panel.set_current_model("—")
+            except Exception:
+                pass
         except Exception:
             pass
 
-    def _submit_summary_to_google_sheets(self, tester: str, device_id: str, model_id: str, date_text: str, pass_fail: str) -> None:
+    def _on_live_tab_selected(self) -> None:
+        # On tab switch, fetch model metadata for currently selected device in single mode
         try:
-            import gspread
-            from google.oauth2.service_account import Credentials
-            # NOTE: For production, read these from a secure location, not inline
-            service_account_info = {
-                "type": "service_account",
-                "project_id": "axioforcelivetesting",
-                "private_key_id": "4cc5076dea648823e429722a33be61ff72f0fa6f",
-                "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDCVuVmiLG7kjzH\nyUXQeg5GCSCl2lsFfBMJTHIC+448Pcwm/b7TM/n0Y3twZjerdWrrmp3J4z78QbQ6\njf9J4jya9tFD4PpKkInJvqG3V8ruHJ5pjh6oQsSJ5SrYduwbpn5tPBAOwdOmtKUW\ncSDH+S31tt/t4KcuTUyb+fEUs4FygerqFxoLtv0sQOb5XK6R+nKi3wOkLE4l0v1U\nxxBY4o19V8+0x53T5cvEURFUiMAacqT89cLBFwNoCFk9rz8FlD106m/ppQxoxcHw\nbg0IJfmcOhxDmNl51zypbp7M27+22PWIUhUPOIIPcrNLp84ftjEOO+/EGW4VISrz\nwfdtsVi5AgMBAAECggEABpUCMLEr2999wYKBTn35InQdWqCvo9rqRiQEWdzX72sP\nEWRXZI3bxw7g174OiqHFHPUKp74o8aBEEMD4cYcrvaU4Zzp6dQYPiflelCLGvmkn\nuwl+OP1cl2hfRXTvAEITrB10VHD00IOecnPNxBgeGgwMlODz/e8joMYcB93LN5aR\nwF+ZPXR2SuKVlFJAdybAZjylIw4lldh5koLWWJvLU/JCo/H1Uko3BK7+1chTQrX1\nTTNVUy+XoRZNNNOxpdvB1qXkMTWUPeArliyVJtZubYNhRdgCyUm4kWVyGNJ6lll9\n6aAt5SnKXyCyVBXy5nI+YBgl3sWgGau0miyvyOXpkQKBgQDn966sqqYoh6ud72Ao\n4tBA83XrdFnFeWs1VFjRxozpBiAlTIGgySmz2kqmjXJxZi9wCkOXYTempMtUecR+\nr+oMVnqhMCKi5zew8iVlZCQs+G//h6sKMXBzkFOq+qAYIz/DHccYiuVj5lVSKI/z\nF14Acp4jAeXvLDNg4/wlK3VANQKBgQDWeTrWq/NzL2tdscbDaua85Jy4axvtSGex\n0ixn7LNgcwk7+MsDW0pXA0gFHkxukfvGq/ZY6NIBTWox9fucq+zjm2leCHY2NR5o\n1khFcbF1dGjzMERQOoqh1T/q1TQmMXD0PQOt+Wxt50CA1xhvEvoZWT1ixvMT9l5I\nte8JyBgO9QKBgHoiNLwA1Z99X2S2hoDAeznXdfzUs/d/aG0ZzfIVglemvAIneBD6\nGZTymF99FgaS8OMi5Fet/ikll1ERE95ILQj193cq6vGun+nwdLQft9RdskpuWiXx\nxe1yzjq13tkWphnLceqAJyskOUQay0AIy5ucvZpdA32cXijjoPzJFuEJAoGAaTTG\nnA91OIeGT0upiKqjzP0Hs58278qYsy26ArClvSYw3W5Jh7f8W3qMlZYrQAH0U5x/\nF1X9zg2/jgpwBoZ/iZbutOXJtwWPiTWz9fyzZD5aTRDcMc7FumT1GajEEAgotGZJ\nq8myWqcZiRn6LmJMtKqF5jJZgu1Tiq9UNqQkyRECgYBFNt26nnuYSkiyovZBKonx\nCYWoJ6CRexQmO3lAJZazrDSsFhI7/qaoYjX6DxLqcMvUjACSNFraN6zo7ZjEnbGw\nQ3cPaC+kWs9eZ8xIE7IIGHcVPZKagivx6fZJLin3N98iVg0yK1oavFyMis4A3fa1\nLQ/rIuLwmskckbL26HQ28A==\n-----END PRIVATE KEY-----\n",
-                "client_email": "axioforcelivetesting@axioforcelivetesting.iam.gserviceaccount.com",
-                "client_id": "116599978791633967517",
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/axioforcelivetesting%40axioforcelivetesting.iam.gserviceaccount.com",
-                "universe_domain": "googleapis.com",
-            }
-            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-            creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
-            gc = gspread.authorize(creds)
-            sh = gc.open_by_key("19C2NSiFtHGEnQruVpMQ8m5-mkRvAnsLHOGT36U_WvvY")
-            ws = sh.worksheet("Sheet1")
-            # Columns: Plate ID, Pass/Fail, Date, Tester, Model ID
-            ws.append_row([device_id, pass_fail, date_text, tester, model_id], value_input_option="USER_ENTERED")
+            if self.state.display_mode == "single":
+                dev_id = (self.state.selected_device_id or "").strip()
+                if dev_id and self._request_model_metadata_cb:
+                    self.controls.live_testing_panel.set_current_model("Loading…")
+                    self._request_model_metadata_cb(dev_id)
         except Exception:
             pass
+
+    # Model management UI handlers
+    def _on_package_model_clicked(self) -> None:
+        dlg = ModelPackagerDialog(self)
+        if dlg.exec() == ModelPackagerDialog.Accepted:
+            force_dir, moments_dir, output_dir = dlg.get_values()
+            payload = {
+                "forceModelDir": force_dir,
+                "momentsModelDir": moments_dir,
+                "outputDir": output_dir,
+            }
+            if self._on_package_model_cb:
+                try:
+                    self._on_package_model_cb(payload)
+                except Exception:
+                    pass
+
+    def _on_model_metadata(self, data: object) -> None:
+        # Expect list of model metadata dicts; display a concise current model id if present
+        try:
+            models = list(data or [])
+            model_text = "—"
+            if models:
+                # Prefer entry with location 'local' or 'both'; else first
+                preferred = None
+                for m in models:
+                    loc = str((m or {}).get("location", "")).strip().lower()
+                    if loc in ("local", "both"):
+                        preferred = m
+                        break
+                chosen = preferred or models[0]
+                model_text = str((chosen or {}).get("modelId") or "—")
+            self.controls.live_testing_panel.set_current_model(model_text)
+        except Exception:
+            try:
+                self.controls.live_testing_panel.set_current_model("—")
+            except Exception:
+                pass
+
+    def _on_model_package_status(self, status: object) -> None:
+        # Show a minimal status dialog
+        try:
+            s = status or {}
+            st = str(s.get("status") or "").strip() if isinstance(s, dict) else str(s)
+            msg = str(s.get("message") or "") if isinstance(s, dict) else ""
+            QtWidgets.QMessageBox.information(self, "Package Model", f"Status: {st}\n{msg}")
+        except Exception:
+            pass
+
+    def _on_model_activation_status(self, status: object) -> None:
+        # After activation/deactivation, refresh current model
+        try:
+            dev_id = (self.state.selected_device_id or "").strip()
+            if dev_id and self._request_model_metadata_cb:
+                self._request_model_metadata_cb(dev_id)
+            # Update status label from status and re-enable controls
+            try:
+                s = status or {}
+                st = str(s.get("status") or "").strip() if isinstance(s, dict) else str(s)
+                msg = str(s.get("message") or "") if isinstance(s, dict) else ""
+                text = f"{st.capitalize()}" + (f": {msg}" if msg else "")
+                self.controls.live_testing_panel.set_model_status(text)
+            except Exception:
+                pass
+            self.controls.live_testing_panel.set_model_controls_enabled(True)
+        except Exception:
+            pass
+
+    def _on_activate_model(self, model_id: str) -> None:
+        dev_id = (self.state.selected_device_id or "").strip()
+        if dev_id and self._on_activate_model_cb:
+            try:
+                self._on_activate_model_cb(dev_id, model_id)
+            except Exception:
+                pass
+
+    def _on_deactivate_model(self, model_id: str) -> None:
+        dev_id = (self.state.selected_device_id or "").strip()
+        if dev_id and self._on_deactivate_model_cb:
+            try:
+                self._on_deactivate_model_cb(dev_id, model_id)
+            except Exception:
+                pass
+
+    # Removed: Google Sheets submission helper (replaced by Graph Excel writing)
 
     def _on_mound_device_selected(self, position_id: str, device_id: str) -> None:
         if hasattr(self, "_on_mound_device_cb") and callable(self._on_mound_device_cb):
@@ -591,9 +712,11 @@ class MainWindow(QtWidgets.QMainWindow):
         rows = self._live_session.grid_rows
         cols = self._live_session.grid_cols
 
-        # Map COP (x_mm, y_mm) to grid cell using real plate dimensions.
+        # Map COP (x_mm, y_mm) to grid cell using canonical device space (no rotation).
         # Config note: Width corresponds to world Y (right on screen), Height to world X (up on screen)
         def to_cell_mm(x_mm_val: float, y_mm_val: float) -> Optional[Tuple[int, int]]:
+            # IMPORTANT: Do not rotate here; cell assignment is in canonical device space
+            rx, ry = x_mm_val, y_mm_val
             dev_type = (self.state.selected_device_type or "06").strip()
             if dev_type == "06":
                 w_mm = config.TYPE06_W_MM
@@ -607,28 +730,25 @@ class MainWindow(QtWidgets.QMainWindow):
             half_w = w_mm / 2.0  # along world Y (left/right)
             half_h = h_mm / 2.0  # along world X (up/down)
             # If outside footprint, return None
-            if abs(y_mm_val) > half_w or abs(x_mm_val) > half_h:
+            if abs(ry) > half_w or abs(rx) > half_h:
                 return None
             # Column: left (-half_w) -> 0, right (+half_w) -> cols-1
-            col_f = (y_mm_val + half_w) / w_mm * cols
+            col_f = (ry + half_w) / w_mm * cols
             col_i = int(col_f)
             if col_i < 0:
                 col_i = 0
             elif col_i >= cols:
                 col_i = cols - 1
             # Row: top (+half_h) -> 0, bottom (-half_h) -> rows-1
-            t = (half_h - x_mm_val) / h_mm  # 0 at top, 1 at bottom
+            t = (half_h - rx) / h_mm  # 0 at top, 1 at bottom
             row_f = t * rows
             row_i = int(row_f)
             if row_i < 0:
                 row_i = 0
             elif row_i >= rows:
                 row_i = rows - 1
-            # Observed orientation indicates an anti-diagonal mirror; correct by mapping
-            # (row, col) -> (rows-1-col, cols-1-row)
-            corr_row = rows - 1 - col_i
-            corr_col = cols - 1 - row_i
-            return (corr_row, corr_col)
+            # Return direct indices; rotation already accounted for above
+            return (row_i, col_i)
 
         # Fractions within plate footprint for debug (0..1). Column uses Y/width, Row uses X/height (top=0)
         dev_type = (self.state.selected_device_type or "06").strip()
@@ -641,10 +761,12 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             w_mm = config.TYPE08_W_MM
             h_mm = config.TYPE08_H_MM
+        # Debug: show canonical fractions (no rotation) so they reflect assignment space
+        rx_dbg, ry_dbg = x_mm, y_mm
         half_w = w_mm / 2.0
         half_h = h_mm / 2.0
-        col_frac = (y_mm + half_w) / w_mm
-        row_frac_top = (half_h - x_mm) / h_mm
+        col_frac = (ry_dbg + half_w) / w_mm
+        row_frac_top = (half_h - rx_dbg) / h_mm
 
         cell = to_cell_mm(x_mm, y_mm)
         if cell is None:

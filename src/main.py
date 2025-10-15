@@ -107,6 +107,11 @@ def run_qt() -> int:
     try:
         win.on_sampling_rate_changed(ctrl.request_sampling_rate)
         win.on_emission_rate_changed(ctrl.request_emission_rate)
+        # Model management callbacks
+        win.on_request_model_metadata(ctrl.request_model_metadata)
+        win.on_package_model(ctrl.package_model)
+        win.on_activate_model(ctrl.activate_model)
+        win.on_deactivate_model(ctrl.deactivate_model)
     except Exception:
         pass
     rc = app.exec()

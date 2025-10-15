@@ -49,6 +49,15 @@ class Controller:
             self.view.on_stop_capture(self.stop_capture)
         if hasattr(self.view, "on_tare"):
             self.view.on_tare(self.tare)
+        # Model management hooks from view
+        if hasattr(self.view, "on_request_model_metadata"):
+            self.view.on_request_model_metadata(self.request_model_metadata)
+        if hasattr(self.view, "on_package_model"):
+            self.view.on_package_model(self.package_model)
+        if hasattr(self.view, "on_activate_model"):
+            self.view.on_activate_model(self.activate_model)
+        if hasattr(self.view, "on_deactivate_model"):
+            self.view.on_deactivate_model(self.deactivate_model)
         # Optional: discovery handlers wiring
         if hasattr(self.view, "on_request_discovery"):
             self.view.on_request_discovery(self.fetch_discovery)
@@ -307,6 +316,11 @@ class Controller:
                 self.client.on("connect", _on_first_connect)
                 # Listen for config status to forward to UI
                 self.client.on("getDynamoConfigStatus", self._on_dynamo_config_status)
+                # Model management listeners
+                self.client.on("modelMetadata", self._on_model_metadata)
+                self.client.on("modelPackageStatus", self._on_model_package_status)
+                self.client.on("modelLoadStatus", self._on_model_load_status)
+                self.client.on("modelActivationStatus", self._on_model_activation_status)
                 # Connection text on disconnect
                 self.client.on("disconnect", lambda *_: getattr(self.view, "bridge", None) and self.view.bridge.connection_text_ready.emit("Disconnected"))
             except Exception:
@@ -393,6 +407,67 @@ class Controller:
                 self.client.emit("setDataEmissionRate", int(rate_hz))
             except Exception:
                 pass
+
+    # --- Model management -------------------------------------------------------
+    def request_model_metadata(self, device_id: str) -> None:
+        if self.client is not None and (device_id or "").strip():
+            try:
+                self.client.emit("getModelMetadata", {"deviceId": str(device_id)})
+            except Exception:
+                pass
+
+    def package_model(self, payload: dict) -> None:
+        if self.client is not None and isinstance(payload, dict):
+            try:
+                self.client.emit("packageModel", {
+                    "forceModelDir": payload.get("forceModelDir", ""),
+                    "momentsModelDir": payload.get("momentsModelDir", ""),
+                    "outputDir": payload.get("outputDir", ""),
+                })
+            except Exception:
+                pass
+
+    def activate_model(self, device_id: str, model_id: str) -> None:
+        if self.client is not None and (device_id or "").strip() and (model_id or "").strip():
+            try:
+                self.client.emit("activateModel", {"deviceId": str(device_id), "modelId": str(model_id)})
+            except Exception:
+                pass
+
+    def deactivate_model(self, device_id: str, model_id: str) -> None:
+        if self.client is not None and (device_id or "").strip() and (model_id or "").strip():
+            try:
+                self.client.emit("deactivateModel", {"deviceId": str(device_id), "modelId": str(model_id)})
+            except Exception:
+                pass
+
+    def _on_model_metadata(self, data: dict | list) -> None:
+        try:
+            if hasattr(self.view, "bridge"):
+                self.view.bridge.model_metadata_ready.emit(data)
+        except Exception:
+            pass
+
+    def _on_model_package_status(self, status: dict) -> None:
+        try:
+            if hasattr(self.view, "bridge"):
+                self.view.bridge.model_package_status_ready.emit(status)
+        except Exception:
+            pass
+
+    def _on_model_load_status(self, status: dict) -> None:
+        try:
+            if hasattr(self.view, "bridge"):
+                self.view.bridge.model_load_status_ready.emit(status)
+        except Exception:
+            pass
+
+    def _on_model_activation_status(self, status: dict) -> None:
+        try:
+            if hasattr(self.view, "bridge"):
+                self.view.bridge.model_activation_status_ready.emit(status)
+        except Exception:
+            pass
 
     def _on_dynamo_config_status(self, payload: dict) -> None:
         # Expect: { status, data: { samplingRate, emissionRate, ... } }

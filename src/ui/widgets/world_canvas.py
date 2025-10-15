@@ -18,6 +18,7 @@ from ..dialogs.device_picker import DevicePickerDialog
 class WorldCanvas(QtWidgets.QWidget):
     mound_device_selected = QtCore.Signal(str, str)  # position_id, device_id
     mapping_ready = QtCore.Signal(object)  # Dict[str, str]
+    rotation_changed = QtCore.Signal(int)  # quadrants 0..3
 
     def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -55,12 +56,24 @@ class WorldCanvas(QtWidgets.QWidget):
         except Exception:
             pass
 
+        # Single-view rotate button (90° clockwise per click)
+        self._rotation_quadrants: int = 0  # 0,1,2,3 => 0°,90°,180°,270° clockwise
+        self._rotate_btn = QtWidgets.QPushButton("Rotate 90°", self)
+        try:
+            self._rotate_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        except Exception:
+            pass
+        self._rotate_btn.setVisible(False)
+        self._rotate_btn.clicked.connect(self._on_rotate_clicked)
+
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # noqa: N802
         self._fit_done = False
         super().showEvent(event)
         self.update()
         self._position_detect_button()
         self._update_detect_button()
+        self._position_rotate_button()
+        self._update_rotate_button()
 
     def set_snapshots(self, snaps: Dict[str, Tuple[float, float, float, int, bool, float, float]]) -> None:
         self._snapshots = snaps
@@ -89,6 +102,8 @@ class WorldCanvas(QtWidgets.QWidget):
         super().resizeEvent(event)
         self._position_detect_button()
         self._update_detect_button()
+        self._position_rotate_button()
+        self._update_rotate_button()
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
         if self.state.display_mode != "mound" or event.button() != QtCore.Qt.LeftButton:
@@ -136,14 +151,26 @@ class WorldCanvas(QtWidgets.QWidget):
         self._x_mid = (self.WORLD_X_MIN + self.WORLD_X_MAX) / 2.0
         self._fit_done = True
 
+    def _apply_rotation_single(self, x_mm: float, y_mm: float) -> Tuple[float, float]:
+        k = int(self._rotation_quadrants) % 4
+        if k == 0:
+            return x_mm, y_mm
+        if k == 1:  # 90° cw
+            return y_mm, -x_mm
+        if k == 2:  # 180°
+            return -x_mm, -y_mm
+        # k == 3: 270° cw
+        return -y_mm, x_mm
+
     def _to_screen(self, x_mm: float, y_mm: float) -> Tuple[int, int]:
         w, h = self.width(), self.height()
         s = self.state.px_per_mm
         assert s > 0
         cx, cy = w * 0.5, h * 0.5
         if self.state.display_mode == "single":
-            sx = int(cx + (x_mm - self._x_mid) * s)
-            sy = int(cy - (y_mm - self._y_mid) * s)
+            rx, ry = self._apply_rotation_single(x_mm, y_mm)
+            sx = int(cx + (rx - self._x_mid) * s)
+            sy = int(cy - (ry - self._y_mid) * s)
         else:
             sx = int(cx + (y_mm - self._y_mid) * s)
             # Flip vertical mapping so X+ renders downward (screen Y increases)
@@ -162,28 +189,48 @@ class WorldCanvas(QtWidgets.QWidget):
             p.drawLine(0, y, w, y)
         base_x, base_y = 12, h - 12
         length = 60
+        # Axis indicator: arrows always point right and up on screen.
+        # Labels reflect which world axis/sign map to those directions.
         if self.state.display_mode == "single":
+            # Axis labels depend on rotation (arrows fixed right/up)
+            # k=0: Right X+, Up Y+; k=1: Right Y+, Up X-; k=2: Right X-, Up Y-; k=3: Right Y-, Up X+
+            k = int(self._rotation_quadrants) % 4
             p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_AXIS_X), config.AXIS_THICKNESS_PX))
-            p.drawLine(base_x, base_y, base_x + length, base_y)
+            p.drawLine(base_x, base_y, base_x + length, base_y)  # right arrow
             p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_AXIS_Y), config.AXIS_THICKNESS_PX))
-            p.drawLine(base_x, base_y, base_x, base_y - length)
+            p.drawLine(base_x, base_y, base_x, base_y - length)  # up arrow
             p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_TEXT)))
-            p.drawText(base_x + length + 6, base_y + 4, "X")
-            p.drawText(base_x - 10, base_y - length - 6, "Y")
+            if k == 0:
+                right_lbl, up_lbl = "X+", "Y+"
+            elif k == 1:
+                right_lbl, up_lbl = "Y+", "X-"
+            elif k == 2:
+                right_lbl, up_lbl = "X-", "Y-"
+            else:  # k == 3
+                right_lbl, up_lbl = "Y-", "X+"
+            p.drawText(base_x + length + 6, base_y + 4, right_lbl)
+            p.drawText(base_x - 10, base_y - length - 6, up_lbl)
         else:
+            # Mound/world view mapping:
+            # Screen right => +Y, screen up => -X
             p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_AXIS_Y), config.AXIS_THICKNESS_PX))
-            p.drawLine(base_x, base_y, base_x + length, base_y)  # Y+ to the right
+            p.drawLine(base_x, base_y, base_x + length, base_y)  # right arrow
             p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_AXIS_X), config.AXIS_THICKNESS_PX))
-            p.drawLine(base_x, base_y, base_x, base_y + length)  # X+ downward
+            p.drawLine(base_x, base_y, base_x, base_y - length)  # up arrow
             p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_TEXT)))
             p.drawText(base_x + length + 6, base_y + 4, "Y+")
-            p.drawText(base_x - 10, base_y + length + 14, "X+")
+            p.drawText(base_x - 10, base_y - length - 6, "X-")
 
     def _draw_plate(self, p: QtGui.QPainter, center_mm: Tuple[float, float], w_mm: float, h_mm: float) -> None:
         cx, cy = self._to_screen(center_mm[0], center_mm[1])
         scale = self.state.px_per_mm
-        w_px = int(w_mm * scale)
-        h_px = int(h_mm * scale)
+        # For single-view rotation, swap rendered width/height on 90/270
+        if self.state.display_mode == "single" and (self._rotation_quadrants % 2 == 1):
+            w_px = int(h_mm * scale)
+            h_px = int(w_mm * scale)
+        else:
+            w_px = int(w_mm * scale)
+            h_px = int(h_mm * scale)
         rect = QtCore.QRect(int(cx - w_px / 2), int(cy - h_px / 2), w_px, h_px)
         p.setBrush(QtGui.QColor(*config.COLOR_PLATE))
         p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_PLATE_OUTLINE), 2))
@@ -212,11 +259,19 @@ class WorldCanvas(QtWidgets.QWidget):
     def _draw_plate_logo_single(self, p: QtGui.QPainter, center_mm: Tuple[float, float], w_mm: float, h_mm: float, dev_type: str) -> None:
         if self.state.display_mode != "single":
             return
+        # No logo for type 06 plates
+        if (dev_type or "").strip() == "06":
+            return
         cx, cy = self._to_screen(center_mm[0], center_mm[1])
         scale = self.state.px_per_mm
-        w_px = int(w_mm * scale)
-        h_px = int(h_mm * scale)
+        if (self._rotation_quadrants % 2 == 1):
+            w_px = int(h_mm * scale)
+            h_px = int(w_mm * scale)
+        else:
+            w_px = int(w_mm * scale)
+            h_px = int(h_mm * scale)
         left_x = int(cx - w_px / 2)
+        right_x = int(cx + w_px / 2)
         top_y = int(cy - h_px / 2)
         bottom_y = int(cy + h_px / 2)
         text = "Axioforce"
@@ -225,15 +280,30 @@ class WorldCanvas(QtWidgets.QWidget):
         font = p.font()
         font.setPointSize(max(9, int(10 * scale / max(scale, 1))))
         p.setFont(font)
-        if dev_type == "07":
-            inset_px = max(6, int(0.04 * w_px) + 5)
+        # Determine base side for logo by device type: 07 -> left (vertical), 08 -> top (horizontal)
+        base_side = "left" if dev_type == "07" else "top"
+        # Apply rotation to pick actual side
+        sides = ["top", "right", "bottom", "left"]
+        base_idx = sides.index(base_side)
+        k = int(self._rotation_quadrants) % 4
+        side = sides[(base_idx + k) % 4]
+        inset_px = max(6, int(0.04 * max(w_px, h_px)) + 5)
+        if side == "top":
+            p.drawText(int(cx - w_px / 2), top_y + 30, w_px, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, text)
+        elif side == "bottom":
+            p.drawText(int(cx - w_px / 2), bottom_y - 30 - 18, w_px, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, text)
+        elif side == "left":
             pivot_x = left_x + inset_px
             pivot_y = int((top_y + bottom_y) / 2)
             p.translate(pivot_x, pivot_y)
             p.rotate(-90)
             p.drawText(-int(h_px / 2), -12, h_px, 24, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, text)
-        elif dev_type == "08":
-            p.drawText(int(cx - w_px / 2), top_y + 30, w_px, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, text)
+        else:  # right
+            pivot_x = right_x - inset_px
+            pivot_y = int((top_y + bottom_y) / 2)
+            p.translate(pivot_x, pivot_y)
+            p.rotate(90)
+            p.drawText(-int(h_px / 2), -12, h_px, 24, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, text)
         p.restore()
 
     def _draw_connection_port_single(self, p: QtGui.QPainter, center_mm: Tuple[float, float], w_mm: float, h_mm: float, dev_type: str) -> None:
@@ -241,24 +311,53 @@ class WorldCanvas(QtWidgets.QWidget):
             return
         cx, cy = self._to_screen(center_mm[0], center_mm[1])
         scale = self.state.px_per_mm
-        w_px = int(w_mm * scale)
-        h_px = int(h_mm * scale)
+        if (self._rotation_quadrants % 2 == 1):
+            w_px = int(h_mm * scale)
+            h_px = int(w_mm * scale)
+        else:
+            w_px = int(w_mm * scale)
+            h_px = int(h_mm * scale)
         port_h_mm = 4.5 * 25.4
         port_w_mm = 2.25 * 25.4
-        port_h_px = int(port_h_mm * scale)
-        port_w_px = int(port_w_mm * scale)
+        port_h_px_base = int(port_h_mm * scale)
+        port_w_px_base = int(port_w_mm * scale)
+        left_x = int(cx - w_px / 2)
         right_x = int(cx + w_px / 2)
-        inset_px = max(12, int(0.03 * w_px))
-        rect_left = right_x - inset_px - port_w_px
-        rect_top = int(cy - port_h_px / 2)
-        rect = QtCore.QRect(rect_left, rect_top, port_w_px, port_h_px)
+        top_y = int(cy - h_px / 2)
+        bottom_y = int(cy + h_px / 2)
+        inset_px = max(12, int(0.03 * max(w_px, h_px)))
+        # Base side is 'right' for connection port; rotate with plate
+        sides = ["top", "right", "bottom", "left"]
+        base_idx = sides.index("right")
+        k = int(self._rotation_quadrants) % 4
+        side = sides[(base_idx + k) % 4]
+        # Rotate rectangle orientation: vertical on left/right, horizontal on top/bottom
+        if side in ("top", "bottom"):
+            cur_w = port_h_px_base  # wider horizontally when on top/bottom
+            cur_h = port_w_px_base
+        else:
+            cur_w = port_w_px_base  # taller vertically when on left/right
+            cur_h = port_h_px_base
+        if side == "right":
+            rect_left = right_x - inset_px - cur_w
+            rect_top = int(cy - cur_h / 2)
+        elif side == "left":
+            rect_left = left_x + inset_px
+            rect_top = int(cy - cur_h / 2)
+        elif side == "top":
+            rect_left = int(cx - cur_w / 2)
+            rect_top = top_y + inset_px
+        else:  # bottom
+            rect_left = int(cx - cur_w / 2)
+            rect_top = bottom_y - inset_px - cur_h
+        rect = QtCore.QRect(rect_left, rect_top, cur_w, cur_h)
         pen = QtGui.QPen(QtGui.QColor(30, 30, 30))
         pen.setStyle(QtCore.Qt.DashLine)
         pen.setWidth(2)
         p.save()
         p.setPen(pen)
         p.setBrush(QtCore.Qt.NoBrush)
-        corner_radius = max(6, int(min(port_w_px, port_h_px) * 0.1))
+        corner_radius = max(6, int(min(cur_w, cur_h) * 0.1))
         p.drawRoundedRect(rect, corner_radius, corner_radius)
         p.restore()
 
@@ -430,6 +529,7 @@ class WorldCanvas(QtWidgets.QWidget):
         self._draw_grid(p)
         self._draw_plates(p)
         self._update_detect_button()
+        self._update_rotate_button()
         if self.state.display_mode == "single":
             if self._single_snapshot is not None:
                 self._draw_cop_single(p, self._single_snapshot)
@@ -457,8 +557,12 @@ class WorldCanvas(QtWidgets.QWidget):
                     h_mm = config.TYPE08_H_MM
                 cx, cy = self._to_screen(0.0, 0.0)
                 scale = self.state.px_per_mm
-                w_px = int(w_mm * scale)
-                h_px = int(h_mm * scale)
+                if (self._rotation_quadrants % 2 == 1):
+                    w_px = int(h_mm * scale)
+                    h_px = int(w_mm * scale)
+                else:
+                    w_px = int(w_mm * scale)
+                    h_px = int(h_mm * scale)
                 rect = QtCore.QRect(int(cx - w_px / 2), int(cy - h_px / 2), w_px, h_px)
                 self._grid_overlay.setGeometry(rect)
                 self._grid_overlay.set_plate_rect_px(QtCore.QRect(0, 0, rect.width(), rect.height()))
@@ -475,17 +579,68 @@ class WorldCanvas(QtWidgets.QWidget):
         self._grid_overlay.hide()
         self.update()
 
+    def _map_cell_for_rotation(self, row: int, col: int) -> Tuple[int, int]:
+        try:
+            rows = int(self._grid_overlay.rows)
+            cols = int(self._grid_overlay.cols)
+        except Exception:
+            return int(row), int(col)
+        r = int(row)
+        c = int(col)
+        k = int(self._rotation_quadrants) % 4
+        if k == 0:
+            return r, c
+        if k == 1:  # 90° cw
+            return c, (cols - 1 - r)
+        if k == 2:  # 180°
+            return (rows - 1 - r), (cols - 1 - c)
+        # k == 3: 270° cw
+        return (rows - 1 - c), r
+
+    def _map_cell_for_device(self, row: int, col: int) -> Tuple[int, int]:
+        """Apply device-specific overlay mapping. For 06, mirror across the
+        bottom-left to top-right axis (anti-diagonal). Others: identity.
+        """
+        try:
+            rows = int(self._grid_overlay.rows)
+            cols = int(self._grid_overlay.cols)
+        except Exception:
+            return int(row), int(col)
+        dev_type = (self.state.selected_device_type or "").strip()
+        if dev_type == "06":
+            # Anti-diagonal mirror: (r, c) -> (rows-1-c, cols-1-r)
+            return (rows - 1 - int(col), cols - 1 - int(row))
+        if dev_type == "07":
+            # Horizontal mirror across vertical midline: (r, c) -> (r, cols-1-c)
+            return (int(row), cols - 1 - int(col))
+        return int(row), int(col)
+
     def set_live_active_cell(self, row: Optional[int], col: Optional[int]) -> None:
-        self._grid_overlay.set_active_cell(row, col)
+        if row is None or col is None:
+            self._grid_overlay.set_active_cell(None, None)
+            return
+        # Apply device-specific mirror first (e.g., 06), then rotation mapping
+        dr, dc = self._map_cell_for_device(int(row), int(col))
+        rr, cc = self._map_cell_for_rotation(dr, dc)
+        self._grid_overlay.set_active_cell(rr, cc)
 
     def set_live_cell_color(self, row: int, col: int, color: QtGui.QColor) -> None:
-        self._grid_overlay.set_cell_color(row, col, color)
+        dr, dc = self._map_cell_for_device(int(row), int(col))
+        rr, cc = self._map_cell_for_rotation(dr, dc)
+        self._grid_overlay.set_cell_color(rr, cc, color)
 
     def set_live_status(self, text: Optional[str]) -> None:
         self._grid_overlay.set_status(text)
 
     def clear_live_colors(self) -> None:
         self._grid_overlay.clear_colors()
+
+    # Expose rotation for live-testing mapping
+    def get_rotation_quadrants(self) -> int:
+        return int(self._rotation_quadrants) % 4
+
+    def rotate_coords_for_mapping(self, x_mm: float, y_mm: float) -> Tuple[float, float]:
+        return self._apply_rotation_single(x_mm, y_mm)
 
     def _draw_plate_names(self, p: QtGui.QPainter) -> None:
         return
@@ -586,6 +741,41 @@ class WorldCanvas(QtWidgets.QWidget):
                 self._detect_btn_visible_last = visible
                 print(f"[canvas] detect button visible -> {visible} (is_mound={is_mound}, configured={all_configured}, mound_devices={self.state.mound_devices})")
             self._detect_btn.setVisible(visible)
+        except Exception:
+            pass
+
+    def _position_rotate_button(self) -> None:
+        try:
+            hint = self._rotate_btn.sizeHint()
+            w = max(110, hint.width() + 12)
+            h = max(26, hint.height() + 6)
+            margin = 10
+            x = max(0, self.width() - w - margin)
+            y = max(0, self.height() - h - margin)
+            self._rotate_btn.setGeometry(x, y, w, h)
+        except Exception:
+            pass
+
+    def _update_rotate_button(self) -> None:
+        try:
+            # Disable rotation UI for now
+            self._rotate_btn.setVisible(False)
+        except Exception:
+            pass
+
+    def _on_rotate_clicked(self) -> None:
+        # Rotation disabled — ignore clicks
+        return
+
+    # Allow external sync of rotation state (e.g., from sibling canvas)
+    def set_rotation_quadrants(self, k: int) -> None:
+        try:
+            k_norm = int(k) % 4
+            if k_norm == int(self._rotation_quadrants) % 4:
+                return
+            self._rotation_quadrants = k_norm
+            self._fit_done = False
+            self.update()
         except Exception:
             pass
 
