@@ -173,21 +173,21 @@ def _resolve_drive_item(token: str) -> Tuple[str, str]:
     raise GraphApiError(400, "No workbook reference provided. Set GRAPH_WORKBOOK_SHARING_URL or GRAPH_WORKBOOK_ITEM_ID+GRAPH_DRIVE_ID.")
 
 
-def append_summary_row(device_id: str, pass_fail: str, date_text: str, tester: str, model_id: str, worksheet_name: Optional[str] = None) -> None:
+def append_summary_row(device_id: str, pass_fail: str, date_text: str, tester: str, body_weight_n: float, model_id: str, worksheet_name: Optional[str] = None) -> None:
     token = _get_access_token()
     drive_id, item_id = _resolve_drive_item(token)
     sheet = (worksheet_name or config.GRAPH_WORKSHEET_NAME or "Summary").strip()
 
     # Ensure worksheet and headers
     _ensure_worksheet(token, drive_id, item_id, sheet)
-    headers_row = ["DeviceID", "Pass/Fail", "DateTime", "Tester", "ModelID"]
+    headers_row = ["DeviceID", "Pass/Fail", "DateTime", "Tester", "BodyWeightN", "ModelID"]
     _ensure_headers(token, drive_id, item_id, sheet, headers_row)
 
     # Compute next row
     next_row = _get_next_row_index(token, drive_id, item_id, sheet, len(headers_row))
     last_col_letter = _col_letter(len(headers_row))
     rng_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets('{sheet}')/range(address='A{next_row}:{last_col_letter}{next_row}')"
-    values = [[str(device_id), str(pass_fail), str(date_text), str(tester), str(model_id)]]
+    values = [[str(device_id), str(pass_fail), str(date_text), str(tester), float(body_weight_n), str(model_id)]]
     _request_json("PATCH", rng_url, token, body={"values": values})
 
 

@@ -40,8 +40,10 @@ def main() -> None:
     pass_fail = "Pass"
     tester = "Dummy Tester"
     model_id = "06"
+    # Dummy body weight for example
+    body_weight_n = 700.0
     try:
-        append_summary_row(device_id, pass_fail, now, tester, model_id)
+        append_summary_row(device_id, pass_fail, now, tester, body_weight_n, model_id)
         print("Success: appended dummy row to Excel.")
     except Exception as e:
         print("Failed to append row:", e)
