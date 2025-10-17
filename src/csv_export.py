@@ -7,7 +7,7 @@ from typing import List
 from . import config
 
 
-HEADERS: List[str] = ["DeviceID", "Pass/Fail", "DateTime", "Tester", "ModelID"]
+HEADERS: List[str] = ["DeviceID", "Pass/Fail", "DateTime", "Tester", "BodyWeightN", "ModelID"]
 
 
 def ensure_parent_dir(path: str) -> None:
@@ -16,7 +16,7 @@ def ensure_parent_dir(path: str) -> None:
         os.makedirs(parent, exist_ok=True)
 
 
-def append_summary_row_csv(device_id: str, pass_fail: str, date_text: str, tester: str, model_id: str, path: str | None = None) -> str:
+def append_summary_row_csv(device_id: str, pass_fail: str, date_text: str, tester: str, body_weight_n: float, model_id: str, path: str | None = None) -> str:
     out_path = (path or config.CSV_EXPORT_PATH or "").strip()
     if not out_path:
         # Default to current working directory if config is empty
@@ -29,7 +29,7 @@ def append_summary_row_csv(device_id: str, pass_fail: str, date_text: str, teste
         writer = csv.writer(f)
         if not file_exists:
             writer.writerow(HEADERS)
-        writer.writerow([device_id, pass_fail, date_text, tester, model_id])
+        writer.writerow([device_id, pass_fail, date_text, tester, float(body_weight_n), model_id])
 
     return out_path
 

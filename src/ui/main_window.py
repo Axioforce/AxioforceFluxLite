@@ -703,7 +703,36 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         try:
             tester, device_id, model_id_for_results, date_text, pass_cells, total_cells, grade_text = summary
-            pass_fail = "Pass" if (pass_cells / max(1, total_cells)) >= 0.895 else "Fail"
+            # Determine Pass/Fail: require each stage to meet >=90% passing cells, with 8/9 allowed for 9-cell stages
+            plate_passes = True
+            try:
+                if self._live_session is not None:
+                    tolerance_model_id = (self._live_session.model_id or "06").strip()
+                    for st in self._live_session.stages:
+                        is_db = (st.name.lower().find("db") >= 0)
+                        base_tol = (
+                            config.THRESHOLDS_DB_N_BY_MODEL.get(tolerance_model_id, 6.0)
+                            if is_db else config.THRESHOLDS_BW_N_BY_MODEL.get(tolerance_model_id, 10.0)
+                        )
+                        stage_total_cells = int(st.total_cells)
+                        stage_pass_cells = 0
+                        for res in st.results.values():
+                            if res.error_n is None:
+                                continue
+                            if abs(res.error_n) <= base_tol:
+                                stage_pass_cells += 1
+                        # Required passing cells per stage
+                        if stage_total_cells == 9:
+                            required_pass = 8
+                        else:
+                            import math
+                            required_pass = int(math.ceil(0.9 * max(0, stage_total_cells)))
+                        if stage_pass_cells < required_pass:
+                            plate_passes = False
+                            break
+            except Exception:
+                plate_passes = False
+            pass_fail = "Pass" if plate_passes else "Fail"
             dlg = LiveTestSummaryDialog(self)
             dlg.set_values(tester, device_id, model_id_for_results, date_text, pass_fail, pass_cells, total_cells, grade_text)
             if dlg.exec() == LiveTestSummaryDialog.Accepted:
@@ -711,14 +740,26 @@ class MainWindow(QtWidgets.QMainWindow):
                 try:
                     if getattr(config, "CSV_EXPORT_ENABLED", True):
                         from ..csv_export import append_summary_row_csv
-                        csv_path = append_summary_row_csv(device_id, pass_fail, date_text, edited_tester, model_id_for_results)
+                        bw_n = 0.0
+                        try:
+                            if self._live_session is not None:
+                                bw_n = float(self._live_session.body_weight_n)
+                        except Exception:
+                            bw_n = 0.0
+                        csv_path = append_summary_row_csv(device_id, pass_fail, date_text, edited_tester, bw_n, model_id_for_results)
                         try:
                             QtWidgets.QMessageBox.information(self, "Export Complete", f"Summary saved to CSV:\n{csv_path}")
                         except Exception:
                             pass
                     else:
                         from ..ms_graph_excel import append_summary_row
-                        append_summary_row(device_id, pass_fail, date_text, edited_tester, model_id_for_results)
+                        bw_n = 0.0
+                        try:
+                            if self._live_session is not None:
+                                bw_n = float(self._live_session.body_weight_n)
+                        except Exception:
+                            bw_n = 0.0
+                        append_summary_row(device_id, pass_fail, date_text, edited_tester, bw_n, model_id_for_results)
                 except Exception as e:
                     try:
                         QtWidgets.QMessageBox.warning(self, "Export Failed", f"Could not save summary: {e}")
