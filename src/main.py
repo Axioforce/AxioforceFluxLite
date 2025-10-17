@@ -107,6 +107,18 @@ def run_qt() -> int:
     try:
         win.on_sampling_rate_changed(ctrl.request_sampling_rate)
         win.on_emission_rate_changed(ctrl.request_emission_rate)
+        # Interface: UI tick Hz dynamic update
+        def _on_ui_tick(hz: int) -> None:
+            try:
+                setattr(config, 'UI_TICK_HZ', int(hz))
+            except Exception:
+                pass
+            try:
+                if hasattr(ctrl, '_ui_tick_hz'):
+                    ctrl._ui_tick_hz = int(hz)
+            except Exception:
+                pass
+        win.on_ui_tick_hz_changed(_on_ui_tick)
         # Model management callbacks
         win.on_request_model_metadata(ctrl.request_model_metadata)
         win.on_package_model(ctrl.package_model)

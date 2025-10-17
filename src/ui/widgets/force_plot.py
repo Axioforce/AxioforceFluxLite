@@ -62,6 +62,10 @@ class ForcePlotWidget(QtWidgets.QWidget):
         # Last raw/smoothed single values (for overlay)
         self._last_raw_single: Optional[Tuple[float, float, float]] = None
         self._last_smoothed_single: Optional[Tuple[float, float, float]] = None
+        # Autoscale damping (recompute every N frames)
+        self._autoscale_damp_enabled: bool = bool(getattr(config, "PLOT_AUTOSCALE_DAMP_ENABLED", True))
+        self._autoscale_every_n: int = int(max(1, getattr(config, "PLOT_AUTOSCALE_DAMP_EVERY_N", 2)))
+        self._autoscale_counter: int = 0
 
         # Bottom-left overlay for current readings and Smooth toggle
         self._value_container = QtWidgets.QWidget(self)
@@ -100,6 +104,14 @@ class ForcePlotWidget(QtWidgets.QWidget):
     def _recompute_autoscale(self) -> None:
         if not self._auto_scale:
             return
+        # Damping: skip recomputation until counter reaches N
+        try:
+            if self._autoscale_damp_enabled:
+                self._autoscale_counter = (self._autoscale_counter + 1) % max(1, int(self._autoscale_every_n))
+                if self._autoscale_counter != 0:
+                    return
+        except Exception:
+            pass
         try:
             # Determine which data are currently visible (last _max_points)
             def max_abs_from(samples: list[tuple[int, float, float, float]]) -> float:
@@ -186,6 +198,16 @@ class ForcePlotWidget(QtWidgets.QWidget):
         if len(self._samples_landing) > self._max_points:
             self._samples_landing = self._samples_landing[-self._max_points:]
         self._recompute_autoscale()
+        self.update()
+
+    def set_autoscale_damping(self, enabled: bool, every_n: int) -> None:
+        self._autoscale_damp_enabled = bool(enabled)
+        try:
+            self._autoscale_every_n = int(max(1, every_n))
+        except Exception:
+            self._autoscale_every_n = 1
+        # Force immediate recompute next frame
+        self._autoscale_counter = 0
         self.update()
 
     def _on_smooth_toggled(self, checked: bool) -> None:

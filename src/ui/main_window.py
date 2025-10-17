@@ -73,9 +73,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.top_tabs_right.setMovable(True)
         layout.addWidget(self.splitter)
         layout.addWidget(self.controls)
-        self.controls.setMinimumHeight(220)
-        layout.setStretch(0, 3)
-        layout.setStretch(1, 2)
+        # Reserve bottom 2/5 of available space to controls; top gets 3/5.
+        try:
+            layout.setStretch(0, 3)
+            layout.setStretch(1, 2)
+        except Exception:
+            pass
         self.top_tabs_left.setCurrentWidget(self.canvas_left)
         try:
             self.splitter.setStretchFactor(0, 1)
@@ -121,8 +124,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # Live testing wiring (bottom panel)
         try:
             self.controls.live_testing_panel.start_session_requested.connect(self._on_live_start)
-            self.controls.live_testing_panel.end_session_requested.connect(self._on_live_end)
+            # Route End Session through a handler that submits results, then cleans up
+            self.controls.live_testing_panel.end_session_requested.connect(self._on_end_session_clicked)
             self.controls.live_testing_panel.next_stage_requested.connect(self._on_next_stage)
+            self.controls.live_testing_panel.previous_stage_requested.connect(self._on_prev_stage)
             self.controls.live_testing_panel.package_model_requested.connect(self._on_package_model_clicked)
             self.controls.live_testing_panel.activate_model_requested.connect(self._on_activate_model)
             self.controls.live_testing_panel.deactivate_model_requested.connect(self._on_deactivate_model)
@@ -135,6 +140,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stability_window_ms: int = 2000
         self._stability_tolerance_ms: int = 40  # allow slight under-run due to sample discretization
         self._recent_samples: list[Tuple[int, float, float, float]] = []  # (t_ms, x_mm, y_mm, |fz_n|)
+        # Track the active ML model label from the Model pane for display/export
+        self._active_model_label: Optional[str] = None
         # Arming: require >= 50 N sustained for 2.0 s within the same cell (continuous)
         self._arming_window_ms: int = 2000
         self._arming_cell: Optional[Tuple[int, int]] = None
@@ -157,6 +164,10 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.controls.sampling_rate_changed.connect(self._on_sampling_rate_changed)
             self.controls.emission_rate_changed.connect(self._on_emission_rate_changed)
+            # Interface controls wiring
+            self.controls.ui_tick_hz_changed.connect(self._on_ui_tick_hz_changed)
+            self.controls.autoscale_damp_toggled.connect(self._on_autoscale_damp_toggled)
+            self.controls.autoscale_damp_n_changed.connect(self._on_autoscale_damp_n_changed)
         except Exception:
             pass
 
@@ -165,6 +176,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self._on_package_model_cb: Optional[Callable[[dict], None]] = None
         self._on_activate_model_cb: Optional[Callable[[str, str], None]] = None
         self._on_deactivate_model_cb: Optional[Callable[[str, str], None]] = None
+
+    # --- Helpers ---------------------------------------------------------------
+    def _is_model_entry_active(self, entry: object) -> bool:
+        try:
+            e = entry or {}
+            # Accept multiple key styles
+            raw = (
+                e.get("active")
+                or e.get("model_active")
+                or e.get("modelActive")
+                or e.get("isActive")
+            )
+            # Normalize booleans/ints/strings
+            if isinstance(raw, bool):
+                return raw
+            if isinstance(raw, (int, float)):
+                return bool(int(raw))
+            if isinstance(raw, str):
+                s = raw.strip().lower()
+                if s in ("true", "yes", "on", "1"): return True
+                if s in ("false", "no", "off", "0", "none", "null", ""): return False
+                # Non-empty unexpected string – be conservative
+                return False
+            return False
+        except Exception:
+            return False
 
     def _log(self, msg: str) -> None:
         try:
@@ -178,6 +215,37 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def set_connection_text(self, txt: str) -> None:
         self.status_label.setText(txt)
+
+    def _on_ui_tick_hz_changed(self, hz: int) -> None:
+        if hasattr(self, '_on_ui_tick_cb') and callable(self._on_ui_tick_cb):
+            try:
+                self._on_ui_tick_cb(int(hz))
+            except Exception:
+                pass
+
+    def _on_autoscale_damp_toggled(self, enabled: bool) -> None:
+        try:
+            every = int(self.controls.autoscale_every_spin.value())
+        except Exception:
+            every = 2
+        # Apply immediately and also persist to config so new widgets align
+        try:
+            setattr(config, 'PLOT_AUTOSCALE_DAMP_ENABLED', bool(enabled))
+            setattr(config, 'PLOT_AUTOSCALE_DAMP_EVERY_N', int(every))
+        except Exception:
+            pass
+        self._apply_plot_autoscale_settings(bool(enabled), int(every))
+
+    def _on_autoscale_damp_n_changed(self, every_n: int) -> None:
+        try:
+            enabled = bool(self.controls.chk_autoscale_damp.isChecked())
+        except Exception:
+            enabled = True
+        try:
+            setattr(config, 'PLOT_AUTOSCALE_DAMP_EVERY_N', int(every_n))
+        except Exception:
+            pass
+        self._apply_plot_autoscale_settings(bool(enabled), int(every_n))
 
     def _on_dynamo_config(self, cfg: dict) -> None:
         try:
@@ -233,6 +301,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_emission_rate_changed(self, slot: Callable[[int], None]) -> None:
         self._on_emission_cb = slot
+
+    # Interface callbacks registration (controller can subscribe)
+    def on_ui_tick_hz_changed(self, slot: Callable[[int], None]) -> None:
+        self._on_ui_tick_cb = slot
+
+    # Apply plot autoscale settings to both plots
+    def _apply_plot_autoscale_settings(self, enabled: bool, every_n: int) -> None:
+        try:
+            if hasattr(self, 'sensor_plot_left') and self.sensor_plot_left is not None:
+                self.sensor_plot_left.set_autoscale_damping(bool(enabled), int(every_n))
+            if hasattr(self, 'sensor_plot_right') and self.sensor_plot_right is not None:
+                self.sensor_plot_right.set_autoscale_damping(bool(enabled), int(every_n))
+        except Exception:
+            pass
 
     def on_request_model_metadata(self, slot: Callable[[str], None]) -> None:
         self._request_model_metadata_cb = slot
@@ -361,7 +443,12 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.controls.live_testing_panel.btn_start.setEnabled(False)
             self.controls.live_testing_panel.btn_end.setEnabled(True)
-            self.controls.live_testing_panel.set_next_stage_enabled(False)
+            # Navigation buttons active during a session
+            try:
+                self.controls.live_testing_panel.btn_next.setEnabled(True)
+                self.controls.live_testing_panel.btn_prev.setEnabled(False)
+            except Exception:
+                pass
             self.controls.live_testing_panel.set_next_stage_label("Next Stage")
             self.controls.live_testing_panel.set_metadata(tester, dev_id, model_id, bw_n)
             self.controls.live_testing_panel.set_thresholds(thresholds.dumbbell_tol_n, thresholds.bodyweight_tol_n)
@@ -371,10 +458,14 @@ class MainWindow(QtWidgets.QMainWindow):
             # Request current model metadata for this device and reflect in panel
             try:
                 self.controls.live_testing_panel.set_current_model("Loading…")
+                # Also reflect Loading… in Session Info pane's Model ID until fetched
+                self.controls.live_testing_panel.set_session_model_id("Loading…")
             except Exception:
                 pass
             if self._request_model_metadata_cb and isinstance(dev_id, str) and dev_id.strip():
                 try:
+                    # Reset active model label until metadata arrives
+                    self._active_model_label = None
                     self._request_model_metadata_cb(dev_id)
                 except Exception:
                     pass
@@ -385,90 +476,125 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_next_stage(self) -> None:
         if self._live_session is None:
             return
-        # Only proceed if current stage is fully completed
-        try:
-            stage = self._live_session.stages[self._live_stage_idx]
-            completed = sum(1 for g in stage.results.values() if g.fz_mean_n is not None)
-            if completed < stage.total_cells:
-                return
-        except Exception:
-            return
+        # Free navigation: always advance when possible
         if self._live_stage_idx + 1 < len(self._live_session.stages):
             self._live_stage_idx += 1
-            next_stage = self._live_session.stages[self._live_stage_idx]
-            stage_text = f"Stage {next_stage.index}: {next_stage.name} @ {next_stage.location}"
+            # Apply UI/context for new stage
             try:
-                self.canvas_left.clear_live_colors()
-                self.canvas_right.clear_live_colors()
-                self.controls.live_testing_panel.set_stage_progress(stage_text, 0, next_stage.total_cells)
-                self.controls.live_testing_panel.set_debug_status(f"{stage_text} – Arming…")
-                self.controls.live_testing_panel.set_next_stage_enabled(False)
-                # If this is the last stage (index == len(stages)), set button text to Finish after completion
-                if self._live_stage_idx + 1 >= len(self._live_session.stages):
-                    self.controls.live_testing_panel.set_next_stage_label("Finish")
-                else:
-                    self.controls.live_testing_panel.set_next_stage_label("Next Stage")
-                self._active_cell = None
-                self._recent_samples.clear()
-                self._arming_cell = None
-                self._arming_start_ms = None
+                self._apply_stage_context()
+                # Enable Previous after first stage
+                try:
+                    self.controls.live_testing_panel.btn_prev.setEnabled(True)
+                except Exception:
+                    pass
             except Exception:
                 pass
         else:
-            # Last stage finished — show summary dialog
+            # Last stage finished — submit results then end session
+            self._submit_results_and_end()
+
+    def _on_prev_stage(self) -> None:
+        if self._live_session is None:
+            return
+        if self._live_stage_idx <= 0:
             try:
-                tester = self._live_session.tester_name
-                device_id = self._live_session.device_id
-                model_id = self._live_session.model_id
-                import datetime
-                date_text = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                # Overall pass: at least 90% cells pass vs per-stage threshold; compute grade
-                total_cells = 0
-                pass_cells = 0
-                model_id = (self._live_session.model_id or "06").strip()
-                for st in self._live_session.stages:
-                    is_db = (st.name.lower().find("db") >= 0)
-                    base_tol = (config.THRESHOLDS_DB_N_BY_MODEL.get(model_id, 6.0) if is_db else config.THRESHOLDS_BW_N_BY_MODEL.get(model_id, 10.0))
-                    for res in st.results.values():
-                        if res.error_n is None:
-                            continue
-                        total_cells += 1
-                        if abs(res.error_n) <= base_tol:
-                            pass_cells += 1
-                ratio = (pass_cells / max(1, total_cells))
-                pass_fail = "Pass" if (ratio >= 0.895) else "Fail"  # round up: 89.5% counts as 90%
-                # Letter grade with +/- (standard scale)
-                pct = ratio * 100.0
-                def letter(p: float) -> str:
-                    if p >= 97: return "A+"
-                    if p >= 93: return "A"
-                    if p >= 90: return "A-"
-                    if p >= 87: return "B+"
-                    if p >= 83: return "B"
-                    if p >= 80: return "B-"
-                    if p >= 77: return "C+"
-                    if p >= 73: return "C"
-                    if p >= 70: return "C-"
-                    if p >= 67: return "D+"
-                    if p >= 63: return "D"
-                    if p >= 60: return "D-"
-                    return "F"
-                grade_text = letter(pct)
-                dlg = LiveTestSummaryDialog(self)
-                dlg.set_values(tester, device_id, model_id, date_text, pass_fail, pass_cells, total_cells, grade_text)
-                if dlg.exec() == LiveTestSummaryDialog.Accepted:
-                    edited_tester, _ = dlg.get_values()
-                    try:
-                        from ..ms_graph_excel import append_summary_row
-                        append_summary_row(device_id, pass_fail, date_text, edited_tester, model_id)
-                    except Exception as e:
-                        try:
-                            QtWidgets.QMessageBox.warning(self, "Export Failed", f"Could not append to Excel: {e}")
-                        except Exception:
-                            pass
+                self.controls.live_testing_panel.btn_prev.setEnabled(False)
             except Exception:
                 pass
-            self._on_live_end()
+            return
+        try:
+            self._live_stage_idx -= 1
+            # Reset active/arming state only (do not touch tare state)
+            self._active_cell = None
+            self._recent_samples.clear()
+            self._arming_cell = None
+            self._arming_start_ms = None
+            self._apply_stage_context()
+            # Disable Previous if at first stage now
+            try:
+                self.controls.live_testing_panel.btn_prev.setEnabled(self._live_stage_idx > 0)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _apply_stage_context(self) -> None:
+        # Update labels, repaint grid colors for current stage, and update Next button/label
+        if self._live_session is None:
+            return
+        try:
+            stage = self._live_session.stages[self._live_stage_idx]
+        except Exception:
+            return
+        # Clear and repaint results for this stage
+        try:
+            self.canvas_left.clear_live_colors()
+            self.canvas_right.clear_live_colors()
+        except Exception:
+            pass
+        try:
+            # Repaint completed cells
+            from PySide6.QtGui import QColor
+            model_id = (self._live_session.model_id or "06").strip()
+            is_db = (stage.name.lower().find("db") >= 0)
+            base_tol = (
+                self._safe_getattr(config, "THRESHOLDS_DB_N_BY_MODEL", {}).get(model_id, 6.0)
+                if is_db else self._safe_getattr(config, "THRESHOLDS_BW_N_BY_MODEL", {}).get(model_id, 10.0)
+            )
+            mult = getattr(config, "COLOR_BIN_MULTIPLIERS", {
+                "green": 1.0,
+                "light_green": 1.25,
+                "yellow": 1.5,
+                "orange": 2.0,
+                "red": 1e9,
+            })
+            for (r, c), cell in (stage.results or {}).items():
+                try:
+                    if cell is None or cell.fz_mean_n is None:
+                        continue
+                    err = cell.error_n
+                    if err is None:
+                        err = abs(float(cell.fz_mean_n) - float(stage.target_n))
+                    if err <= base_tol * mult.get("green", 1.0):
+                        color = QColor(0, 200, 0, 120)
+                    elif err <= base_tol * mult.get("light_green", 1.25):
+                        color = QColor(80, 220, 80, 120)
+                    elif err <= base_tol * mult.get("yellow", 1.5):
+                        color = QColor(220, 200, 0, 120)
+                    elif err <= base_tol * mult.get("orange", 2.0):
+                        color = QColor(230, 140, 0, 120)
+                    else:
+                        color = QColor(220, 0, 0, 120)
+                    self.canvas_left.set_live_cell_color(int(r), int(c), color)
+                    self.canvas_right.set_live_cell_color(int(r), int(c), color)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        # Update progress/labels
+        try:
+            completed = sum(1 for g in stage.results.values() if g.fz_mean_n is not None)
+            total = int(stage.total_cells)
+            stage_text = f"Stage {stage.index}: {stage.name} @ {stage.location}"
+            self.controls.live_testing_panel.set_stage_progress(stage_text, completed, total)
+            # Keep Next enabled for free navigation
+            try:
+                self.controls.live_testing_panel.btn_next.setEnabled(True)
+            except Exception:
+                pass
+            # Set label to Finish when last stage is next
+            if self._live_stage_idx + 1 >= len(self._live_session.stages):
+                self.controls.live_testing_panel.set_next_stage_label("Finish")
+            else:
+                self.controls.live_testing_panel.set_next_stage_label("Next Stage")
+        except Exception:
+            pass
+
+    def _safe_getattr(self, obj: object, name: str, default: object) -> object:
+        try:
+            return getattr(obj, name, default)  # type: ignore[no-any-return]
+        except Exception:
+            return default
 
     def _on_live_end(self) -> None:
         self._log("end_session: cleaning up")
@@ -491,7 +617,11 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.controls.live_testing_panel.btn_start.setEnabled(True)
             self.controls.live_testing_panel.btn_end.setEnabled(False)
-            self.controls.live_testing_panel.set_next_stage_enabled(False)
+            try:
+                self.controls.live_testing_panel.btn_next.setEnabled(False)
+                self.controls.live_testing_panel.btn_prev.setEnabled(False)
+            except Exception:
+                pass
             self.controls.live_testing_panel.set_next_stage_label("Next Stage")
             self.controls.live_testing_panel.set_stage_progress("—", 0, 0)
             self.controls.live_testing_panel.set_telemetry(None, None, None, "—")
@@ -499,6 +629,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.canvas_right.hide_live_grid()
             try:
                 self.controls.live_testing_panel.set_current_model("—")
+                self.controls.live_testing_panel.set_session_model_id("—")
+                self._active_model_label = None
             except Exception:
                 pass
         except Exception:
@@ -514,6 +646,94 @@ class MainWindow(QtWidgets.QMainWindow):
                     self._request_model_metadata_cb(dev_id)
         except Exception:
             pass
+
+    def _compute_summary(self) -> Optional[tuple[str, str, str, str, int, int, str]]:
+        # Returns (tester, device_id, model_id_for_results, date_text, pass_cells, total_cells, grade_text)
+        if self._live_session is None:
+            return None
+        try:
+            tester = self._live_session.tester_name
+            device_id = self._live_session.device_id
+            # Prefer active model label from Model pane if available; fall back to session model_id
+            model_id_for_results = (self._active_model_label or self._live_session.model_id or "06").strip()
+            import datetime
+            date_text = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            total_cells = 0
+            pass_cells = 0
+            # Threshold computation still uses device type/session model for correct per-model tolerances
+            tolerance_model_id = (self._live_session.model_id or "06").strip()
+            for st in self._live_session.stages:
+                is_db = (st.name.lower().find("db") >= 0)
+                base_tol = (
+                    config.THRESHOLDS_DB_N_BY_MODEL.get(tolerance_model_id, 6.0)
+                    if is_db else config.THRESHOLDS_BW_N_BY_MODEL.get(tolerance_model_id, 10.0)
+                )
+                for res in st.results.values():
+                    if res.error_n is None:
+                        continue
+                    total_cells += 1
+                    if abs(res.error_n) <= base_tol:
+                        pass_cells += 1
+            ratio = (pass_cells / max(1, total_cells))
+            pass_fail = "Pass" if (ratio >= 0.895) else "Fail"
+            pct = ratio * 100.0
+            def letter(p: float) -> str:
+                if p >= 97: return "A+"
+                if p >= 93: return "A"
+                if p >= 90: return "A-"
+                if p >= 87: return "B+"
+                if p >= 83: return "B"
+                if p >= 80: return "B-"
+                if p >= 77: return "C+"
+                if p >= 73: return "C"
+                if p >= 70: return "C-"
+                if p >= 67: return "D+"
+                if p >= 63: return "D"
+                if p >= 60: return "D-"
+                return "F"
+            grade_text = letter(pct)
+            return (tester, device_id, model_id_for_results, date_text, pass_cells, total_cells, grade_text)
+        except Exception:
+            return None
+
+    def _submit_results_and_end(self) -> None:
+        summary = self._compute_summary()
+        if summary is None:
+            self._on_live_end()
+            return
+        try:
+            tester, device_id, model_id_for_results, date_text, pass_cells, total_cells, grade_text = summary
+            pass_fail = "Pass" if (pass_cells / max(1, total_cells)) >= 0.895 else "Fail"
+            dlg = LiveTestSummaryDialog(self)
+            dlg.set_values(tester, device_id, model_id_for_results, date_text, pass_fail, pass_cells, total_cells, grade_text)
+            if dlg.exec() == LiveTestSummaryDialog.Accepted:
+                edited_tester, _ = dlg.get_values()
+                try:
+                    if getattr(config, "CSV_EXPORT_ENABLED", True):
+                        from ..csv_export import append_summary_row_csv
+                        csv_path = append_summary_row_csv(device_id, pass_fail, date_text, edited_tester, model_id_for_results)
+                        try:
+                            QtWidgets.QMessageBox.information(self, "Export Complete", f"Summary saved to CSV:\n{csv_path}")
+                        except Exception:
+                            pass
+                    else:
+                        from ..ms_graph_excel import append_summary_row
+                        append_summary_row(device_id, pass_fail, date_text, edited_tester, model_id_for_results)
+                except Exception as e:
+                    try:
+                        QtWidgets.QMessageBox.warning(self, "Export Failed", f"Could not save summary: {e}")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        self._on_live_end()
+
+    def _on_end_session_clicked(self) -> None:
+        # Submit whatever progress exists, using the active model id display
+        if self._live_session is None:
+            self._on_live_end()
+            return
+        self._submit_results_and_end()
 
     # Model management UI handlers
     def _on_package_model_clicked(self) -> None:
@@ -532,26 +752,63 @@ class MainWindow(QtWidgets.QMainWindow):
                     pass
 
     def _on_model_metadata(self, data: object) -> None:
-        # Expect list of model metadata dicts; display a concise current model id if present
+        # Expect list of model metadata dicts; populate list and show active model, else "No Model"
         try:
             models = list(data or [])
-            model_text = "—"
-            if models:
-                # Prefer entry with location 'local' or 'both'; else first
-                preferred = None
-                for m in models:
-                    loc = str((m or {}).get("location", "")).strip().lower()
-                    if loc in ("local", "both"):
-                        preferred = m
-                        break
-                chosen = preferred or models[0]
-                model_text = str((chosen or {}).get("modelId") or "—")
-            self.controls.live_testing_panel.set_current_model(model_text)
         except Exception:
-            try:
-                self.controls.live_testing_panel.set_current_model("—")
-            except Exception:
-                pass
+            models = []
+        # Log summary with selected device context
+        try:
+            dev = (self.state.selected_device_id or "").strip()
+            parts: list[str] = []
+            for m in models:
+                try:
+                    mid = str((m or {}).get("modelId") or (m or {}).get("model_id") or "?")
+                    loc = str((m or {}).get("location") or "").strip() or "-"
+                    act = bool((m or {}).get("active")) or bool((m or {}).get("model_active"))
+                    parts.append(f"{mid}({'on' if act else 'off'},{loc})")
+                except Exception:
+                    continue
+            summary = ", ".join(parts)
+            self._log(f"model_metadata: dev={dev} count={len(models)} entries=[{summary}]")
+        except Exception:
+            pass
+        # Populate list
+        try:
+            if hasattr(self.controls, "live_testing_panel"):
+                self.controls.live_testing_panel.set_model_list(models)
+        except Exception:
+            pass
+        # Determine current model: any entry with active flag true
+        current_text = "No Model"
+        try:
+            active_entry = None
+            for m in models:
+                try:
+                    is_active = self._is_model_entry_active(m)
+                    if is_active:
+                        active_entry = m
+                        break
+                except Exception:
+                    continue
+            if active_entry is not None:
+                mid = (active_entry or {}).get("modelId") or (active_entry or {}).get("model_id") or "No Model"
+                current_text = str(mid)
+        except Exception:
+            pass
+        try:
+            dev = (self.state.selected_device_id or "").strip()
+            self._log(f"model_metadata: dev={dev} chosen='{current_text}'")
+        except Exception:
+            pass
+        try:
+            self.controls.live_testing_panel.set_current_model(current_text)
+            # Keep Session Info pane's Model ID in sync with the active model label
+            self.controls.live_testing_panel.set_session_model_id(current_text)
+            # Remember for summary/export
+            self._active_model_label = (current_text or "").strip() or None
+        except Exception:
+            pass
 
     def _on_model_package_status(self, status: object) -> None:
         # Show a minimal status dialog
@@ -564,16 +821,25 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
 
     def _on_model_activation_status(self, status: object) -> None:
-        # After activation/deactivation, refresh current model
+        # After activation/deactivation, refresh current model (twice with a short delay)
+        try:
+            s = status or {}
+            st = str(s.get("status") or "").strip() if isinstance(s, dict) else str(s)
+            msg = str(s.get("message") or "") if isinstance(s, dict) else ""
+            self._log(f"model_activation_status: status={st} msg='{msg}'")
+        except Exception:
+            pass
         try:
             dev_id = (self.state.selected_device_id or "").strip()
             if dev_id and self._request_model_metadata_cb:
                 self._request_model_metadata_cb(dev_id)
+                # Backend may commit asynchronously; refresh again shortly
+                try:
+                    QtCore.QTimer.singleShot(350, lambda: self._request_model_metadata_cb(dev_id))
+                except Exception:
+                    pass
             # Update status label from status and re-enable controls
             try:
-                s = status or {}
-                st = str(s.get("status") or "").strip() if isinstance(s, dict) else str(s)
-                msg = str(s.get("message") or "") if isinstance(s, dict) else ""
                 text = f"{st.capitalize()}" + (f": {msg}" if msg else "")
                 self.controls.live_testing_panel.set_model_status(text)
             except Exception:
@@ -713,7 +979,9 @@ class MainWindow(QtWidgets.QMainWindow):
         cols = self._live_session.grid_cols
 
         # Map COP (x_mm, y_mm) to grid cell using canonical device space (no rotation).
-        # Config note: Width corresponds to world Y (right on screen), Height to world X (up on screen)
+        # Note:
+        # - For 06 and 08: width along world Y (columns), height along world X (rows)
+        # - For 07: width along world X (columns), height along world Y (rows)
         def to_cell_mm(x_mm_val: float, y_mm_val: float) -> Optional[Tuple[int, int]]:
             # IMPORTANT: Do not rotate here; cell assignment is in canonical device space
             rx, ry = x_mm_val, y_mm_val
@@ -727,22 +995,38 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 w_mm = config.TYPE08_W_MM
                 h_mm = config.TYPE08_H_MM
-            half_w = w_mm / 2.0  # along world Y (left/right)
-            half_h = h_mm / 2.0  # along world X (up/down)
-            # If outside footprint, return None
-            if abs(ry) > half_w or abs(rx) > half_h:
-                return None
-            # Column: left (-half_w) -> 0, right (+half_w) -> cols-1
-            col_f = (ry + half_w) / w_mm * cols
-            col_i = int(col_f)
-            if col_i < 0:
-                col_i = 0
-            elif col_i >= cols:
-                col_i = cols - 1
-            # Row: top (+half_h) -> 0, bottom (-half_h) -> rows-1
-            t = (half_h - rx) / h_mm  # 0 at top, 1 at bottom
-            row_f = t * rows
-            row_i = int(row_f)
+            half_w = w_mm / 2.0
+            half_h = h_mm / 2.0
+            if dev_type == "07":
+                # 07: width along X, height along Y
+                if abs(rx) > half_w or abs(ry) > half_h:
+                    return None
+                # Columns from X: left (-half_w)->0, right (+half_w)->cols-1
+                col_f = (rx + half_w) / w_mm * cols
+                col_i = int(col_f)
+                if col_i < 0:
+                    col_i = 0
+                elif col_i >= cols:
+                    col_i = cols - 1
+                # Rows from Y: top (+half_h)->0, bottom (-half_h)->rows-1
+                t = (half_h - ry) / h_mm
+                row_f = t * rows
+                row_i = int(row_f)
+            else:
+                # 06, 08: width along Y, height along X
+                if abs(ry) > half_w or abs(rx) > half_h:
+                    return None
+                # Columns from Y
+                col_f = (ry + half_w) / w_mm * cols
+                col_i = int(col_f)
+                if col_i < 0:
+                    col_i = 0
+                elif col_i >= cols:
+                    col_i = cols - 1
+                # Rows from X (top=+half_h)
+                t = (half_h - rx) / h_mm
+                row_f = t * rows
+                row_i = int(row_f)
             if row_i < 0:
                 row_i = 0
             elif row_i >= rows:
@@ -761,12 +1045,18 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             w_mm = config.TYPE08_W_MM
             h_mm = config.TYPE08_H_MM
-        # Debug: show canonical fractions (no rotation) so they reflect assignment space
+        # Debug: show canonical fractions (no rotation) matching assignment space
         rx_dbg, ry_dbg = x_mm, y_mm
         half_w = w_mm / 2.0
         half_h = h_mm / 2.0
-        col_frac = (ry_dbg + half_w) / w_mm
-        row_frac_top = (half_h - rx_dbg) / h_mm
+        if dev_type == "07":
+            # 07: columns from X, rows from Y
+            col_frac = (rx_dbg + half_w) / w_mm
+            row_frac_top = (half_h - ry_dbg) / h_mm
+        else:
+            # 06, 08: columns from Y, rows from X
+            col_frac = (ry_dbg + half_w) / w_mm
+            row_frac_top = (half_h - rx_dbg) / h_mm
 
         cell = to_cell_mm(x_mm, y_mm)
         if cell is None:
@@ -901,8 +1191,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.controls.live_testing_panel.set_stage_progress(stage_text, completed, total)
                         # Enable Next Stage button when all cells are done
                         try:
-                            if completed >= total:
-                                self.controls.live_testing_panel.set_next_stage_enabled(True)
+                            self.controls.live_testing_panel.btn_next.setEnabled(True)
                         except Exception:
                             pass
 
@@ -916,11 +1205,10 @@ class MainWindow(QtWidgets.QMainWindow):
                         # If stage completed, enable manual advance (do NOT auto-advance)
                         if completed >= total:
                             try:
-                                self.controls.live_testing_panel.set_next_stage_enabled(True)
+                                self.controls.live_testing_panel.btn_next.setEnabled(True)
                                 # Change button label to Finish on the last stage
                                 if self._live_stage_idx + 1 >= len(self._live_session.stages):
                                     self.controls.live_testing_panel.set_next_stage_label("Finish")
-                                self.controls.live_testing_panel.set_debug_status("Stage complete. Press Next Stage to continue…")
                             except Exception:
                                 pass
                 except Exception:

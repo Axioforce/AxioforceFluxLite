@@ -23,6 +23,11 @@ class Controller:
         self._active_devices: dict[str, float] = {}  # device_id -> last_seen_timestamp
         self._state_lock = threading.Lock()
         self._overrun_count = 0
+        # Dynamic UI tick rate (Hz)
+        try:
+            self._ui_tick_hz: int = int(getattr(config, "UI_TICK_HZ", 60))
+        except Exception:
+            self._ui_tick_hz = 60
         self._pending_force_vector: Optional[tuple[str, int, float, float, float]] = None  # (device_id, t_ms, fx, fy, fz)
         self._pending_moment_vectors: dict[str, tuple[int, float, float, float]] = {}
         self._pending_mound_force_vectors: dict[str, tuple[int, float, float, float]] = {}
@@ -164,18 +169,11 @@ class Controller:
                         self._single_state.update(x_mm, y_mm, fz_total, time_ms, alpha=config.SMOOTH_ALPHA)
                         self._single_state.is_visible = abs(fz_total) >= config.FZ_THRESHOLD_N
                         snap = self._single_state.snapshot()
-                        # Emit to UI thread via bridge
-                        if hasattr(self.view, "bridge"):
-                            try:
-                                self.view.bridge.single_snapshot_ready.emit(snap)
-                            except Exception:
-                                pass
-                        # Emit force vector immediately (no throttling)
-                        try:
-                            if hasattr(self.view, "bridge"):
-                                self.view.bridge.force_vector_ready.emit(str(dev_id), int(time_ms), float(fx_total), float(fy_total), float(fz_total))
-                        except Exception:
-                            pass
+                        # Cache latest single snapshot for UI thread to pull at tick
+                        self._single_snapshot_latest = snap
+                        # Cache latest force vector; emit on tick
+                        with self._state_lock:
+                            self._pending_force_vector = (str(dev_id or ""), int(time_ms), float(fx_total), float(fy_total), float(fz_total))
                 else:
                     # Ignore non-matching messages; keep last snapshot to avoid flicker
                     pass
@@ -220,13 +218,7 @@ class Controller:
                 if pos is not None:
                     with self._state_lock:
                         self._pending_mound_force_vectors[pos] = (time_ms, fx_total, fy_total, fz_total)
-                    # Emit per-zone forces immediately
-                    try:
-                        if hasattr(self.view, "bridge"):
-                            snapshot = dict(self._pending_mound_force_vectors)
-                            self.view.bridge.mound_force_vectors_ready.emit(snapshot)
-                    except Exception:
-                        pass
+                    # Defer per-zone forces to throttled tick loop
         except Exception:
             pass
 
@@ -241,30 +233,11 @@ class Controller:
             if did:
                 with self._state_lock:
                     self._pending_moment_vectors[did] = (t_ms, mx, my, mz)
-                # Emit moments immediately
-                try:
-                    if hasattr(self.view, "bridge"):
-                        snapshot = dict(self._pending_moment_vectors)
-                        self.view.bridge.moments_ready.emit(snapshot)
-                except Exception:
-                    pass
+                # Defer moments to throttled tick loop
         except Exception:
             pass
 
-        # Emit snapshots and active devices immediately on each frame
-        try:
-            with self._state_lock:
-                snaps = self.model.get_snapshot()
-            if hasattr(self.view, "bridge"):
-                self.view.bridge.snapshots_ready.emit(snaps, None)
-        except Exception:
-            pass
-        try:
-            if hasattr(self.view, "bridge"):
-                active_ids = self._get_active_device_ids()
-                self.view.bridge.active_devices_ready.emit(active_ids)
-        except Exception:
-            pass
+        # Defer snapshots/active devices to throttled tick loop
 
     def connect(self, host: str, port: int) -> None:
         self.disconnect()
@@ -328,13 +301,21 @@ class Controller:
         
         # NOW start the client after listeners are registered
         self.client.start()
+        # Start throttled UI tick loop
+        try:
+            if self._thread is None or not self._thread.is_alive():
+                self._stop_flag.clear()
+                self._thread = threading.Thread(target=self._tick_loop, daemon=True)
+                self._thread.start()
+        except Exception:
+            pass
         if hasattr(self.view, "bridge"):
             try:
                 self.view.bridge.connection_text_ready.emit(f"Connecting to {host}:{port}...")
             except Exception:
                 pass
 
-        # No internal throttling loop needed; UI updates emit on each frame
+        # No-op
 
     def disconnect(self) -> None:
         if self.client is not None:
@@ -443,6 +424,25 @@ class Controller:
 
     def _on_model_metadata(self, data: dict | list) -> None:
         try:
+            # Log concise backend payload summary for debugging
+            try:
+                entries = list(data or []) if isinstance(data, list) else [data]
+            except Exception:
+                entries = []
+            parts = []
+            for m in entries:
+                try:
+                    mid = str((m or {}).get("modelId") or (m or {}).get("model_id") or "?")
+                    dev = str((m or {}).get("deviceId") or (m or {}).get("device_id") or "?")
+                    loc = str((m or {}).get("location") or "").strip() or "-"
+                    act = bool((m or {}).get("active")) or bool((m or {}).get("model_active"))
+                    parts.append(f"{dev}:{mid}({'on' if act else 'off'},{loc})")
+                except Exception:
+                    continue
+            try:
+                print(f"[ctrl] model_metadata received: {len(entries)} entries [{', '.join(parts)}]")
+            except Exception:
+                pass
             if hasattr(self.view, "bridge"):
                 self.view.bridge.model_metadata_ready.emit(data)
         except Exception:
@@ -723,19 +723,27 @@ class Controller:
         return active
 
     def _tick_loop(self) -> None:
-        # Use configurable UI tick rate for throttled UI emissions
-        hz = max(10, int(getattr(config, "UI_TICK_HZ", 60)))
-        target_dt = 1.0 / float(hz)
+        # Throttled UI emissions; hz can change dynamically
         while not self._stop_flag.is_set():
+            # Read current target Hz each frame to apply changes immediately
+            try:
+                hz = max(10, min(240, int(self._ui_tick_hz)))
+            except Exception:
+                hz = max(10, int(getattr(config, "UI_TICK_HZ", 60)))
+            target_dt = 1.0 / float(hz)
             t0 = time.time()
             with self._state_lock:
                 snaps = self.model.get_snapshot()
+                # Reflect single snapshot if available
+                single_snap = self._single_snapshot_latest
                 data_hz_text = f"{self.model.ema_hz:.1f}" if getattr(self.model, "ema_hz", 0.0) else "--"
                 ui_hz_text = f"{hz}"
                 hz_text = f"Data Hz: {data_hz_text} | UI Hz: {ui_hz_text}"
             if hasattr(self.view, "bridge"):
                 try:
                     self.view.bridge.snapshots_ready.emit(snaps, hz_text)
+                    if single_snap is not None:
+                        self.view.bridge.single_snapshot_ready.emit(single_snap)
                 except Exception:
                     pass
             # Update connection status
@@ -754,7 +762,7 @@ class Controller:
                 except Exception:
                     pass
 
-            # Throttled force vector emission for Sensor View at ~60 Hz
+            # Throttled force vector emission for Sensor View at ~UI tick
             try:
                 fv: Optional[tuple[str, int, float, float, float]]
                 with self._state_lock:
