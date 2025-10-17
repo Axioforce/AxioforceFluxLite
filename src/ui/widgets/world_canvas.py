@@ -598,7 +598,7 @@ class WorldCanvas(QtWidgets.QWidget):
         return (rows - 1 - c), r
 
     def _map_cell_for_device(self, row: int, col: int) -> Tuple[int, int]:
-        """Apply device-specific overlay mapping. For 06, mirror across the
+        """Apply device-specific overlay mapping. For 06 and 08, mirror across the
         bottom-left to top-right axis (anti-diagonal). Others: identity.
         """
         try:
@@ -607,19 +607,16 @@ class WorldCanvas(QtWidgets.QWidget):
         except Exception:
             return int(row), int(col)
         dev_type = (self.state.selected_device_type or "").strip()
-        if dev_type == "06":
+        if dev_type in ("06", "08"):
             # Anti-diagonal mirror: (r, c) -> (rows-1-c, cols-1-r)
             return (rows - 1 - int(col), cols - 1 - int(row))
-        if dev_type == "07":
-            # Horizontal mirror across vertical midline: (r, c) -> (r, cols-1-c)
-            return (int(row), cols - 1 - int(col))
         return int(row), int(col)
 
     def set_live_active_cell(self, row: Optional[int], col: Optional[int]) -> None:
         if row is None or col is None:
             self._grid_overlay.set_active_cell(None, None)
             return
-        # Apply device-specific mirror first (e.g., 06), then rotation mapping
+        # Apply device-specific mirror first (e.g., 06/08), then rotation mapping
         dr, dc = self._map_cell_for_device(int(row), int(col))
         rr, cc = self._map_cell_for_rotation(dr, dc)
         self._grid_overlay.set_active_cell(rr, cc)

@@ -22,6 +22,9 @@ class ControlPanel(QtWidgets.QWidget):
     refresh_devices_requested = QtCore.Signal()
     sampling_rate_changed = QtCore.Signal(int)
     emission_rate_changed = QtCore.Signal(int)
+    ui_tick_hz_changed = QtCore.Signal(int)
+    autoscale_damp_toggled = QtCore.Signal(bool)
+    autoscale_damp_n_changed = QtCore.Signal(int)
     live_testing_tab_selected = QtCore.Signal()
 
     def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
@@ -192,6 +195,44 @@ class ControlPanel(QtWidgets.QWidget):
         iface_layout.addWidget(cop_scale_row, iface_row, 0, 1, 3)
         iface_row += 1
 
+        # UI throttling controls
+        ui_row = QtWidgets.QWidget()
+        ui_layout = QtWidgets.QHBoxLayout(ui_row)
+        ui_layout.setContentsMargins(0, 0, 0, 0)
+        ui_layout.setSpacing(10)
+        ui_layout.addWidget(QtWidgets.QLabel("UI Tick Hz:"))
+        self.ui_tick_spin = QtWidgets.QSpinBox()
+        self.ui_tick_spin.setRange(10, 240)
+        self.ui_tick_spin.setValue(int(getattr(config, "UI_TICK_HZ", 60)))
+        _fixh(self.ui_tick_spin)
+        self.ui_tick_spin.setMaximumWidth(80)
+        ui_layout.addWidget(self.ui_tick_spin)
+        self.apply_ui_tick_btn = QtWidgets.QPushButton("Apply")
+        _fix_btn(self.apply_ui_tick_btn, 70)
+        ui_layout.addWidget(self.apply_ui_tick_btn)
+        ui_layout.addStretch(1)
+        iface_layout.addWidget(ui_row, iface_row, 0, 1, 3)
+        iface_row += 1
+
+        # Autoscale damping controls
+        damp_row = QtWidgets.QWidget()
+        damp_layout = QtWidgets.QHBoxLayout(damp_row)
+        damp_layout.setContentsMargins(0, 0, 0, 0)
+        damp_layout.setSpacing(10)
+        self.chk_autoscale_damp = QtWidgets.QCheckBox("Autoscale Damping")
+        self.chk_autoscale_damp.setChecked(bool(getattr(config, "PLOT_AUTOSCALE_DAMP_ENABLED", True)))
+        damp_layout.addWidget(self.chk_autoscale_damp)
+        damp_layout.addWidget(QtWidgets.QLabel("Every N frames:"))
+        self.autoscale_every_spin = QtWidgets.QSpinBox()
+        self.autoscale_every_spin.setRange(1, 20)
+        self.autoscale_every_spin.setValue(int(getattr(config, "PLOT_AUTOSCALE_DAMP_EVERY_N", 2)))
+        _fixh(self.autoscale_every_spin)
+        self.autoscale_every_spin.setMaximumWidth(80)
+        damp_layout.addWidget(self.autoscale_every_spin)
+        damp_layout.addStretch(1)
+        iface_layout.addWidget(damp_row, iface_row, 0, 1, 3)
+        iface_row += 1
+
         checkboxes_row = QtWidgets.QWidget()
         checkboxes_layout = QtWidgets.QHBoxLayout(checkboxes_row)
         checkboxes_layout.setContentsMargins(0, 0, 0, 0)
@@ -265,6 +306,12 @@ class ControlPanel(QtWidgets.QWidget):
         # Live Testing tab
         self.live_testing_panel = LiveTestingPanel(self.state)
         self._live_tab_index = tabs.addTab(self.live_testing_panel, "Live Testing")
+        # Ensure tabs consume available vertical space (MainWindow controls overall 3:2 split)
+        try:
+            tabs.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+            self.live_testing_panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        except Exception:
+            pass
 
         tare_row = QtWidgets.QHBoxLayout()
         tare_row.addStretch(1)
@@ -308,6 +355,11 @@ class ControlPanel(QtWidgets.QWidget):
         self.apply_emission_btn.clicked.connect(_emit_emission)
         self.sampling_spin.lineEdit().returnPressed.connect(_emit_sampling)
         self.emission_spin.lineEdit().returnPressed.connect(_emit_emission)
+        # Interface: ui tick & autoscale damping
+        self.apply_ui_tick_btn.clicked.connect(lambda: self.ui_tick_hz_changed.emit(int(self.ui_tick_spin.value())))
+        self.ui_tick_spin.lineEdit().returnPressed.connect(lambda: self.ui_tick_hz_changed.emit(int(self.ui_tick_spin.value())))
+        self.chk_autoscale_damp.toggled.connect(lambda v: self.autoscale_damp_toggled.emit(bool(v)))
+        self.autoscale_every_spin.valueChanged.connect(lambda v: self.autoscale_damp_n_changed.emit(int(v)))
 
     def set_backend_rates(self, sampling_hz: int, emission_hz: int) -> None:
         try:

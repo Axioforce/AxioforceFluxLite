@@ -7,7 +7,9 @@ from typing import Tuple
 SOCKET_HOST: str = os.environ.get("SOCKET_HOST", "http://localhost")
 SOCKET_PORT: int = int(os.environ.get("SOCKET_PORT", "3000"))
 HTTP_PORT: int = int(os.environ.get("HTTP_PORT", "3001"))
-UI_TICK_HZ: int = int(os.environ.get("UI_TICK_HZ", "100"))
+UI_TICK_HZ: int = int(os.environ.get("UI_TICK_HZ", "60"))
+PLOT_AUTOSCALE_DAMP_ENABLED: bool = bool(int(os.environ.get("PLOT_AUTOSCALE_DAMP_ENABLED", "1")))
+PLOT_AUTOSCALE_DAMP_EVERY_N: int = int(os.environ.get("PLOT_AUTOSCALE_DAMP_EVERY_N", "2"))
 
 
 # Microsoft Graph / OneDrive Excel export configuration
@@ -25,6 +27,10 @@ GRAPH_DRIVE_ID: str = os.environ.get("GRAPH_DRIVE_ID", "")
 GRAPH_WORKBOOK_PATH: str = os.environ.get("GRAPH_WORKBOOK_PATH", "")
 GRAPH_USER_UPN: str = os.environ.get("GRAPH_USER_UPN", "")
 GRAPH_WORKSHEET_NAME: str = os.environ.get("GRAPH_WORKSHEET_NAME", "Summary")
+
+# CSV export (fallback when Graph not available)
+CSV_EXPORT_ENABLED: bool = (os.environ.get("CSV_EXPORT_ENABLED", "1").strip() != "0")
+CSV_EXPORT_PATH: str = os.environ.get("CSV_EXPORT_PATH", os.path.join(os.path.expanduser("~"), "Documents", "Axioforce", "LiveTesting_Summary.csv"))
 
 
 # Drawing and scaling defaults

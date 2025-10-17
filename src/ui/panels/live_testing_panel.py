@@ -11,6 +11,7 @@ class LiveTestingPanel(QtWidgets.QWidget):
     start_session_requested = QtCore.Signal()
     end_session_requested = QtCore.Signal()
     next_stage_requested = QtCore.Signal()
+    previous_stage_requested = QtCore.Signal()
     package_model_requested = QtCore.Signal()
     activate_model_requested = QtCore.Signal(str)
     deactivate_model_requested = QtCore.Signal(str)
@@ -47,7 +48,12 @@ class LiveTestingPanel(QtWidgets.QWidget):
 
         controls_layout.addWidget(self.btn_start)
         controls_layout.addWidget(self.btn_end)
-        controls_layout.addWidget(self.btn_next)
+        nav_row = QtWidgets.QHBoxLayout()
+        self.btn_prev = QtWidgets.QPushButton("Previous Stage")
+        nav_row.addWidget(self.btn_prev)
+        nav_row.addWidget(self.btn_next)
+        nav_row.addStretch(1)
+        controls_layout.addLayout(nav_row)
         controls_layout.addLayout(stage_row)
         controls_layout.addLayout(progress_row)
 
@@ -88,12 +94,29 @@ class LiveTestingPanel(QtWidgets.QWidget):
         # Model (replaces Debug Status)
         model_box = QtWidgets.QGroupBox("Model")
         model_layout = QtWidgets.QVBoxLayout(model_box)
-        model_row = QtWidgets.QHBoxLayout()
-        model_row.addWidget(QtWidgets.QLabel("Current Model:"))
+
+        # Current model row
+        current_row = QtWidgets.QHBoxLayout()
+        current_row.addWidget(QtWidgets.QLabel("Current Model:"))
         self.lbl_current_model = QtWidgets.QLabel("—")
-        model_row.addWidget(self.lbl_current_model)
-        model_row.addStretch(1)
-        model_layout.addLayout(model_row)
+        current_row.addWidget(self.lbl_current_model)
+        current_row.addStretch(1)
+        model_layout.addLayout(current_row)
+
+        # Available models list
+        model_layout.addWidget(QtWidgets.QLabel("Available Models:"))
+        self.model_list = QtWidgets.QListWidget()
+        self.model_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        try:
+            self.model_list.setUniformItemSizes(True)
+        except Exception:
+            pass
+        try:
+            self.model_list.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+        except Exception:
+            pass
+        model_layout.addWidget(self.model_list, 1)
+
         # Status row
         status_row = QtWidgets.QHBoxLayout()
         self.lbl_model_status = QtWidgets.QLabel("")
@@ -101,7 +124,8 @@ class LiveTestingPanel(QtWidgets.QWidget):
         status_row.addWidget(self.lbl_model_status)
         status_row.addStretch(1)
         model_layout.addLayout(status_row)
-        # Activate/Deactivate controls (use current model label)
+
+        # Activate/Deactivate controls
         act_row = QtWidgets.QHBoxLayout()
         self.btn_activate = QtWidgets.QPushButton("Activate")
         self.btn_deactivate = QtWidgets.QPushButton("Deactivate")
@@ -109,14 +133,18 @@ class LiveTestingPanel(QtWidgets.QWidget):
         act_row.addWidget(self.btn_deactivate)
         act_row.addStretch(1)
         model_layout.addLayout(act_row)
-        # Package button below controls
+
+        # Package button
         self.btn_package_model = QtWidgets.QPushButton("Package Model…")
         model_layout.addWidget(self.btn_package_model)
         model_layout.addStretch(1)
 
-        # Evenly distribute boxes side-by-side
+        # Evenly distribute boxes side-by-side within a constrained-height tab page
         for w in (controls_box, guide_box, meta_box, tele_box, model_box):
-            w.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+            try:
+                w.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+            except Exception:
+                pass
             root.addWidget(w, 1)
 
         self.btn_start.clicked.connect(lambda: self.start_session_requested.emit())
@@ -125,6 +153,7 @@ class LiveTestingPanel(QtWidgets.QWidget):
         self.btn_package_model.clicked.connect(lambda: self.package_model_requested.emit())
         self.btn_activate.clicked.connect(self._emit_activate)
         self.btn_deactivate.clicked.connect(self._emit_deactivate)
+        self.btn_prev.clicked.connect(lambda: self.previous_stage_requested.emit())
 
     # Overlay is now managed by the canvas; this panel keeps controls only
     def configure_grid(self, rows: int, cols: int) -> None:
@@ -145,6 +174,10 @@ class LiveTestingPanel(QtWidgets.QWidget):
             self.lbl_bw.setText(f"{body_weight_n:.1f}")
         except Exception:
             self.lbl_bw.setText("—")
+
+    def set_session_model_id(self, model_id: str | None) -> None:
+        # Keep Session Info pane's Model ID in sync with active model selection
+        self.lbl_model.setText((model_id or "").strip() or "—")
 
     def set_thresholds(self, db_tol_n: float, bw_tol_n: float) -> None:
         try:
@@ -203,6 +236,47 @@ class LiveTestingPanel(QtWidgets.QWidget):
         # Clear transient status when model label changes externally
         self.set_model_status("")
 
+    def set_model_list(self, models: list[dict]) -> None:
+        # Populate the list with modelId and optional location annotation
+        try:
+            self.model_list.clear()
+            for m in (models or []):
+                try:
+                    mid = str((m or {}).get("modelId") or (m or {}).get("model_id") or "").strip()
+                except Exception:
+                    mid = ""
+                if not mid:
+                    continue
+                loc = str((m or {}).get("location") or "").strip()
+                # Format package date if present (ms or s) as MM.DD.YYYY
+                date_text = ""
+                try:
+                    import datetime
+                    raw_ts = (m or {}).get("packageDate") or (m or {}).get("package_date")
+                    if raw_ts is not None:
+                        ts = float(raw_ts)
+                        if ts > 1e12:
+                            ts = ts / 1000.0
+                        dt = datetime.datetime.fromtimestamp(ts)
+                        date_text = dt.strftime("%m.%d.%Y")
+                except Exception:
+                    date_text = ""
+                # Build concise label: id (location) • date
+                if loc and date_text:
+                    text = f"{mid}  ({loc}) • {date_text}"
+                elif loc:
+                    text = f"{mid}  ({loc})"
+                elif date_text:
+                    text = f"{mid}  • {date_text}"
+                else:
+                    text = mid
+                item = QtWidgets.QListWidgetItem(text)
+                # Store raw id for reliable retrieval
+                item.setData(QtCore.Qt.UserRole, mid)
+                self.model_list.addItem(item)
+        except Exception:
+            pass
+
     def set_model_status(self, text: Optional[str]) -> None:
         self.lbl_model_status.setText((text or "").strip())
 
@@ -218,12 +292,19 @@ class LiveTestingPanel(QtWidgets.QWidget):
         # Debug status deprecated in favor of Model panel; keep as no-op to avoid breaking call sites
         return
 
+    # No stage selector UI anymore; navigation is via Previous/Next buttons
+
     def _emit_activate(self) -> None:
-        mid = (self.lbl_current_model.text() or "").strip()
-        if mid and mid != "—" and not mid.lower().startswith("loading"):
+        # Use selected model from list; fall back to current label
+        try:
+            item = self.model_list.currentItem()
+            mid = (item.data(QtCore.Qt.UserRole) if item is not None else None) or (self.lbl_current_model.text() or "").strip()
+        except Exception:
+            mid = (self.lbl_current_model.text() or "").strip()
+        if mid and mid != "—" and not str(mid).lower().startswith("loading"):
             self.set_model_status("Activating…")
             self.set_model_controls_enabled(False)
-            self.activate_model_requested.emit(mid)
+            self.activate_model_requested.emit(str(mid))
 
     def _emit_deactivate(self) -> None:
         mid = (self.lbl_current_model.text() or "").strip()
