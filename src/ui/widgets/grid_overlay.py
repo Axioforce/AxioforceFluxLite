@@ -36,6 +36,15 @@ class GridOverlay(QtWidgets.QWidget):
         self.cell_colors[(int(row), int(col))] = color
         self.update()
 
+    def clear_cell_color(self, row: int, col: int) -> None:
+        try:
+            key = (int(row), int(col))
+            if key in self.cell_colors:
+                self.cell_colors.pop(key, None)
+                self.update()
+        except Exception:
+            pass
+
     def clear_colors(self) -> None:
         self.cell_colors.clear()
         self.update()

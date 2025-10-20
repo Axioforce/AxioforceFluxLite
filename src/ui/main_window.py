@@ -79,6 +79,13 @@ class MainWindow(QtWidgets.QMainWindow):
             layout.setStretch(1, 2)
         except Exception:
             pass
+
+        # Wire live grid cell click for retest/view
+        try:
+            self.canvas_left.live_cell_clicked.connect(self._on_live_cell_clicked)
+            self.canvas_right.live_cell_clicked.connect(self._on_live_cell_clicked)
+        except Exception:
+            pass
         self.top_tabs_left.setCurrentWidget(self.canvas_left)
         try:
             self.splitter.setStretchFactor(0, 1)
@@ -595,6 +602,53 @@ class MainWindow(QtWidgets.QMainWindow):
             return getattr(obj, name, default)  # type: ignore[no-any-return]
         except Exception:
             return default
+
+    def _on_live_cell_clicked(self, row: int, col: int) -> None:
+        # Only in an active session
+        if self._live_session is None:
+            return
+        try:
+            stage = self._live_session.stages[self._live_stage_idx]
+        except Exception:
+            return
+        cell = stage.results.get((int(row), int(col)))
+        # If cell has not been tested, nothing to show
+        if cell is None or cell.fz_mean_n is None:
+            return
+        # Show a simple dialog with reading and a Retest option
+        try:
+            msg = QtWidgets.QMessageBox(self)
+            msg.setWindowTitle("Cell Result")
+            details = f"Row {row}, Col {col}\nMean Fz: {cell.fz_mean_n:.1f} N\nTarget: {stage.target_n:.1f} N\nError: {(cell.error_n or 0.0):.1f} N"
+            msg.setText(details)
+            retest_btn = msg.addButton("Retest this cell", QtWidgets.QMessageBox.AcceptRole)
+            close_btn = msg.addButton("Close", QtWidgets.QMessageBox.RejectRole)
+            msg.exec()
+            if msg.clickedButton() == retest_btn:
+                # Clear the stored value and color; allow re-test
+                try:
+                    cell.fz_mean_n = None
+                    cell.cop_x_mm = None
+                    cell.cop_y_mm = None
+                    cell.error_n = None
+                    cell.color_bin = None
+                except Exception:
+                    pass
+                try:
+                    self.canvas_left.clear_live_cell_color(row, col)
+                    self.canvas_right.clear_live_cell_color(row, col)
+                except Exception:
+                    pass
+                # Update progress label
+                try:
+                    completed = sum(1 for g in stage.results.values() if g.fz_mean_n is not None)
+                    total = int(stage.total_cells)
+                    stage_text = f"Stage {stage.index}: {stage.name} @ {stage.location}"
+                    self.controls.live_testing_panel.set_stage_progress(stage_text, completed, total)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _on_live_end(self) -> None:
         self._log("end_session: cleaning up")
@@ -1133,7 +1187,15 @@ class MainWindow(QtWidgets.QMainWindow):
                         )
                     except Exception:
                         pass
-                    if arm_span >= self._arming_window_ms:
+                    # Skip arming if this cell already has a recorded result for this stage
+                    try:
+                        already_done = False
+                        if stage is not None:
+                            existing = stage.results.get((row, col))
+                            already_done = bool(existing and existing.fz_mean_n is not None)
+                    except Exception:
+                        already_done = False
+                    if not already_done and arm_span >= self._arming_window_ms:
                         self._active_cell = (row, col)
                         self._arming_cell = None
                         self._arming_start_ms = None

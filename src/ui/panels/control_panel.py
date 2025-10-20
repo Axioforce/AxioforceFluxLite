@@ -284,12 +284,7 @@ class ControlPanel(QtWidgets.QWidget):
         cfg_layout.addWidget(filter_row, cfg_row, 0, 1, 3)
         cfg_row += 1
 
-        refresh_row = QtWidgets.QHBoxLayout()
-        self.btn_refresh_devices = QtWidgets.QPushButton("Refresh Devices")
-        refresh_row.addStretch(1)
-        refresh_row.addWidget(self.btn_refresh_devices)
-        cfg_layout.addLayout(refresh_row, cfg_row, 0, 1, 3)
-        cfg_row += 1
+        # (moved) Refresh Devices button now lives next to the always-visible Tare button
 
         self.device_list = QtWidgets.QListWidget()
         self.device_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
@@ -315,8 +310,12 @@ class ControlPanel(QtWidgets.QWidget):
 
         tare_row = QtWidgets.QHBoxLayout()
         tare_row.addStretch(1)
+        # Create Refresh Devices button here so it's always visible next to Tare
+        self.btn_refresh_devices = QtWidgets.QPushButton("Refresh Devices")
+        _fix_btn(self.btn_refresh_devices, 140)
         self.btn_tare = QtWidgets.QPushButton("Tare")
         _fix_btn(self.btn_tare, 110)
+        tare_row.addWidget(self.btn_refresh_devices)
         tare_row.addWidget(self.btn_tare)
         root.addLayout(tare_row)
 
