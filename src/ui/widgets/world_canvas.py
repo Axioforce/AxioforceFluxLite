@@ -19,6 +19,7 @@ class WorldCanvas(QtWidgets.QWidget):
     mound_device_selected = QtCore.Signal(str, str)  # position_id, device_id
     mapping_ready = QtCore.Signal(object)  # Dict[str, str]
     rotation_changed = QtCore.Signal(int)  # quadrants 0..3
+    live_cell_clicked = QtCore.Signal(int, int)  # row, col in canonical grid space
 
     def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -106,13 +107,31 @@ class WorldCanvas(QtWidgets.QWidget):
         self._update_rotate_button()
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
-        if self.state.display_mode != "mound" or event.button() != QtCore.Qt.LeftButton:
+        if event.button() != QtCore.Qt.LeftButton:
             return super().mousePressEvent(event)
-        pos = event.pos()
-        clicked_position = self._get_clicked_position(pos)
-        if clicked_position:
-            self._show_device_picker(clicked_position)
-        super().mousePressEvent(event)
+        # Handle clicks differently based on mode
+        if self.state.display_mode == "mound":
+            pos = event.pos()
+            clicked_position = self._get_clicked_position(pos)
+            if clicked_position:
+                self._show_device_picker(clicked_position)
+            return super().mousePressEvent(event)
+        # In single-device view, interpret click within overlay grid as a cell click
+        if self.state.display_mode == "single" and self._grid_overlay.isVisible():
+            pos = event.pos()
+            if self._grid_overlay.geometry().contains(pos):
+                local = pos - self._grid_overlay.geometry().topLeft()
+                # Map local point to overlay cell (rendered coords), then invert to canonical grid cell
+                try:
+                    rr, cc = self._cell_from_overlay_point(local.x(), local.y())
+                    if rr is not None and cc is not None:
+                        # Invert rotation/device mapping used when drawing overlay
+                        cr, cc2 = self._invert_device_and_rotation(rr, cc)
+                        self.live_cell_clicked.emit(int(cr), int(cc2))
+                        return
+                except Exception:
+                    pass
+        return super().mousePressEvent(event)
 
     def _compute_world_bounds(self) -> None:
         if self.state.display_mode == "single":
@@ -626,6 +645,11 @@ class WorldCanvas(QtWidgets.QWidget):
         rr, cc = self._map_cell_for_rotation(dr, dc)
         self._grid_overlay.set_cell_color(rr, cc, color)
 
+    def clear_live_cell_color(self, row: int, col: int) -> None:
+        dr, dc = self._map_cell_for_device(int(row), int(col))
+        rr, cc = self._map_cell_for_rotation(dr, dc)
+        self._grid_overlay.clear_cell_color(rr, cc)
+
     def set_live_status(self, text: Optional[str]) -> None:
         self._grid_overlay.set_status(text)
 
@@ -638,6 +662,61 @@ class WorldCanvas(QtWidgets.QWidget):
 
     def rotate_coords_for_mapping(self, x_mm: float, y_mm: float) -> Tuple[float, float]:
         return self._apply_rotation_single(x_mm, y_mm)
+
+    def _cell_from_overlay_point(self, x_px: int, y_px: int) -> Tuple[Optional[int], Optional[int]]:
+        try:
+            rect = self._grid_overlay._plate_rect_px  # noqa: SLF001
+            rows = int(self._grid_overlay.rows)
+            cols = int(self._grid_overlay.cols)
+            if rect is None or rows <= 0 or cols <= 0:
+                return None, None
+            if x_px < rect.left() or x_px > rect.right() or y_px < rect.top() or y_px > rect.bottom():
+                return None, None
+            cell_w = rect.width() / max(1, cols)
+            cell_h = rect.height() / max(1, rows)
+            c = int((x_px - rect.left()) / cell_w)
+            r = int((y_px - rect.top()) / cell_h)
+            c = max(0, min(cols - 1, c))
+            r = max(0, min(rows - 1, r))
+            return r, c
+        except Exception:
+            return None, None
+
+    def _invert_rotation_mapping(self, row: int, col: int) -> Tuple[int, int]:
+        try:
+            rows = int(self._grid_overlay.rows)
+            cols = int(self._grid_overlay.cols)
+        except Exception:
+            return int(row), int(col)
+        k = int(self._rotation_quadrants) % 4
+        r = int(row)
+        c = int(col)
+        # Inverse of _map_cell_for_rotation
+        if k == 0:
+            return r, c
+        if k == 1:  # previous mapping: (r, c) -> (c, cols-1-r)
+            return (cols - 1 - c), r
+        if k == 2:  # previous: (r, c) -> (rows-1-r, cols-1-c)
+            return (rows - 1 - r), (cols - 1 - c)
+        # k == 3: previous: (r, c) -> (rows-1-c, r)
+        return c, (rows - 1 - r)
+
+    def _invert_device_mapping(self, row: int, col: int) -> Tuple[int, int]:
+        try:
+            rows = int(self._grid_overlay.rows)
+            cols = int(self._grid_overlay.cols)
+        except Exception:
+            return int(row), int(col)
+        dev_type = (self.state.selected_device_type or "").strip()
+        if dev_type in ("06", "08"):
+            # Inverse of anti-diagonal mirror is itself
+            return (rows - 1 - int(col)), (cols - 1 - int(row))
+        return int(row), int(col)
+
+    def _invert_device_and_rotation(self, row: int, col: int) -> Tuple[int, int]:
+        # Inverse order of application: rotation first (inverse), then device (inverse)
+        rr, cc = self._invert_rotation_mapping(int(row), int(col))
+        return self._invert_device_mapping(rr, cc)
 
     def _draw_plate_names(self, p: QtGui.QPainter) -> None:
         return
