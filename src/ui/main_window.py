@@ -678,7 +678,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
             self.controls.live_testing_panel.set_next_stage_label("Next Stage")
             self.controls.live_testing_panel.set_stage_progress("—", 0, 0)
-            self.controls.live_testing_panel.set_telemetry(None, None, None, "—")
             self.canvas_left.hide_live_grid()
             self.canvas_right.hide_live_grid()
             try:
@@ -800,7 +799,47 @@ class MainWindow(QtWidgets.QMainWindow):
                                 bw_n = float(self._live_session.body_weight_n)
                         except Exception:
                             bw_n = 0.0
-                        csv_path = append_summary_row_csv(device_id, pass_fail, date_text, edited_tester, bw_n, model_id_for_results)
+                        # Prompt for output directory (remember last choice)
+                        chosen_dir = ""
+                        try:
+                            options = QtWidgets.QFileDialog.Options()
+                            options |= QtWidgets.QFileDialog.ShowDirsOnly
+                            start_dir = self._get_last_csv_dir() or QtCore.QStandardPaths.writableLocation(QtCore.QStandardPaths.DocumentsLocation)
+                            chosen_dir = QtWidgets.QFileDialog.getExistingDirectory(self, "Choose CSV Save Folder", start_dir, options)
+                        except Exception:
+                            chosen_dir = ""
+                        # Build output path: <dir>/<shortPlateId>_<YYYYMMDD_HHMMSS>.csv (fallback to LiveTesting_Summary.csv)
+                        out_path_override = None
+                        if chosen_dir:
+                            try:
+                                self._set_last_csv_dir(chosen_dir)
+                            except Exception:
+                                pass
+                            import os
+                            def _short_id(full_id: str, dev_type_hint: str | None = None) -> str:
+                                full = (full_id or "").strip()
+                                if not full:
+                                    return "plate"
+                                try:
+                                    if "-" in full:
+                                        prefix, tail = full.split("-", 1)
+                                    else:
+                                        prefix, tail = full[:2], full
+                                    suffix = tail[-2:] if len(tail) >= 2 else tail
+                                    type_prefix = dev_type_hint if dev_type_hint in ("06", "07", "08") else (prefix if prefix in ("06", "07", "08") else "")
+                                    base = f"{type_prefix}-{suffix}" if type_prefix else suffix
+                                    return base
+                                except Exception:
+                                    return full[-2:] if len(full) >= 2 else full
+                            try:
+                                import datetime
+                                ts = datetime.datetime.now().strftime("%m-%d-%Y_%H%M")
+                            except Exception:
+                                ts = "timestamp"
+                            short_id = _short_id(device_id, (self._live_session.model_id if self._live_session else None))
+                            fname = f"{short_id}_{ts}.csv"
+                            out_path_override = os.path.join(chosen_dir, fname)
+                        csv_path = append_summary_row_csv(device_id, pass_fail, date_text, edited_tester, bw_n, model_id_for_results, path=out_path_override)
                         try:
                             QtWidgets.QMessageBox.information(self, "Export Complete", f"Summary saved to CSV:\n{csv_path}")
                         except Exception:
@@ -828,7 +867,50 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._live_session is None:
             self._on_live_end()
             return
+        # Confirm with the user before ending
+        try:
+            box = QtWidgets.QMessageBox(self)
+            box.setWindowTitle("End Session")
+            box.setText("Are you sure you want to end the session?")
+            confirm_btn = box.addButton("Confirm", QtWidgets.QMessageBox.AcceptRole)
+            back_btn = box.addButton("Go Back", QtWidgets.QMessageBox.RejectRole)
+            box.setIcon(QtWidgets.QMessageBox.Question)
+            box.exec()
+            if box.clickedButton() is not confirm_btn:
+                # User chose Go Back; do nothing, preserving live state
+                return
+        except Exception:
+            # On any dialog error, fall back to not ending automatically
+            return
         self._submit_results_and_end()
+
+    # --- CSV export directory handling ---
+    def _get_last_csv_dir(self) -> str:
+        try:
+            settings = QtCore.QSettings("Axioforce", "AxioforceFluxLite")
+            val = str(settings.value("csvExport/lastDir", "") or "").strip()
+            if val:
+                return val
+        except Exception:
+            pass
+        # Fallback to directory from config default path
+        try:
+            import os
+            path = getattr(config, "CSV_EXPORT_PATH", "") or ""
+            if path:
+                d = os.path.dirname(path)
+                if d:
+                    return d
+        except Exception:
+            pass
+        return ""
+
+    def _set_last_csv_dir(self, directory: str) -> None:
+        try:
+            settings = QtCore.QSettings("Axioforce", "AxioforceFluxLite")
+            settings.setValue("csvExport/lastDir", str(directory or ""))
+        except Exception:
+            pass
 
     # Model management UI handlers
     def _on_package_model_clicked(self) -> None:
@@ -1039,12 +1121,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._tare_active:
             # Keep telemetry updating but skip further processing
             return
-        # Update telemetry
-        stability = "tracking" if is_visible else "no load"
-        try:
-            self.controls.live_testing_panel.set_telemetry(fz_n, x_mm, y_mm, stability)
-        except Exception:
-            pass
+        # (Live telemetry UI removed)
 
         # Pause arming/stabilization while tare dialog active (telemetry was updated above)
         if self._tare_active:
