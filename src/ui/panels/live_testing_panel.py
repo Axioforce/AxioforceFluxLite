@@ -81,15 +81,7 @@ class LiveTestingPanel(QtWidgets.QWidget):
         meta_layout.addRow("45 lb DB (±N):", self.lbl_thresh_db)
         meta_layout.addRow("Body Weight (±N):", self.lbl_thresh_bw)
 
-        # Live Telemetry
-        tele_box = QtWidgets.QGroupBox("Live Telemetry")
-        tele_layout = QtWidgets.QFormLayout(tele_box)
-        self.lbl_fz = QtWidgets.QLabel("—")
-        self.lbl_cop = QtWidgets.QLabel("—")
-        self.lbl_stability = QtWidgets.QLabel("—")
-        tele_layout.addRow("Fz (N):", self.lbl_fz)
-        tele_layout.addRow("COP (mm):", self.lbl_cop)
-        tele_layout.addRow("Stability:", self.lbl_stability)
+        # Live Telemetry removed
 
         # Model (replaces Debug Status)
         model_box = QtWidgets.QGroupBox("Model")
@@ -140,7 +132,7 @@ class LiveTestingPanel(QtWidgets.QWidget):
         model_layout.addStretch(1)
 
         # Evenly distribute boxes side-by-side within a constrained-height tab page
-        for w in (controls_box, guide_box, meta_box, tele_box, model_box):
+        for w in (controls_box, guide_box, meta_box, model_box):
             try:
                 w.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
             except Exception:
@@ -218,18 +210,8 @@ class LiveTestingPanel(QtWidgets.QWidget):
             pass
 
     def set_telemetry(self, fz_n: Optional[float], cop_x_mm: Optional[float], cop_y_mm: Optional[float], stability_text: str) -> None:
-        try:
-            self.lbl_fz.setText(f"{fz_n:.1f}" if fz_n is not None else "—")
-        except Exception:
-            self.lbl_fz.setText("—")
-        try:
-            if cop_x_mm is None or cop_y_mm is None:
-                self.lbl_cop.setText("—")
-            else:
-                self.lbl_cop.setText(f"{cop_x_mm:.1f}, {cop_y_mm:.1f}")
-        except Exception:
-            self.lbl_cop.setText("—")
-        self.lbl_stability.setText(stability_text or "—")
+        # Live telemetry UI removed; keep as no-op for compatibility
+        return
 
     def set_current_model(self, model_text: Optional[str]) -> None:
         self.lbl_current_model.setText((model_text or "").strip() or "—")
