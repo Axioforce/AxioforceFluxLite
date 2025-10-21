@@ -89,10 +89,13 @@ THRESHOLDS_DB_N_BY_MODEL = {
     "08": 8.0,
 }
 
-THRESHOLDS_BW_N_BY_MODEL = {
-    "06": 8.0,
-    "07": 11.0,
-    "08": 15.0,
+# Bodyweight tolerance percentages (fraction of body weight), per model id
+# These supersede fixed-N BW tolerances for pass/fail; UI still displays N (rounded)
+# 06 → 1.0%, 07 → 1.5%, 08 → 2.0%
+THRESHOLDS_BW_PCT_BY_MODEL = {
+    "06": 0.010,
+    "07": 0.015,
+    "08": 0.020,
 }
 
 # Cell color bins as multipliers of the passing threshold T

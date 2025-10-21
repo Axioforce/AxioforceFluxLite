@@ -402,9 +402,16 @@ class MainWindow(QtWidgets.QMainWindow):
         rows, cols = config.GRID_DIMS_BY_MODEL.get(model_id, (3, 3))
 
         # Load per-model thresholds from config
+        # DB uses fixed N; BW uses percentage of body weight, displayed/used as rounded N
+        db_tol_n = float(config.THRESHOLDS_DB_N_BY_MODEL.get(model_id, 6.0))
+        try:
+            bw_pct = float(getattr(config, "THRESHOLDS_BW_PCT_BY_MODEL", {}).get(model_id, 0.01))
+        except Exception:
+            bw_pct = 0.01
+        bw_tol_n = round(float(bw_n) * float(bw_pct), 1)
         thresholds = Thresholds(
-            dumbbell_tol_n=float(config.THRESHOLDS_DB_N_BY_MODEL.get(model_id, 6.0)),
-            bodyweight_tol_n=float(config.THRESHOLDS_BW_N_BY_MODEL.get(model_id, 10.0)),
+            dumbbell_tol_n=db_tol_n,
+            bodyweight_tol_n=bw_tol_n,
         )
         session = LiveTestSession(
             tester_name=tester,
@@ -544,9 +551,10 @@ class MainWindow(QtWidgets.QMainWindow):
             from PySide6.QtGui import QColor
             model_id = (self._live_session.model_id or "06").strip()
             is_db = (stage.name.lower().find("db") >= 0)
+            # Use per-session thresholds (DB fixed-N, BW derived from BW% of body weight)
             base_tol = (
-                self._safe_getattr(config, "THRESHOLDS_DB_N_BY_MODEL", {}).get(model_id, 6.0)
-                if is_db else self._safe_getattr(config, "THRESHOLDS_BW_N_BY_MODEL", {}).get(model_id, 10.0)
+                float(self._live_session.thresholds.dumbbell_tol_n)
+                if is_db else float(self._live_session.thresholds.bodyweight_tol_n)
             )
             mult = getattr(config, "COLOR_BIN_MULTIPLIERS", {
                 "green": 1.0,
@@ -718,8 +726,8 @@ class MainWindow(QtWidgets.QMainWindow):
             for st in self._live_session.stages:
                 is_db = (st.name.lower().find("db") >= 0)
                 base_tol = (
-                    config.THRESHOLDS_DB_N_BY_MODEL.get(tolerance_model_id, 6.0)
-                    if is_db else config.THRESHOLDS_BW_N_BY_MODEL.get(tolerance_model_id, 10.0)
+                    float(self._live_session.thresholds.dumbbell_tol_n)
+                    if is_db else float(self._live_session.thresholds.bodyweight_tol_n)
                 )
                 for res in st.results.values():
                     if res.error_n is None:
@@ -764,8 +772,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     for st in self._live_session.stages:
                         is_db = (st.name.lower().find("db") >= 0)
                         base_tol = (
-                            config.THRESHOLDS_DB_N_BY_MODEL.get(tolerance_model_id, 6.0)
-                            if is_db else config.THRESHOLDS_BW_N_BY_MODEL.get(tolerance_model_id, 10.0)
+                            float(self._live_session.thresholds.dumbbell_tol_n)
+                            if is_db else float(self._live_session.thresholds.bodyweight_tol_n)
                         )
                         stage_total_cells = int(st.total_cells)
                         stage_pass_cells = 0
@@ -1342,7 +1350,10 @@ class MainWindow(QtWidgets.QMainWindow):
                         model_id = (self._live_session.model_id or "06").strip()
                         # Determine per-stage threshold (DB vs BW)
                         is_db = (stage.name.lower().find("db") >= 0)
-                        base_tol = (config.THRESHOLDS_DB_N_BY_MODEL.get(model_id, 6.0) if is_db else config.THRESHOLDS_BW_N_BY_MODEL.get(model_id, 10.0))
+                        base_tol = (
+                            float(self._live_session.thresholds.dumbbell_tol_n)
+                            if is_db else float(self._live_session.thresholds.bodyweight_tol_n)
+                        )
                         g = config.COLOR_BIN_MULTIPLIERS
                         if err <= base_tol * g["green"]:
                             color = QColor(0, 200, 0, 120)
