@@ -792,54 +792,30 @@ class MainWindow(QtWidgets.QMainWindow):
                 edited_tester, _ = dlg.get_values()
                 try:
                     if getattr(config, "CSV_EXPORT_ENABLED", True):
-                        from ..csv_export import append_summary_row_csv
+                        from ..csv_export import append_summary_row
                         bw_n = 0.0
                         try:
                             if self._live_session is not None:
                                 bw_n = float(self._live_session.body_weight_n)
                         except Exception:
                             bw_n = 0.0
-                        # Prompt for output directory (remember last choice)
-                        chosen_dir = ""
+                        # Prompt for output file (CSV/XLSX) and remember last choice
+                        selected_path = ""
                         try:
                             options = QtWidgets.QFileDialog.Options()
-                            options |= QtWidgets.QFileDialog.ShowDirsOnly
-                            start_dir = self._get_last_csv_dir() or QtCore.QStandardPaths.writableLocation(QtCore.QStandardPaths.DocumentsLocation)
-                            chosen_dir = QtWidgets.QFileDialog.getExistingDirectory(self, "Choose CSV Save Folder", start_dir, options)
+                            start_path = self._get_last_export_file() or self._get_last_csv_dir() or QtCore.QStandardPaths.writableLocation(QtCore.QStandardPaths.DocumentsLocation)
+                            filters = "CSV Files (*.csv);;Excel Workbook (*.xlsx);;All Files (*)"
+                            selected_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Choose Results File (CSV/XLSX)", start_path, filters, options=options)
                         except Exception:
-                            chosen_dir = ""
-                        # Build output path: <dir>/<shortPlateId>_<YYYYMMDD_HHMMSS>.csv (fallback to LiveTesting_Summary.csv)
-                        out_path_override = None
-                        if chosen_dir:
+                            selected_path = ""
+                        if selected_path:
                             try:
-                                self._set_last_csv_dir(chosen_dir)
+                                self._set_last_export_file(selected_path)
+                                import os as _os
+                                self._set_last_csv_dir(_os.path.dirname(selected_path))
                             except Exception:
                                 pass
-                            import os
-                            def _short_id(full_id: str, dev_type_hint: str | None = None) -> str:
-                                full = (full_id or "").strip()
-                                if not full:
-                                    return "plate"
-                                try:
-                                    if "-" in full:
-                                        prefix, tail = full.split("-", 1)
-                                    else:
-                                        prefix, tail = full[:2], full
-                                    suffix = tail[-2:] if len(tail) >= 2 else tail
-                                    type_prefix = dev_type_hint if dev_type_hint in ("06", "07", "08") else (prefix if prefix in ("06", "07", "08") else "")
-                                    base = f"{type_prefix}-{suffix}" if type_prefix else suffix
-                                    return base
-                                except Exception:
-                                    return full[-2:] if len(full) >= 2 else full
-                            try:
-                                import datetime
-                                ts = datetime.datetime.now().strftime("%m-%d-%Y_%H%M")
-                            except Exception:
-                                ts = "timestamp"
-                            short_id = _short_id(device_id, (self._live_session.model_id if self._live_session else None))
-                            fname = f"{short_id}_{ts}.csv"
-                            out_path_override = os.path.join(chosen_dir, fname)
-                        csv_path = append_summary_row_csv(device_id, pass_fail, date_text, edited_tester, bw_n, model_id_for_results, path=out_path_override)
+                        csv_path = append_summary_row(device_id, pass_fail, date_text, edited_tester, bw_n, model_id_for_results, path=(selected_path or None))
                         try:
                             QtWidgets.QMessageBox.information(self, "Export Complete", f"Summary saved to CSV:\n{csv_path}")
                         except Exception:
@@ -909,6 +885,23 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             settings = QtCore.QSettings("Axioforce", "AxioforceFluxLite")
             settings.setValue("csvExport/lastDir", str(directory or ""))
+        except Exception:
+            pass
+
+    def _get_last_export_file(self) -> str:
+        try:
+            settings = QtCore.QSettings("Axioforce", "AxioforceFluxLite")
+            val = str(settings.value("export/lastFile", "") or "").strip()
+            if val:
+                return val
+        except Exception:
+            pass
+        return ""
+
+    def _set_last_export_file(self, file_path: str) -> None:
+        try:
+            settings = QtCore.QSettings("Axioforce", "AxioforceFluxLite")
+            settings.setValue("export/lastFile", str(file_path or ""))
         except Exception:
             pass
 
