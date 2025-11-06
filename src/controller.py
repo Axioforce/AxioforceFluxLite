@@ -510,7 +510,7 @@ class Controller:
                 dev_type = str(d.get("deviceTypeId") or "").strip()
                 if not axf_id or not dev_type:
                     continue
-                if dev_type not in ("06", "07", "08"):
+                if dev_type not in ("06", "07", "08", "11"):
                     continue
                 devices.append((display_name, axf_id, dev_type))
             except Exception:
@@ -550,7 +550,7 @@ class Controller:
                 # If type absent, try to infer from axfId prefix (e.g., '06.')
                 if not dev_type and axf_id and len(axf_id) >= 2 and axf_id[0:2].isdigit():
                     dev_type = axf_id[0:2]
-                if dev_type and dev_type not in ("06", "07", "08"):
+                if dev_type and dev_type not in ("06", "07", "08", "11"):
                     # keep unknowns out of list for now
                     continue
                 devices.append((display_name, axf_id, dev_type or "06"))

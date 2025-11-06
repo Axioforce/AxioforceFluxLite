@@ -8,6 +8,7 @@ GRID_BY_MODEL: Dict[str, Tuple[int, int]] = {
     "06": (3, 3),   # Lite
     "07": (5, 3),   # Launchpad
     "08": (5, 5),   # XL
+    "11": (5, 3),   # Launchpad (identical to 07)
 }
 
 
@@ -42,7 +43,7 @@ class LiveTestStage:
 class LiveTestSession:
     tester_name: str
     device_id: str
-    model_id: str  # "06", "07", "08"
+    model_id: str  # "06", "07", "08", "11"
     body_weight_n: float
     thresholds: Thresholds
     grid_rows: int
