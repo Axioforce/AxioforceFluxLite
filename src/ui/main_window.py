@@ -30,6 +30,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.canvas_right = WorldCanvas(self.state)
         self.canvas = self.canvas_left
         self.controls = ControlPanel(self.state)
+        # Heatmap storage
+        self._heatmaps = {}
+        self._heatmap_metrics = {}
 
         central = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(central)
@@ -101,6 +104,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.controls.config_changed.connect(self._on_config_changed)
         self.controls.refresh_devices_requested.connect(self._on_refresh_devices)
         self.controls.live_testing_tab_selected.connect(self._on_live_tab_selected)
+        try:
+            self.controls.live_testing_panel.load_45v_requested.connect(self._on_load_45v)
+            self.controls.live_testing_panel.generate_heatmap_requested.connect(self._on_generate_heatmap)
+            self.controls.live_testing_panel.heatmap_selected.connect(self._on_heatmap_selected)
+        except Exception:
+            pass
         self.canvas_left.mound_device_selected.connect(self._on_mound_device_selected)
         self.canvas_right.mound_device_selected.connect(self._on_mound_device_selected)
         # Keep rotations in sync across canvases
@@ -359,6 +368,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sensor_plot_right.set_dual_series_enabled(bool(is_mound))
             # Update live testing start enabled state on any config change
             self._update_live_start_enabled()
+            # Update calibration button state as well
+            self._update_calibration_enabled()
             self._log(f"config_changed: display_mode={self.state.display_mode}, selected_device_id={self.state.selected_device_id}, selected_device_type={self.state.selected_device_type}")
         except Exception:
             pass
@@ -373,6 +384,17 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._log(f"update_live_start_enabled: single_mode={single_mode}, has_device={has_device}, enabled={enabled}")
             except Exception:
                 pass
+
+    def _update_calibration_enabled(self) -> None:
+        try:
+            has_device = bool((self.state.selected_device_id or "").strip())
+            active_model = (getattr(self, "_active_model_label", None) or "").strip()
+            has_active_model = bool(active_model and active_model not in ("—", "No Model", "Loading…"))
+            enabled = bool(has_device and has_active_model)
+            if hasattr(self.controls, "live_testing_panel"):
+                self.controls.live_testing_panel.set_calibration_enabled(enabled)
+        except Exception:
+            pass
 
     # Live Testing session handlers
     def _on_live_start(self) -> None:
@@ -705,6 +727,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 if dev_id and self._request_model_metadata_cb:
                     self.controls.live_testing_panel.set_current_model("Loading…")
                     self._request_model_metadata_cb(dev_id)
+            # Refresh calibration gating on tab select
+            self._update_calibration_enabled()
         except Exception:
             pass
 
@@ -985,6 +1009,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.live_testing_panel.set_session_model_id(current_text)
             # Remember for summary/export
             self._active_model_label = (current_text or "").strip() or None
+            # Update calibration gating based on new model
+            self._update_calibration_enabled()
         except Exception:
             pass
 
@@ -1023,8 +1049,276 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
             self.controls.live_testing_panel.set_model_controls_enabled(True)
+            # Recompute calibration gating
+            self._update_calibration_enabled()
         except Exception:
             pass
+
+    # --- Calibration: Load 45V test CSV ---
+    def _on_load_45v(self) -> None:
+        # Guard: ensure enabled state
+        try:
+            self.controls.live_testing_panel.set_calibration_status("Select folder…")
+        except Exception:
+            pass
+        try:
+            options = QtWidgets.QFileDialog.Options()
+            start_dir = self._get_last_csv_dir() or QtCore.QStandardPaths.writableLocation(QtCore.QStandardPaths.DocumentsLocation)
+            directory = QtWidgets.QFileDialog.getExistingDirectory(self, "Choose Calibration Folder", start_dir, options=options)
+        except Exception:
+            directory = ""
+        if not directory:
+            try:
+                self.controls.live_testing_panel.set_calibration_status("—")
+            except Exception:
+                pass
+            return
+        # Remember directory
+        try:
+            self._set_last_csv_dir(directory)
+        except Exception:
+            pass
+        # Find candidate files with '45V' in name (case-insensitive) and .csv
+        import os
+        candidates: list[str] = []
+        try:
+            for name in os.listdir(directory):
+                try:
+                    low = name.lower()
+                    if ("45v" in low) and low.endswith(".csv"):
+                        candidates.append(os.path.join(directory, name))
+                except Exception:
+                    continue
+        except Exception:
+            candidates = []
+        if not candidates:
+            try:
+                QtWidgets.QMessageBox.information(self, "Calibration", "No 45V CSV files found in the selected folder.")
+                self.controls.live_testing_panel.set_calibration_status("No 45V files found")
+            except Exception:
+                pass
+            return
+        # If multiple, prompt to choose
+        chosen_path = candidates[0]
+        if len(candidates) > 1:
+            try:
+                basenames = [os.path.basename(p) for p in candidates]
+                item, ok = QtWidgets.QInputDialog.getItem(self, "Select 45V File", "Choose file:", basenames, 0, False)
+                if ok and item:
+                    idx = basenames.index(item)
+                    chosen_path = candidates[idx]
+                else:
+                    self.controls.live_testing_panel.set_calibration_status("—")
+                    return
+            except Exception:
+                pass
+        # Update status label and enable generate
+        try:
+            self.controls.live_testing_panel.set_calibration_status(os.path.basename(chosen_path))
+            self.controls.live_testing_panel.set_generate_enabled(True)
+        except Exception:
+            pass
+        # Store for processing
+        try:
+            self._cal_45v_path = chosen_path
+        except Exception:
+            pass
+        # If a backend-processed file already exists in calibration_output, remember it
+        try:
+            import os as _os
+            base = _os.path.splitext(_os.path.basename(chosen_path))[0]
+            out_dir = _os.path.join(_os.path.dirname(chosen_path), "calibration_output")
+            existing = ""
+            if _os.path.isdir(out_dir):
+                for name in _os.listdir(out_dir):
+                    low = name.lower()
+                    if base.lower() in low and ("__processed" in low or "processed" in low) and low.endswith(".csv"):
+                        existing = _os.path.join(out_dir, name)
+                        break
+            self._cal_45v_processed = existing or ""
+            if self._cal_45v_processed:
+                try:
+                    self.controls.live_testing_panel.set_calibration_status(f"Found existing processed file: { _os.path.basename(self._cal_45v_processed) }")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _on_generate_heatmap(self) -> None:
+        # Require a selected 45V file
+        path = getattr(self, "_cal_45v_path", "") or ""
+        if not path:
+            try:
+                QtWidgets.QMessageBox.information(self, "Calibration", "Please load a 45V CSV first.")
+            except Exception:
+                pass
+            return
+        model_id = (getattr(self, "_active_model_label", None) or "").strip() or (self.state.selected_device_type or "06")
+        plate_type = (self.state.selected_device_type or "").strip() or "06"
+        device_id = (self.state.selected_device_id or "").strip()
+        # Import processor with fallback (relative then absolute), log any errors
+        process_45v = None
+        try:
+            from ..calibration.processor import process_45v  # type: ignore
+        except Exception as e1:
+            try:
+                from calibration.processor import process_45v  # type: ignore
+            except Exception as e2:
+                try:
+                    print(f"[calib] import processor failed: rel={e1} abs={e2}")
+                except Exception:
+                    pass
+        try:
+            self.controls.live_testing_panel.set_calibration_status("Processing…")
+        except Exception:
+            pass
+        try:
+            existing_processed = str(getattr(self, "_cal_45v_processed", "") or "").strip() or None
+            result = process_45v(path, model_id, plate_type, device_id, existing_processed) if callable(process_45v) else {"error": "no_processor"}
+        except Exception as e:
+            result = {"error": str(e)}
+        # Handle result
+        if isinstance(result, dict) and not result.get("error"):
+            pts = result.get("points") or []
+            metrics = result.get("metrics") or {}
+            processed_csv = str(result.get("processed_csv") or "").strip()
+            try:
+                print(f"[calib] processed_csv={processed_csv}")
+                print(f"[calib] metrics={metrics}")
+            except Exception:
+                pass
+            # Map to tuples for canvas
+            try:
+                tuples = [(float(p.get("x_mm", 0.0)), float(p.get("y_mm", 0.0)), str(p.get("bin", "green"))) for p in pts]
+            except Exception:
+                tuples = []
+            try:
+                self.canvas_right.set_heatmap_points(tuples)
+                # Switch the right pane to Plate View to show the heatmap
+                try:
+                    self.top_tabs_right.setCurrentWidget(self.canvas_right)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            # Update status with metrics
+            try:
+                cnt = int(metrics.get("count", 0))
+                mean_e = float(metrics.get("mean_err", 0.0))
+                max_e = float(metrics.get("max_err", 0.0))
+                med_e = float(metrics.get("median_err", 0.0))
+                base = processed_csv.split("/")[-1] if "/" in processed_csv else processed_csv.split("\\")[-1]
+                tail = (base if len(base) < 48 else (base[:22] + "…" + base[-22:])) if base else ""
+                suffix = (f" • {tail}" if tail else "")
+                self.controls.live_testing_panel.set_calibration_status(f"Heatmap: {cnt} pts • mean {mean_e:.1f} N • max {max_e:.1f} N{suffix}")
+                # Add to heatmap list with key=processed_csv
+                if processed_csv:
+                    label = base or processed_csv
+                    try:
+                        self._heatmaps
+                    except Exception:
+                        self._heatmaps = {}
+                    try:
+                        self._heatmap_metrics
+                    except Exception:
+                        self._heatmap_metrics = {}
+                    self._heatmaps[processed_csv] = tuples
+                    self._heatmap_metrics[processed_csv] = {
+                        "count": cnt,
+                        "mean_err": mean_e,
+                        "max_err": max_e,
+                        "median_err": med_e,
+                    }
+                    # Rebuild heatmap list including 'All Heatmaps'
+                    try:
+                        self._rebuild_heatmap_list()
+                    except Exception:
+                        pass
+                # Update metrics display for the current selection
+                try:
+                    self.controls.live_testing_panel.set_heatmap_metrics(cnt, mean_e, max_e, med_e)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        else:
+            try:
+                err = (result or {}).get("error") if isinstance(result, dict) else "processing_failed"
+                self.controls.live_testing_panel.set_calibration_status(f"Failed: {err}")
+            except Exception:
+                pass
+
+    def _on_heatmap_selected(self, key: str) -> None:
+        try:
+            tuples = (self._heatmaps or {}).get(str(key))
+        except Exception:
+            tuples = None
+        if tuples:
+            try:
+                self.canvas_right.set_heatmap_points(tuples)
+                self.top_tabs_right.setCurrentWidget(self.canvas_right)
+            except Exception:
+                pass
+        # Update metrics area
+        try:
+            m = (self._heatmap_metrics or {}).get(str(key)) or {}
+            self.controls.live_testing_panel.set_heatmap_metrics(int(m.get("count", 0)), float(m.get("mean_err", 0.0)), float(m.get("max_err", 0.0)), float(m.get("median_err", 0.0)))
+        except Exception:
+            pass
+
+    def _rebuild_heatmap_list(self) -> None:
+        try:
+            items = list((self._heatmaps or {}).keys())
+        except Exception:
+            items = []
+        try:
+            self.controls.live_testing_panel.clear_heatmap_entries()
+        except Exception:
+            pass
+        # Build combined '__ALL__'
+        combined: list[tuple[float, float, str]] = []
+        total_count = 0
+        total_mean_num = 0.0
+        medians: list[float] = []
+        maxes: list[float] = []
+        for k, pts in (self._heatmaps or {}).items():
+            if not isinstance(pts, list):
+                continue
+            combined.extend(pts)
+            m = (self._heatmap_metrics or {}).get(k) or {}
+            c = int(m.get("count", 0))
+            total_count += c
+            total_mean_num += float(m.get("mean_err", 0.0)) * max(0, c)
+            medians.append(float(m.get("median_err", 0.0)))
+            maxes.append(float(m.get("max_err", 0.0)))
+        if combined:
+            # Store combined
+            self._heatmaps["__ALL__"] = combined
+            mean_all = (total_mean_num / max(1, total_count)) if total_count > 0 else 0.0
+            try:
+                medians.sort()
+                median_all = medians[len(medians)//2] if medians else 0.0
+            except Exception:
+                median_all = 0.0
+            max_all = max(maxes) if maxes else 0.0
+            self._heatmap_metrics["__ALL__"] = {
+                "count": total_count,
+                "mean_err": mean_all,
+                "median_err": median_all,
+                "max_err": max_all,
+            }
+            try:
+                self.controls.live_testing_panel.add_heatmap_entry("All Heatmaps", "__ALL__", total_count)
+            except Exception:
+                pass
+        # Add individual entries
+        for k in items:
+            try:
+                base = k.split("/")[-1] if "/" in k else k.split("\\")[-1]
+                c = int((self._heatmap_metrics or {}).get(k, {}).get("count", 0))
+                self.controls.live_testing_panel.add_heatmap_entry(base or k, k, c)
+            except Exception:
+                continue
 
     def _on_activate_model(self, model_id: str) -> None:
         dev_id = (self.state.selected_device_id or "").strip()
@@ -1165,12 +1459,15 @@ class MainWindow(QtWidgets.QMainWindow):
             elif dev_type == "07":
                 w_mm = config.TYPE07_W_MM
                 h_mm = config.TYPE07_H_MM
+            elif dev_type == "11":
+                w_mm = config.TYPE11_W_MM
+                h_mm = config.TYPE11_H_MM
             else:
                 w_mm = config.TYPE08_W_MM
                 h_mm = config.TYPE08_H_MM
             half_w = w_mm / 2.0
             half_h = h_mm / 2.0
-            if dev_type == "07":
+            if dev_type in ("07", "11"):
                 # 07: width along X, height along Y
                 if abs(rx) > half_w or abs(ry) > half_h:
                     return None
@@ -1215,6 +1512,9 @@ class MainWindow(QtWidgets.QMainWindow):
         elif dev_type == "07":
             w_mm = config.TYPE07_W_MM
             h_mm = config.TYPE07_H_MM
+        elif dev_type == "11":
+            w_mm = config.TYPE11_W_MM
+            h_mm = config.TYPE11_H_MM
         else:
             w_mm = config.TYPE08_W_MM
             h_mm = config.TYPE08_H_MM
@@ -1222,7 +1522,7 @@ class MainWindow(QtWidgets.QMainWindow):
         rx_dbg, ry_dbg = x_mm, y_mm
         half_w = w_mm / 2.0
         half_h = h_mm / 2.0
-        if dev_type == "07":
+        if dev_type in ("07", "11"):
             # 07: columns from X, rows from Y
             col_frac = (rx_dbg + half_w) / w_mm
             row_frac_top = (half_h - ry_dbg) / h_mm

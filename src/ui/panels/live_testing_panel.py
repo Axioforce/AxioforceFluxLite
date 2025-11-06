@@ -15,6 +15,9 @@ class LiveTestingPanel(QtWidgets.QWidget):
     package_model_requested = QtCore.Signal()
     activate_model_requested = QtCore.Signal(str)
     deactivate_model_requested = QtCore.Signal(str)
+    load_45v_requested = QtCore.Signal()
+    generate_heatmap_requested = QtCore.Signal()
+    heatmap_selected = QtCore.Signal(str)
 
     def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -131,8 +134,58 @@ class LiveTestingPanel(QtWidgets.QWidget):
         model_layout.addWidget(self.btn_package_model)
         model_layout.addStretch(1)
 
+        # Calibration Heatmap
+        cal_box = QtWidgets.QGroupBox("Calibration Heatmap")
+        cal_layout = QtWidgets.QVBoxLayout(cal_box)
+        cal_row = QtWidgets.QHBoxLayout()
+        cal_row.addWidget(QtWidgets.QLabel("Status:"))
+        self.lbl_cal_status = QtWidgets.QLabel("—")
+        cal_row.addWidget(self.lbl_cal_status)
+        cal_row.addStretch(1)
+        cal_layout.addLayout(cal_row)
+        self.btn_load_45v = QtWidgets.QPushButton("Load 45V Test…")
+        self.btn_generate_heatmap = QtWidgets.QPushButton("Generate Heatmap")
+        self.btn_generate_heatmap.setEnabled(False)
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.addWidget(self.btn_load_45v)
+        btn_row.addWidget(self.btn_generate_heatmap)
+        btn_row.addStretch(1)
+        cal_layout.addLayout(btn_row)
+
+        # Metrics table
+        cal_layout.addWidget(QtWidgets.QLabel("Metrics:"))
+        self.metrics_table = QtWidgets.QTableWidget(4, 2)
+        try:
+            self.metrics_table.setHorizontalHeaderLabels(["Metric", "Value"])
+            self.metrics_table.verticalHeader().setVisible(False)
+            self.metrics_table.horizontalHeader().setStretchLastSection(True)
+            self.metrics_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+            self.metrics_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        except Exception:
+            pass
+        labels = ["Count", "Mean Error (N)", "Median Error (N)", "Max Error (N)"]
+        for i, text in enumerate(labels):
+            self.metrics_table.setItem(i, 0, QtWidgets.QTableWidgetItem(text))
+            self.metrics_table.setItem(i, 1, QtWidgets.QTableWidgetItem("—"))
+        cal_layout.addWidget(self.metrics_table)
+        try:
+            # Minimize whitespace: fix height to header + rows
+            row_h = max(22, self.metrics_table.verticalHeader().defaultSectionSize())
+            header_h = self.metrics_table.horizontalHeader().height()
+            self.metrics_table.setFixedHeight(header_h + row_h * len(labels) + 4)
+        except Exception:
+            pass
+        # Generated heatmaps list
+        cal_layout.addWidget(QtWidgets.QLabel("Generated Heatmaps:"))
+        self.heatmap_list = QtWidgets.QListWidget()
+        try:
+            self.heatmap_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        except Exception:
+            pass
+        cal_layout.addWidget(self.heatmap_list, 1)
+
         # Evenly distribute boxes side-by-side within a constrained-height tab page
-        for w in (controls_box, guide_box, meta_box, model_box):
+        for w in (controls_box, guide_box, meta_box, model_box, cal_box):
             try:
                 w.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
             except Exception:
@@ -146,6 +199,9 @@ class LiveTestingPanel(QtWidgets.QWidget):
         self.btn_activate.clicked.connect(self._emit_activate)
         self.btn_deactivate.clicked.connect(self._emit_deactivate)
         self.btn_prev.clicked.connect(lambda: self.previous_stage_requested.emit())
+        self.btn_load_45v.clicked.connect(lambda: self.load_45v_requested.emit())
+        self.btn_generate_heatmap.clicked.connect(lambda: self.generate_heatmap_requested.emit())
+        self.heatmap_list.currentItemChanged.connect(self._on_heatmap_item_changed)
 
     # Overlay is now managed by the canvas; this panel keeps controls only
     def configure_grid(self, rows: int, cols: int) -> None:
@@ -295,4 +351,63 @@ class LiveTestingPanel(QtWidgets.QWidget):
             self.set_model_controls_enabled(False)
             self.deactivate_model_requested.emit(mid)
 
+
+    # --- Calibration Heatmap helpers ---
+    def set_calibration_enabled(self, enabled: bool) -> None:
+        try:
+            self.btn_load_45v.setEnabled(bool(enabled))
+            # Generate only enabled when a file is loaded; default off here
+        except Exception:
+            pass
+
+    def set_calibration_status(self, text: Optional[str]) -> None:
+        try:
+            self.lbl_cal_status.setText((text or "").strip() or "—")
+        except Exception:
+            pass
+
+    def set_generate_enabled(self, enabled: bool) -> None:
+        try:
+            self.btn_generate_heatmap.setEnabled(bool(enabled))
+        except Exception:
+            pass
+
+    # --- Heatmap list API ---
+    def add_heatmap_entry(self, label: str, key: str, count: int) -> None:
+        try:
+            text = f"{label}  ({count})"
+            item = QtWidgets.QListWidgetItem(text)
+            item.setData(QtCore.Qt.UserRole, str(key))
+            self.heatmap_list.addItem(item)
+        except Exception:
+            pass
+
+    def clear_heatmap_entries(self) -> None:
+        try:
+            self.heatmap_list.clear()
+        except Exception:
+            pass
+
+    def _on_heatmap_item_changed(self, current: Optional[QtWidgets.QListWidgetItem], _previous: Optional[QtWidgets.QListWidgetItem]) -> None:
+        if current is None:
+            return
+        try:
+            key = current.data(QtCore.Qt.UserRole)
+            if key:
+                self.heatmap_selected.emit(str(key))
+        except Exception:
+            pass
+
+    def set_heatmap_metrics(self, count: int, mean_err: float, max_err: float, median_err: float) -> None:
+        try:
+            vals = [
+                str(int(count)),
+                f"{mean_err:.1f}",
+                f"{median_err:.1f}",
+                f"{max_err:.1f}",
+            ]
+            for i, v in enumerate(vals):
+                self.metrics_table.setItem(i, 1, QtWidgets.QTableWidgetItem(v))
+        except Exception:
+            pass
 

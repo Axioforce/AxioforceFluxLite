@@ -36,6 +36,7 @@ class WorldCanvas(QtWidgets.QWidget):
         self._y_mid = 0.0
         self._available_devices: List[Tuple[str, str, str]] = []
         self._active_device_ids: set = set()
+        self._heatmap_points: List[Tuple[float, float, str]] = []  # (x_mm, y_mm, bin)
 
         # Live testing grid overlay
         self._grid_overlay = GridOverlay(self)
@@ -135,9 +136,10 @@ class WorldCanvas(QtWidgets.QWidget):
 
     def _compute_world_bounds(self) -> None:
         if self.state.display_mode == "single":
-            is_07 = (self.state.selected_device_type or "").strip() == "07"
-            half_w = (config.TYPE07_W_MM if is_07 else config.TYPE08_W_MM) / 2.0
-            half_h = (config.TYPE07_H_MM if is_07 else config.TYPE08_H_MM) / 2.0
+            dev_type = (self.state.selected_device_type or "").strip()
+            is_07_or_11 = dev_type in ("07", "11")
+            half_w = (config.TYPE07_W_MM if is_07_or_11 else config.TYPE08_W_MM) / 2.0
+            half_h = (config.TYPE07_H_MM if is_07_or_11 else config.TYPE08_H_MM) / 2.0
             margin_mm = 200.0
             self.WORLD_X_MIN, self.WORLD_X_MAX = -half_h - margin_mm, half_h + margin_mm
             self.WORLD_Y_MIN, self.WORLD_Y_MAX = -half_w - margin_mm, half_w + margin_mm
@@ -267,7 +269,7 @@ class WorldCanvas(QtWidgets.QWidget):
                 else:
                     prefix, tail = full_id[:2], full_id
                 suffix = tail[-2:] if len(tail) >= 2 else tail
-                type_prefix = dev_type if dev_type in ("06", "07", "08") else (prefix if prefix in ("06", "07", "08") else "")
+                type_prefix = dev_type if dev_type in ("06", "07", "08", "11") else (prefix if prefix in ("06", "07", "08", "11") else "")
                 short = f"{type_prefix}-{suffix}" if type_prefix else suffix
             except Exception:
                 short = full_id[-2:] if len(full_id) >= 2 else full_id
@@ -299,8 +301,8 @@ class WorldCanvas(QtWidgets.QWidget):
         font = p.font()
         font.setPointSize(max(9, int(10 * scale / max(scale, 1))))
         p.setFont(font)
-        # Determine base side for logo by device type: 07 -> left (vertical), 08 -> top (horizontal)
-        base_side = "left" if dev_type == "07" else "top"
+        # Determine base side for logo by device type: 07/11 -> left (vertical), 08 -> top (horizontal)
+        base_side = "left" if dev_type in ("07", "11") else "top"
         # Apply rotation to pick actual side
         sides = ["top", "right", "bottom", "left"]
         base_idx = sides.index(base_side)
@@ -326,7 +328,7 @@ class WorldCanvas(QtWidgets.QWidget):
         p.restore()
 
     def _draw_connection_port_single(self, p: QtGui.QPainter, center_mm: Tuple[float, float], w_mm: float, h_mm: float, dev_type: str) -> None:
-        if self.state.display_mode != "single" or dev_type not in ("07", "06"):
+        if self.state.display_mode != "single" or dev_type not in ("07", "11", "06"):
             return
         cx, cy = self._to_screen(center_mm[0], center_mm[1])
         scale = self.state.px_per_mm
@@ -456,6 +458,8 @@ class WorldCanvas(QtWidgets.QWidget):
                     return config.TYPE07_W_MM, config.TYPE07_H_MM
                 elif dev_type == "08":
                     return config.TYPE08_W_MM, config.TYPE08_H_MM
+                elif dev_type == "11":
+                    return config.TYPE11_W_MM, config.TYPE11_H_MM
         return config.TYPE07_W_MM, config.TYPE07_H_MM
 
     def _draw_plates(self, p: QtGui.QPainter) -> None:
@@ -472,6 +476,9 @@ class WorldCanvas(QtWidgets.QWidget):
             elif dev_type == "07":
                 w_mm = config.TYPE07_W_MM
                 h_mm = config.TYPE07_H_MM
+            elif dev_type == "11":
+                w_mm = config.TYPE11_W_MM
+                h_mm = config.TYPE11_H_MM
             else:
                 w_mm = config.TYPE08_W_MM
                 h_mm = config.TYPE08_H_MM
@@ -559,6 +566,12 @@ class WorldCanvas(QtWidgets.QWidget):
                     if name in (LAUNCH_NAME, LANDING_NAME):
                         self._draw_cop(p, name, snap)
         self._draw_plate_names(p)
+        # Draw heatmap overlay (single-device view)
+        try:
+            if self.state.display_mode == "single" and self._heatmap_points:
+                self._draw_heatmap(p)
+        except Exception:
+            pass
         p.end()
 
         # Resize overlay to plate bounds in single device mode
@@ -571,6 +584,9 @@ class WorldCanvas(QtWidgets.QWidget):
                 elif dev_type == "07":
                     w_mm = config.TYPE07_W_MM
                     h_mm = config.TYPE07_H_MM
+                elif dev_type == "11":
+                    w_mm = config.TYPE11_W_MM
+                    h_mm = config.TYPE11_H_MM
                 else:
                     w_mm = config.TYPE08_W_MM
                     h_mm = config.TYPE08_H_MM
@@ -656,6 +672,87 @@ class WorldCanvas(QtWidgets.QWidget):
     def clear_live_colors(self) -> None:
         self._grid_overlay.clear_colors()
 
+    # --- Calibration heatmap overlay ---
+    def set_heatmap_points(self, points: List[Tuple[float, float, str]]) -> None:
+        self._heatmap_points = list(points or [])
+        self.update()
+
+    def clear_heatmap(self) -> None:
+        self._heatmap_points = []
+        self.update()
+
+    def _draw_heatmap(self, p: QtGui.QPainter) -> None:
+        # Save painter state; clip to plate rect and use normal alpha blending
+        p.save()
+        rect = self._compute_plate_rect_px()
+        if rect is not None:
+            p.setClipRect(rect)
+        # Draw in increasing severity so reds end up on top
+        order = ["green", "light_green", "yellow", "orange", "red"]
+        groups: Dict[str, List[Tuple[float, float]]] = {k: [] for k in order}
+        for x_mm, y_mm, bname in self._heatmap_points:
+            if bname in groups:
+                groups[bname].append((x_mm, y_mm))
+            else:
+                groups["red"].append((x_mm, y_mm))
+        radius_px = 40
+        for key in order:
+            pts = groups.get(key, [])
+            if not pts:
+                continue
+            if key == "green":
+                base = QtGui.QColor(0, 200, 0, 160)
+            elif key == "light_green":
+                base = QtGui.QColor(80, 220, 80, 160)
+            elif key == "yellow":
+                base = QtGui.QColor(230, 210, 0, 160)
+            elif key == "orange":
+                base = QtGui.QColor(230, 140, 0, 160)
+            else:
+                base = QtGui.QColor(220, 0, 0, 160)
+            for x_mm, y_mm in pts:
+                sx, sy = self._to_screen(x_mm, y_mm)
+                grad = QtGui.QRadialGradient(QtCore.QPointF(sx, sy), float(radius_px))
+                center = QtGui.QColor(base)
+                edge = QtGui.QColor(base)
+                center.setAlpha(180)
+                edge.setAlpha(0)
+                grad.setColorAt(0.0, center)
+                grad.setColorAt(1.0, edge)
+                p.setBrush(QtGui.QBrush(grad))
+                p.setPen(QtCore.Qt.NoPen)
+                p.drawEllipse(QtCore.QPoint(sx, sy), radius_px, radius_px)
+        p.restore()
+
+    def _compute_plate_rect_px(self) -> Optional[QtCore.QRect]:
+        try:
+            if self.state.display_mode != "single" or not (self.state.selected_device_type or "").strip():
+                return None
+            dev_type = (self.state.selected_device_type or "").strip()
+            if dev_type == "06":
+                w_mm = config.TYPE06_W_MM
+                h_mm = config.TYPE06_H_MM
+            elif dev_type == "07":
+                w_mm = config.TYPE07_W_MM
+                h_mm = config.TYPE07_H_MM
+            elif dev_type == "11":
+                w_mm = config.TYPE11_W_MM
+                h_mm = config.TYPE11_H_MM
+            else:
+                w_mm = config.TYPE08_W_MM
+                h_mm = config.TYPE08_H_MM
+            cx, cy = self._to_screen(0.0, 0.0)
+            scale = self.state.px_per_mm
+            if (self._rotation_quadrants % 2 == 1):
+                w_px = int(h_mm * scale)
+                h_px = int(w_mm * scale)
+            else:
+                w_px = int(w_mm * scale)
+                h_px = int(h_mm * scale)
+            return QtCore.QRect(int(cx - w_px / 2), int(cy - h_px / 2), w_px, h_px)
+        except Exception:
+            return None
+
     # Expose rotation for live-testing mapping
     def get_rotation_quadrants(self) -> int:
         return int(self._rotation_quadrants) % 4
@@ -731,7 +828,7 @@ class WorldCanvas(QtWidgets.QWidget):
             else:
                 prefix, tail = full[:2], full
             suffix = tail[-2:] if len(tail) >= 2 else tail
-            type_prefix = dev_type_hint if dev_type_hint in ("06", "07", "08") else (prefix if prefix in ("06", "07", "08") else "")
+            type_prefix = dev_type_hint if dev_type_hint in ("06", "07", "08", "11") else (prefix if prefix in ("06", "07", "08", "11") else "")
             return f"{type_prefix}-{suffix}" if type_prefix else suffix
         except Exception:
             return full[-2:] if len(full) >= 2 else full
@@ -780,12 +877,12 @@ class WorldCanvas(QtWidgets.QWidget):
 
     def _show_device_picker(self, position_id: str) -> None:
         if position_id == "Launch Zone":
-            required_type = "07"
+            required_type = "07"  # Also accepts "11" - see filtering logic below
         else:
             required_type = "08"
         devices_for_picker: List[Tuple[str, str, str]] = []
         for name, axf_id, dev_type in self._available_devices:
-            if dev_type == required_type:
+            if dev_type == required_type or (required_type == "07" and dev_type == "11"):
                 devices_for_picker.append((name, axf_id, dev_type))
         dialog = DevicePickerDialog(position_id, required_type, devices_for_picker, self)
         result = dialog.exec()

@@ -408,6 +408,8 @@ class ControlPanel(QtWidgets.QWidget):
                 continue
             if dev_type == "07" and not show07:
                 continue
+            if dev_type == "11" and not show07:  # 11 uses same filter as 07 (identical dimensions)
+                continue
             if dev_type == "08" and not show08:
                 continue
             display = f"{name} ({axf_id})"
