@@ -101,11 +101,15 @@ class GridOverlay(QtWidgets.QWidget):
         # Status box overlay
         if self._status_text:
             try:
-                box_w = int(rect.width() * 0.8)
-                box_h = int(rect.height() * 0.22)
-                box_x = rect.left() + (rect.width() - box_w) // 2
-                box_y = rect.top() + (rect.height() - box_h) // 2
-                status_rect = QtCore.QRect(box_x, box_y, box_w, box_h)
+                # Place a readable box to the right side of the plate rect, within widget bounds
+                margin = 12
+                max_w = max(240, int(self.width() * 0.35))
+                box_w = min(max_w, max(240, int(rect.width() * 0.6)))
+                box_h = max(60, int(rect.height() * 0.26))
+                box_x = min(self.width() - box_w - margin, rect.right() + margin)
+                # Align vertically to middle of plate rect
+                box_y = max(margin, min(self.height() - box_h - margin, rect.top() + (rect.height() - box_h) // 2))
+                status_rect = QtCore.QRect(int(box_x), int(box_y), int(box_w), int(box_h))
                 # Background
                 bg = QtGui.QColor(0, 0, 0, 140)
                 p.setPen(QtCore.Qt.NoPen)
@@ -114,11 +118,11 @@ class GridOverlay(QtWidgets.QWidget):
                 # Text
                 p.setPen(QtGui.QColor(255, 255, 255))
                 font = p.font()
-                font.setPointSize(max(10, int(min(rect.width(), rect.height()) * 0.035)))
+                font.setPointSize(11)
                 font.setBold(True)
                 p.setFont(font)
                 flags = QtCore.Qt.AlignCenter | QtCore.Qt.TextWordWrap
-                p.drawText(status_rect.adjusted(12, 8, -12, -8), flags, self._status_text)
+                p.drawText(status_rect.adjusted(10, 8, -10, -8), flags, self._status_text)
             except Exception:
                 pass
         p.end()

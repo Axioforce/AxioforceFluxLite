@@ -10,6 +10,8 @@ HTTP_PORT: int = int(os.environ.get("HTTP_PORT", "3001"))
 UI_TICK_HZ: int = int(os.environ.get("UI_TICK_HZ", "60"))
 PLOT_AUTOSCALE_DAMP_ENABLED: bool = bool(int(os.environ.get("PLOT_AUTOSCALE_DAMP_ENABLED", "1")))
 PLOT_AUTOSCALE_DAMP_EVERY_N: int = int(os.environ.get("PLOT_AUTOSCALE_DAMP_EVERY_N", "2"))
+# Plot backend: 1=use pyqtgraph for live force plot (fallback to painter if unavailable)
+USE_PYQTGRAPH_FORCE_PLOT: bool = bool(int(os.environ.get("USE_PYQTGRAPH_FORCE_PLOT", "1")))
 
 
 # Microsoft Graph / OneDrive Excel export configuration
@@ -123,6 +125,8 @@ GRID_DIMS_BY_MODEL = {
     "11": (5, 3),
 }
 
+
+HEATMAP_ENHANCED_BLEND = True # True for enhanced blending, False for simple painter stacking
 
 # Colors as RGB tuples for cross-backend use
 COLOR_BG: Tuple[int, int, int] = (18, 18, 20)

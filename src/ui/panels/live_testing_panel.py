@@ -18,6 +18,7 @@ class LiveTestingPanel(QtWidgets.QWidget):
     load_45v_requested = QtCore.Signal()
     generate_heatmap_requested = QtCore.Signal()
     heatmap_selected = QtCore.Signal(str)
+    heatmap_view_changed = QtCore.Signal(str)
 
     def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -143,46 +144,91 @@ class LiveTestingPanel(QtWidgets.QWidget):
         cal_row.addWidget(self.lbl_cal_status)
         cal_row.addStretch(1)
         cal_layout.addLayout(cal_row)
-        self.btn_load_45v = QtWidgets.QPushButton("Load 45V Test…")
-        self.btn_generate_heatmap = QtWidgets.QPushButton("Generate Heatmap")
+        self.btn_load_45v = QtWidgets.QPushButton("Load Test Files…")
+        self.btn_generate_heatmap = QtWidgets.QPushButton("Generate Heatmaps")
         self.btn_generate_heatmap.setEnabled(False)
         btn_row = QtWidgets.QHBoxLayout()
         btn_row.addWidget(self.btn_load_45v)
         btn_row.addWidget(self.btn_generate_heatmap)
         btn_row.addStretch(1)
         cal_layout.addLayout(btn_row)
+        # View mode
+        view_row = QtWidgets.QHBoxLayout()
+        view_row.addWidget(QtWidgets.QLabel("View:"))
+        self.heatmap_view_combo = QtWidgets.QComboBox()
+        self.heatmap_view_combo.addItems(["Heatmap", "Grid View"])
+        view_row.addWidget(self.heatmap_view_combo)
+        view_row.addStretch(1)
+        cal_layout.addLayout(view_row)
 
         # Metrics table
-        cal_layout.addWidget(QtWidgets.QLabel("Metrics:"))
-        self.metrics_table = QtWidgets.QTableWidget(4, 2)
+        self.metrics_table = QtWidgets.QTableWidget(5, 3)
         try:
-            self.metrics_table.setHorizontalHeaderLabels(["Metric", "Value"])
+            self.metrics_table.setHorizontalHeaderLabels(["Metric", "N", "%"])
             self.metrics_table.verticalHeader().setVisible(False)
-            self.metrics_table.horizontalHeader().setStretchLastSection(True)
+            # Size columns/rows to contents for tighter look
+            hh = self.metrics_table.horizontalHeader()
+            vh = self.metrics_table.verticalHeader()
+            try:
+                hh.setStretchLastSection(False)
+                from PySide6.QtWidgets import QHeaderView as _QHV
+                hh.setSectionResizeMode(_QHV.ResizeToContents)
+                vh.setSectionResizeMode(_QHV.ResizeToContents)
+            except Exception:
+                pass
             self.metrics_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
             self.metrics_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+            # Reduce grid and margins
+            self.metrics_table.setShowGrid(False)
+            self.metrics_table.setStyleSheet("QTableWidget { padding: 0px; } QTableWidget::item { padding: 2px 6px; }")
         except Exception:
             pass
-        labels = ["Count", "Mean Error (N)", "Median Error (N)", "Max Error (N)"]
+        labels = ["Count", "Mean Error", "Median Error", "Max Error", "Bias (signed)"]
         for i, text in enumerate(labels):
             self.metrics_table.setItem(i, 0, QtWidgets.QTableWidgetItem(text))
             self.metrics_table.setItem(i, 1, QtWidgets.QTableWidgetItem("—"))
+            self.metrics_table.setItem(i, 2, QtWidgets.QTableWidgetItem("—"))
         cal_layout.addWidget(self.metrics_table)
         try:
-            # Minimize whitespace: fix height to header + rows
-            row_h = max(22, self.metrics_table.verticalHeader().defaultSectionSize())
+            # Minimize whitespace: compute tight height after sizing to contents
+            self.metrics_table.resizeColumnsToContents()
+            self.metrics_table.resizeRowsToContents()
+            row_h = max(18, self.metrics_table.verticalHeader().defaultSectionSize())
             header_h = self.metrics_table.horizontalHeader().height()
-            self.metrics_table.setFixedHeight(header_h + row_h * len(labels) + 4)
+            self.metrics_table.setFixedHeight(header_h + row_h * len(labels) + 2)
         except Exception:
             pass
-        # Generated heatmaps list
+        # Generated heatmaps list + Metrics side-by-side
         cal_layout.addWidget(QtWidgets.QLabel("Generated Heatmaps:"))
         self.heatmap_list = QtWidgets.QListWidget()
         try:
             self.heatmap_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         except Exception:
             pass
-        cal_layout.addWidget(self.heatmap_list, 1)
+        # Place picker and metrics table side by side
+        hm_row = QtWidgets.QHBoxLayout()
+        # Left: heatmap picker (expands)
+        try:
+            self.heatmap_list.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
+        except Exception:
+            pass
+        hm_row.addWidget(self.heatmap_list, 2)
+        # Right: metrics table (tight width)
+        try:
+            self.metrics_table.resizeColumnsToContents()
+            self.metrics_table.resizeRowsToContents()
+            self.metrics_table.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        except Exception:
+            pass
+        hm_row.addWidget(self.metrics_table, 0, QtCore.Qt.AlignTop)
+        # Place directly after prior controls (no bottom pin)
+        cal_layout.addLayout(hm_row)
+
+        # Ensure tight sizing after layout settles
+        try:
+            QtCore.QTimer.singleShot(0, self._update_metrics_table_size)
+        except Exception:
+            pass
 
         # Evenly distribute boxes side-by-side within a constrained-height tab page
         for w in (controls_box, guide_box, meta_box, model_box, cal_box):
@@ -202,6 +248,7 @@ class LiveTestingPanel(QtWidgets.QWidget):
         self.btn_load_45v.clicked.connect(lambda: self.load_45v_requested.emit())
         self.btn_generate_heatmap.clicked.connect(lambda: self.generate_heatmap_requested.emit())
         self.heatmap_list.currentItemChanged.connect(self._on_heatmap_item_changed)
+        self.heatmap_view_combo.currentTextChanged.connect(lambda s: self.heatmap_view_changed.emit(str(s)))
 
     # Overlay is now managed by the canvas; this panel keeps controls only
     def configure_grid(self, rows: int, cols: int) -> None:
@@ -398,16 +445,75 @@ class LiveTestingPanel(QtWidgets.QWidget):
         except Exception:
             pass
 
-    def set_heatmap_metrics(self, count: int, mean_err: float, max_err: float, median_err: float) -> None:
+    def set_heatmap_metrics(self, metrics: dict, is_all: bool) -> None:
         try:
-            vals = [
-                str(int(count)),
-                f"{mean_err:.1f}",
-                f"{median_err:.1f}",
-                f"{max_err:.1f}",
+            # metrics keys:
+            # count, mean_err, median_err, max_err (N)
+            # mean_pct, median_pct, max_pct, signed_bias_pct (%)
+            count = int(metrics.get("count", 0))
+            # Column 1 (N) values
+            if not is_all:
+                n_vals = [
+                    str(count),
+                    f"{float(metrics.get('mean_err', 0.0)):.1f}",
+                    f"{float(metrics.get('median_err', 0.0)):.1f}",
+                    f"{float(metrics.get('max_err', 0.0)):.1f}",
+                    "—",  # Bias has no N
+                ]
+            else:
+                n_vals = [str(count), "—", "—", "—", "—"]
+            # Column 2 (%) values
+            pct_vals = [
+                "—",
+                f"{float(metrics.get('mean_pct', 0.0)):.1f}",
+                f"{float(metrics.get('median_pct', 0.0)):.1f}",
+                f"{float(metrics.get('max_pct', 0.0)):.1f}",
+                f"{float(metrics.get('signed_bias_pct', 0.0)):.1f}",
             ]
-            for i, v in enumerate(vals):
+            for i, v in enumerate(n_vals):
                 self.metrics_table.setItem(i, 1, QtWidgets.QTableWidgetItem(v))
+            for i, v in enumerate(pct_vals):
+                self.metrics_table.setItem(i, 2, QtWidgets.QTableWidgetItem(v))
+            # Recompute tight size based on current content
+            self._update_metrics_table_size()
+        except Exception:
+            pass
+
+    def current_heatmap_view(self) -> str:
+        try:
+            return str(self.heatmap_view_combo.currentText() or "Heatmap")
+        except Exception:
+            return "Heatmap"
+
+    # --- Internal layout helpers ---
+    def _update_metrics_table_size(self) -> None:
+        try:
+            # Columns sized to contents; compute tight total width
+            self.metrics_table.resizeColumnsToContents()
+            self.metrics_table.resizeRowsToContents()
+            hh = self.metrics_table.horizontalHeader()
+            total_w = 0
+            for c in range(self.metrics_table.columnCount()):
+                total_w += hh.sectionSize(c)
+            # Account for table frame and a small padding
+            total_w += max(8, self.metrics_table.frameWidth() * 2 + 6)
+            self.metrics_table.setFixedWidth(int(total_w))
+            # Compute tight height for all rows visible
+            header_h = self.metrics_table.horizontalHeader().height()
+            row_h_total = 0
+            for r in range(self.metrics_table.rowCount()):
+                row_h_total += self.metrics_table.rowHeight(r)
+            content_h = header_h + row_h_total + 2
+            self.metrics_table.setFixedHeight(int(content_h))
+            # Match picker height to metrics table to avoid tug-of-war
+            self.heatmap_list.setFixedHeight(int(content_h))
+        except Exception:
+            pass
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        try:
+            self._update_metrics_table_size()
         except Exception:
             pass
 

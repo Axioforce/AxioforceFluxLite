@@ -132,6 +132,14 @@ class WorldCanvas(QtWidgets.QWidget):
                         return
                 except Exception:
                     pass
+            else:
+                # Clicked outside plate/overlay: clear active cell and status
+                try:
+                    self._grid_overlay.set_active_cell(None, None)
+                    self._grid_overlay.set_status(None)
+                    self.update()
+                except Exception:
+                    pass
         return super().mousePressEvent(event)
 
     def _compute_world_bounds(self) -> None:
@@ -599,7 +607,15 @@ class WorldCanvas(QtWidgets.QWidget):
                     w_px = int(w_mm * scale)
                     h_px = int(h_mm * scale)
                 rect = QtCore.QRect(int(cx - w_px / 2), int(cy - h_px / 2), w_px, h_px)
-                self._grid_overlay.setGeometry(rect)
+                # Enlarge overlay widget to include a side area to the right for status box
+                margin = 10
+                side_desired = max(260, int(self.width() * 0.25))
+                side_avail = max(0, int(self.width() - (rect.right() + margin)))
+                side_w = min(side_desired, side_avail)
+                ov_w = rect.width() + side_w
+                ov_h = rect.height()
+                self._grid_overlay.setGeometry(rect.left(), rect.top(), ov_w, ov_h)
+                # Plate rect remains at (0,0,w,h) inside the overlay's coordinate space
                 self._grid_overlay.set_plate_rect_px(QtCore.QRect(0, 0, rect.width(), rect.height()))
         except Exception:
             pass
@@ -682,46 +698,133 @@ class WorldCanvas(QtWidgets.QWidget):
         self.update()
 
     def _draw_heatmap(self, p: QtGui.QPainter) -> None:
-        # Save painter state; clip to plate rect and use normal alpha blending
-        p.save()
+        # Choose rendering path: enhanced (offscreen compositing) or simple painter stacking
+        enhanced = bool(getattr(config, "HEATMAP_ENHANCED_BLEND", False))
         rect = self._compute_plate_rect_px()
-        if rect is not None:
+        if rect is None:
+            return
+        # Common sizing/alpha scaling
+        n_pts = max(0, len(self._heatmap_points))
+        try:
+            radius_f = 41.6666666667 - (n_pts / 6.0)
+        except Exception:
+            radius_f = 30.0
+        if radius_f < 30.0:
+            radius_f = 30.0
+        elif radius_f > 40.0:
+            radius_f = 40.0
+        radius_px = int(radius_f)
+        try:
+            alpha_center = int(185.0 - 0.5 * n_pts)
+        except Exception:
+            alpha_center = 170
+        if alpha_center < 140:
+            alpha_center = 140
+        elif alpha_center > 185:
+            alpha_center = 185
+        if not enhanced:
+            # Simple painter-based gradients with normal stacking
+            p.save()
             p.setClipRect(rect)
-        # Draw in increasing severity so reds end up on top
-        order = ["green", "light_green", "yellow", "orange", "red"]
-        groups: Dict[str, List[Tuple[float, float]]] = {k: [] for k in order}
+            p.setCompositionMode(QtGui.QPainter.CompositionMode_SourceOver)
+            order = ["red", "orange", "yellow", "light_green", "green"]
+            groups: Dict[str, List[Tuple[float, float]]] = {k: [] for k in order}
+            for x_mm, y_mm, bname in self._heatmap_points:
+                if bname in groups:
+                    groups[bname].append((x_mm, y_mm))
+                else:
+                    groups["red"].append((x_mm, y_mm))
+            base_colors = {
+                "green": QtGui.QColor(0, 200, 0),
+                "light_green": QtGui.QColor(80, 220, 80),
+                "yellow": QtGui.QColor(230, 210, 0),
+                "orange": QtGui.QColor(230, 140, 0),
+                "red": QtGui.QColor(220, 0, 0),
+            }
+            for key in order:
+                pts = groups.get(key, [])
+                if not pts:
+                    continue
+                base = base_colors.get(key, QtGui.QColor(255, 255, 255))
+                for x_mm, y_mm in pts:
+                    sx, sy = self._to_screen(x_mm, y_mm)
+                    grad = QtGui.QRadialGradient(QtCore.QPointF(sx, sy), float(radius_px))
+                    center = QtGui.QColor(base)
+                    edge = QtGui.QColor(base)
+                    center.setAlpha(int(alpha_center))
+                    edge.setAlpha(0)
+                    grad.setColorAt(0.0, center)
+                    grad.setColorAt(1.0, edge)
+                    p.setBrush(QtGui.QBrush(grad))
+                    p.setPen(QtCore.Qt.NoPen)
+                    p.drawEllipse(QtCore.QPoint(sx, sy), radius_px, radius_px)
+            p.restore()
+            return
+        # Enhanced: offscreen compositing with average alpha and severity-to-color mapping
+        w = max(1, rect.width())
+        h = max(1, rect.height())
+        sum_alpha = [[0.0 for _ in range(w)] for _ in range(h)]
+        sum_severity = [[0.0 for _ in range(w)] for _ in range(h)]
+        count_overlap = [[0 for _ in range(w)] for _ in range(h)]
+        # Union alpha accumulator: a_union = 1 - Π(1 - a_i)
+        prod_keep = [[1.0 for _ in range(w)] for _ in range(h)]
+        sev_map = {"green": 0.0, "light_green": 0.25, "yellow": 0.5, "orange": 0.75, "red": 1.0}
         for x_mm, y_mm, bname in self._heatmap_points:
-            if bname in groups:
-                groups[bname].append((x_mm, y_mm))
-            else:
-                groups["red"].append((x_mm, y_mm))
-        radius_px = 40
-        for key in order:
-            pts = groups.get(key, [])
-            if not pts:
+            sx, sy = self._to_screen(x_mm, y_mm)
+            cx = int(sx - rect.left())
+            cy = int(sy - rect.top())
+            if cx < -radius_px or cy < -radius_px or cx >= w + radius_px or cy >= h + radius_px:
                 continue
-            if key == "green":
-                base = QtGui.QColor(0, 200, 0, 160)
-            elif key == "light_green":
-                base = QtGui.QColor(80, 220, 80, 160)
-            elif key == "yellow":
-                base = QtGui.QColor(230, 210, 0, 160)
-            elif key == "orange":
-                base = QtGui.QColor(230, 140, 0, 160)
-            else:
-                base = QtGui.QColor(220, 0, 0, 160)
-            for x_mm, y_mm in pts:
-                sx, sy = self._to_screen(x_mm, y_mm)
-                grad = QtGui.QRadialGradient(QtCore.QPointF(sx, sy), float(radius_px))
-                center = QtGui.QColor(base)
-                edge = QtGui.QColor(base)
-                center.setAlpha(180)
-                edge.setAlpha(0)
-                grad.setColorAt(0.0, center)
-                grad.setColorAt(1.0, edge)
-                p.setBrush(QtGui.QBrush(grad))
-                p.setPen(QtCore.Qt.NoPen)
-                p.drawEllipse(QtCore.QPoint(sx, sy), radius_px, radius_px)
+            severity = float(sev_map.get(bname, 1.0))
+            x0 = max(0, cx - radius_px)
+            x1 = min(w - 1, cx + radius_px)
+            y0 = max(0, cy - radius_px)
+            y1 = min(h - 1, cy + radius_px)
+            r2 = float(radius_px * radius_px)
+            for yy in range(y0, y1 + 1):
+                dy = float(yy - cy)
+                dy2 = dy * dy
+                for xx in range(x0, x1 + 1):
+                    dx = float(xx - cx)
+                    dist2 = dx * dx + dy2
+                    if dist2 > r2:
+                        continue
+                    d = dist2 ** 0.5
+                    a = float(alpha_center) * max(0.0, 1.0 - (d / float(radius_px)))
+                    if a <= 0.0:
+                        continue
+                    sum_alpha[yy][xx] += a
+                    sum_severity[yy][xx] += severity * a
+                    count_overlap[yy][xx] += 1
+                    a_norm = max(0.0, min(1.0, a / 255.0))
+                    prod_keep[yy][xx] *= (1.0 - a_norm)
+        img = QtGui.QImage(w, h, QtGui.QImage.Format_ARGB32)
+        img.fill(0)
+        for yy in range(h):
+            for xx in range(w):
+                cnt = count_overlap[yy][xx]
+                if cnt <= 0:
+                    continue
+                a_sum = sum_alpha[yy][xx]
+                # Use union alpha so overlaps don't darken
+                a_union = 1.0 - max(0.0, min(1.0, prod_keep[yy][xx]))
+                aa = int(max(0.0, min(255.0, a_union * 255.0)))
+                sev = (sum_severity[yy][xx] / a_sum) if a_sum > 0.0 else 0.0
+                sev = max(0.0, min(1.0, sev))
+                if sev <= 0.5:
+                    t = sev / 0.5
+                    r = 0.0 + (230.0 - 0.0) * t
+                    g = 200.0 + (210.0 - 200.0) * t
+                    b = 0.0
+                else:
+                    t = (sev - 0.5) / 0.5
+                    r = 230.0 + (220.0 - 230.0) * t
+                    g = 210.0 + (0.0 - 210.0) * t
+                    b = 0.0
+                img.setPixel(xx, yy, QtGui.qRgba(int(r), int(g), int(b), int(aa)))
+        p.save()
+        p.setClipRect(rect)
+        p.drawImage(rect.topLeft(), img)
         p.restore()
 
     def _compute_plate_rect_px(self) -> Optional[QtCore.QRect]:

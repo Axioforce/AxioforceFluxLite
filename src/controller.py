@@ -3,6 +3,9 @@ from __future__ import annotations
 import threading
 import time
 from typing import Callable, Optional
+import os
+import requests  # type: ignore
+from . import meta_store
 
 from . import config
 from .io_client import IoClient
@@ -37,6 +40,11 @@ class Controller:
         self._mound_group_id: Optional[str] = None
         self._mound_configuration_id: Optional[str] = None
         self._mound_selected_devices: dict[str, str] = {}  # position_id -> device_id
+        # Groups cache for capture resolution
+        self._groups: list = []
+        # HTTP base for REST endpoints
+        self._http_host: Optional[str] = None
+        self._http_port: Optional[int] = None
 
         # Wire view events
         if hasattr(self.view, "on_connect_clicked"):
@@ -69,6 +77,11 @@ class Controller:
         # Wire mound device selection
         if hasattr(self.view, "on_mound_device_selected"):
             self.view.on_mound_device_selected(self.set_mound_device)
+        # Backend config/capture helpers for Live Testing dialog-driven settings
+        if hasattr(self.view, "on_update_dynamo_config"):
+            self.view.on_update_dynamo_config(self.update_dynamo_config)
+        if hasattr(self.view, "on_set_model_bypass"):
+            self.view.on_set_model_bypass(self.set_model_bypass)
 
     def _normalize_device_id(self, s: str | None) -> str:
         t = (s or "").strip()
@@ -243,6 +256,27 @@ class Controller:
         self.disconnect()
         self.client = IoClient(host, port)
         self.client.set_json_callback(self._on_json)
+        # Capture host for HTTP
+        self._http_host = host
+        # Remember socket port and infer HTTP port if not configured
+        try:
+            self._socket_port = int(port)
+        except Exception:
+            self._socket_port = None
+        try:
+            import os as _os
+            self._http_port = int(_os.environ.get("HTTP_PORT", str(config.HTTP_PORT)))
+        except Exception:
+            try:
+                self._http_port = int(getattr(config, "HTTP_PORT", 5000))
+            except Exception:
+                self._http_port = 5000
+        # Fallback: if HTTP_PORT wasn't explicitly configured, try socket+1 (common for our stack)
+        try:
+            if not self._http_port and self._socket_port:
+                self._http_port = int(self._socket_port) + 1
+        except Exception:
+            pass
         
         # Attach discovery listeners BEFORE starting client
         if self.client is not None:
@@ -289,6 +323,10 @@ class Controller:
                 self.client.on("connect", _on_first_connect)
                 # Listen for config status to forward to UI
                 self.client.on("getDynamoConfigStatus", self._on_dynamo_config_status)
+                # Listen for groups list
+                self.client.on("getGroupsStatus", self._on_groups_status)
+                # Capture lifecycle
+                self.client.on("stopCaptureStatus", self._on_stop_capture_status)
                 # Model management listeners
                 self.client.on("modelMetadata", self._on_model_metadata)
                 self.client.on("modelPackageStatus", self._on_model_package_status)
@@ -330,8 +368,10 @@ class Controller:
     # Control emits
     def start_capture(self, payload: dict) -> None:
         if self.client is not None:
+            capture_config = payload.get("capture_configuration", "simple")
             p = {
-                "captureConfiguration": payload.get("capture_configuration", "manual"),  # or "pitch"
+                "captureConfiguration": capture_config,  # compatibility
+                "captureType": capture_config,  # preferred by newer backends
                 "groupId": payload.get("group_id", ""),
                 "athleteId": payload.get("athlete_id", ""),
             }
@@ -345,6 +385,252 @@ class Controller:
         if self.client is not None:
             p = {"groupId": payload.get("group_id", "")}
             self.client.emit("stopCapture", p)
+
+    def update_dynamo_config(self, key: str, value: object) -> None:
+        if self.client is not None and (key or "").strip():
+            try:
+                self.client.emit("updateDynamoConfig", {"key": str(key), "value": value})
+            except Exception:
+                pass
+
+    def set_model_bypass(self, enabled: bool) -> None:
+        if self.client is not None:
+            try:
+                self.client.emit("setModelBypass", bool(enabled))
+            except Exception:
+                pass
+
+    # --- Groups handling / capture helpers -------------------------------------
+    def _on_groups_status(self, payload: dict) -> None:
+        try:
+            if payload.get("status") != "success":
+                return
+            data = payload.get("data") or []
+            if isinstance(data, list):
+                self._groups = data
+            else:
+                # Some servers may put array under 'groups' or 'response'
+                self._groups = list(data.get("groups") or data.get("response") or [])
+            try:
+                print(f"[ctrl] getGroupsStatus: groups={len(self._groups)}")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def resolve_group_id_for_device(self, device_id: str) -> Optional[str]:
+        """Return group axfId that includes the provided device id, if available."""
+        did_norm = self._normalize_device_id(device_id)
+        if not did_norm or not isinstance(self._groups, list):
+            return None
+        # Search groups for device membership
+        for g in self._groups:
+            try:
+                grp = g or {}
+                # get group id
+                gid = str(grp.get("axfId") or grp.get("axf_id") or grp.get("id") or "").strip()
+                if not gid:
+                    continue
+                # Common structures: devices[], mappings[] with deviceId/device_id
+                devices = grp.get("devices") or []
+                for d in (devices if isinstance(devices, list) else []):
+                    try:
+                        cand = str(d.get("axfId") or d.get("id") or d.get("deviceId") or d.get("device_id") or "").strip()
+                        if cand and self._normalize_device_id(cand) == did_norm:
+                            return gid
+                    except Exception:
+                        continue
+                mappings = grp.get("mappings") or []
+                for m in (mappings if isinstance(mappings, list) else []):
+                    try:
+                        cand = str(m.get("deviceId") or m.get("device_id") or "").strip()
+                        if cand and self._normalize_device_id(cand) == did_norm:
+                            return gid
+                    except Exception:
+                        continue
+                members = grp.get("members") or []
+                for m in (members if isinstance(members, list) else []):
+                    try:
+                        cand = str(m.get("deviceId") or m.get("device_id") or m.get("axfId") or m.get("id") or "").strip()
+                        if cand and self._normalize_device_id(cand) == did_norm:
+                            return gid
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        return None
+
+    # --- Temperature processing helpers ---------------------------------------
+    def _on_stop_capture_status(self, payload: dict) -> None:
+        try:
+            status = (payload or {}).get("status")
+            if status == "success" and hasattr(self.view, "on_capture_stopped"):
+                try:
+                    self.view.on_capture_stopped(payload)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _http_base(self) -> Optional[str]:
+        # Prefer discovered host/port from active socket connection, but fall back to config
+        try:
+            host = (self._http_host or "").strip()
+            if not host:
+                host = str(getattr(config, "SOCKET_HOST", "http://localhost") or "http://localhost").strip()
+            if not host.startswith("http://") and not host.startswith("https://"):
+                host = f"http://{host}"
+            port = int(self._http_port or getattr(config, "HTTP_PORT", 5000))
+            base = f"{host}:{port}"
+            try:
+                print(f"[ctrl] http_base={base}")
+            except Exception:
+                pass
+            return base
+        except Exception:
+            return None
+
+    def _update_temp_config(self, slopes: dict, enabled: bool) -> None:
+        if self.client is None:
+            return
+        try:
+            self.client.emit("updateDynamoConfig", {"key": "useTemperatureCorrection", "value": bool(enabled)})
+        except Exception:
+            pass
+        if slopes is not None:
+            try:
+                self.client.emit("updateDynamoConfig", {"key": "temperatureCorrection", "value": {"x": float(slopes.get("x", 0.0)), "y": float(slopes.get("y", 0.0)), "z": float(slopes.get("z", 0.0))}})
+            except Exception:
+                pass
+        try:
+            self.client.emit("applyTemperatureCorrection")
+        except Exception:
+            pass
+
+    def apply_temperature_correction(self) -> None:
+        """Apply current temperature correction settings to devices/groups."""
+        if self.client is None:
+            return
+        try:
+            self.client.emit("applyTemperatureCorrection")
+        except Exception:
+            pass
+
+    def _process_csv(self, csv_path: str, device_id: str, output_dir: str, output_filename: Optional[str]) -> Optional[str]:
+        base = self._http_base()
+        if base is None:
+            return None
+        # Backend route is mounted under /api/device/process-csv
+        url = f"{base}/api/device/process-csv"
+        try:
+            print(f"[ctrl] process-csv POST url={url} deviceId={device_id} outDir={output_dir} file={output_filename}")
+        except Exception:
+            pass
+        body = {
+            "csvPath": csv_path,
+            "deviceId": device_id,
+            "outputDir": output_dir,
+        }
+        if output_filename:
+            body["outputFilename"] = output_filename
+        try:
+            resp = requests.post(url, json=body, timeout=60)
+            if resp.ok:
+                try:
+                    data = resp.json() or {}
+                except Exception:
+                    data = {}
+                # Prefer explicit backend output path keys
+                out_path = data.get("outputPath") or data.get("processedPath") or data.get("path")
+                if out_path:
+                    try:
+                        print(f"[ctrl] process-csv OK: outputPath={out_path}")
+                    except Exception:
+                        pass
+                    return str(out_path)
+                # Fallback: construct path if backend didn't return one
+                return os.path.join(output_dir, f"{output_filename or 'processed'}.csv")
+            else:
+                print(f"[ctrl] process-csv failed: {resp.status_code} {resp.text}")
+        except Exception as e:
+            print(f"[ctrl] process-csv exception: {e}")
+        return None
+
+    def run_temperature_processing(self, folder: str, device_id: str, csv_path: str, slopes: dict) -> tuple[Optional[str], Optional[str]]:
+        # Ensure output directory
+        try:
+            out_dir = os.path.join(folder, "processed")
+            os.makedirs(out_dir, exist_ok=True)
+        except Exception:
+            out_dir = folder
+        # Baseline OFF: prefer reuse but fallback to processing if not found
+        off_path = None
+        try:
+            if not meta_store.has_off_for_csv(csv_path):
+                self._update_temp_config(slopes, False)
+                off_name = os.path.splitext(os.path.basename(csv_path))[0] + "__temp_off"
+                print(f"[ctrl] TEMP OFF processing: csv='{csv_path}' device='{device_id}' out_dir='{out_dir}' name='{off_name}'")
+                off_path = self._process_csv(csv_path, device_id, out_dir, off_name)
+                import time as _t
+                if off_path:
+                    meta_store.upsert_processed_run(csv_path, device_id, None, None, None, None, off_path, int(_t.time() * 1000))
+            else:
+                # Try to recover last off_path from DB
+                print(f"[ctrl] skip baseline OFF: already processed for {csv_path}")
+                runs = meta_store.get_runs_for_csv(csv_path)
+                for r in runs:
+                    if r.get("output_off"):
+                        off_path = r.get("output_off")
+                        break
+                # Fallback: if DB says processed but no path recovered, process now
+                if not off_path:
+                    self._update_temp_config(slopes, False)
+                    off_name = os.path.splitext(os.path.basename(csv_path))[0] + "__temp_off"
+                    print(f"[ctrl] TEMP OFF fallback processing: csv='{csv_path}' device='{device_id}' out_dir='{out_dir}' name='{off_name}'")
+                    off_path = self._process_csv(csv_path, device_id, out_dir, off_name)
+                    import time as _t
+                    if off_path:
+                        meta_store.upsert_processed_run(csv_path, device_id, None, None, None, None, off_path, int(_t.time() * 1000))
+        except Exception as e:
+            print(f"[ctrl] TEMP OFF error: {e}")
+        # TEMP ON: skip duplicates for same slopes
+        self._update_temp_config(slopes, True)
+        on_name = os.path.splitext(os.path.basename(csv_path))[0] + "__temp_on"
+        on_path = None
+        try:
+            sx = float(slopes.get("x", 0.0))
+            sy = float(slopes.get("y", 0.0))
+            sz = float(slopes.get("z", 0.0))
+            if not meta_store.has_on_for_csv(csv_path, sx, sy, sz):
+                print(f"[ctrl] TEMP ON processing: csv='{csv_path}' device='{device_id}' out_dir='{out_dir}' name='{on_name}' slopes=({sx},{sy},{sz})")
+                on_path = self._process_csv(csv_path, device_id, out_dir, on_name)
+                import time as _t
+                if on_path:
+                    meta_store.upsert_processed_run(csv_path, device_id, sx, sy, sz, on_path, None, int(_t.time() * 1000))
+            else:
+                # Fetch last on_path for these slopes if stored
+                print(f"[ctrl] skip TEMP ON: duplicate slopes ({sx},{sy},{sz}) for {csv_path}")
+                runs = meta_store.get_runs_for_csv(csv_path)
+                for r in runs:
+                    rx, ry, rz = r.get("slope_x"), r.get("slope_y"), r.get("slope_z")
+                    if rx == sx and ry == sy and rz == sz and r.get("output_on"):
+                        on_path = r.get("output_on")
+                        break
+                # Fallback: DB says processed but no path found — process again
+                if not on_path:
+                    print(f"[ctrl] TEMP ON fallback processing: csv='{csv_path}' device='{device_id}' out_dir='{out_dir}' name='{on_name}' slopes=({sx},{sy},{sz})")
+                    on_path = self._process_csv(csv_path, device_id, out_dir, on_name)
+                    import time as _t
+                    if on_path:
+                        meta_store.upsert_processed_run(csv_path, device_id, sx, sy, sz, on_path, None, int(_t.time() * 1000))
+        except Exception as e:
+            print(f"[ctrl] TEMP ON error: {e}")
+        # Optional: signal or log
+        try:
+            print(f"[ctrl] temperature processing done: on={on_path}, off={off_path}")
+        except Exception:
+            pass
+        return on_path, off_path
 
     def tare(self, group_id: str | None = None) -> None:
         if self.client is None:

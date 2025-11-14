@@ -51,5 +51,6 @@ class LiveTestSession:
     stages: List[LiveTestStage] = field(default_factory=list)
     started_at_ms: Optional[int] = None
     ended_at_ms: Optional[int] = None
+    is_temp_test: bool = False
 
 

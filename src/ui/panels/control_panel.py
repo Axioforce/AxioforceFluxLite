@@ -7,6 +7,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from ... import config
 from ..state import ViewState
 from .live_testing_panel import LiveTestingPanel
+from .temperature_testing_panel import TemperatureTestingPanel
 from ..delegates import DeviceListDelegate
 
 
@@ -301,10 +302,14 @@ class ControlPanel(QtWidgets.QWidget):
         # Live Testing tab
         self.live_testing_panel = LiveTestingPanel(self.state)
         self._live_tab_index = tabs.addTab(self.live_testing_panel, "Live Testing")
+        # Temperature Testing tab (to the right of Live Testing)
+        self.temperature_testing_panel = TemperatureTestingPanel()
+        self._temp_tab_index = tabs.addTab(self.temperature_testing_panel, "Temperature Testing")
         # Ensure tabs consume available vertical space (MainWindow controls overall 3:2 split)
         try:
             tabs.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
             self.live_testing_panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+            self.temperature_testing_panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         except Exception:
             pass
 
@@ -470,6 +475,7 @@ class ControlPanel(QtWidgets.QWidget):
                 self.refresh_devices_requested.emit()
             if idx == getattr(self, "_live_tab_index", -1):
                 self.live_testing_tab_selected.emit()
+            # No-op for Temperature Testing tab select for now
         except Exception:
             pass
 
