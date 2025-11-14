@@ -83,8 +83,14 @@ def run_qt() -> int:
     from PySide6 import QtWidgets  # type: ignore
     from .ui.main_window import MainWindow
     from .controller import Controller
+    from . import meta_store
 
     app = QtWidgets.QApplication(sys.argv)
+    # Ensure local metadata store exists
+    try:
+        meta_store.init_db()
+    except Exception:
+        pass
     win = MainWindow()
     ctrl = Controller(win)
     win.showMaximized()
@@ -124,6 +130,15 @@ def run_qt() -> int:
         win.on_package_model(ctrl.package_model)
         win.on_activate_model(ctrl.activate_model)
         win.on_deactivate_model(ctrl.deactivate_model)
+        # Resolve group ID for captures
+        win.on_resolve_group_id(ctrl.resolve_group_id_for_device)
+        # Temperature testing processing callback
+        win.on_temp_process(ctrl.run_temperature_processing)
+        # Apply temperature correction wiring
+        try:
+            win.on_apply_temperature_correction(ctrl.apply_temperature_correction)
+        except Exception:
+            pass
     except Exception:
         pass
     rc = app.exec()

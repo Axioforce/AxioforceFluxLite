@@ -10,6 +10,7 @@ from .state import ViewState
 from .widgets.world_canvas import WorldCanvas
 from .panels.control_panel import ControlPanel
 from .panels.live_testing_panel import LiveTestingPanel
+from .panels.temperature_testing_panel import TemperatureTestingPanel
 from .dialogs.live_test_setup import LiveTestSetupDialog
 from .dialogs.live_test_summary import LiveTestSummaryDialog
 from .dialogs.tare_prompt import TarePromptDialog
@@ -17,6 +18,7 @@ from .dialogs.model_packager import ModelPackagerDialog
 from ..live_testing_model import GRID_BY_MODEL, LiveTestSession, LiveTestStage, GridCellResult, Thresholds
 from .widgets.force_plot import ForcePlotWidget
 from .widgets.moments_view import MomentsViewWidget
+from .. import meta_store
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -33,6 +35,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Heatmap storage
         self._heatmaps = {}
         self._heatmap_metrics = {}
+        self._heatmap_points_raw = {}
 
         central = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(central)
@@ -87,6 +90,9 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.canvas_left.live_cell_clicked.connect(self._on_live_cell_clicked)
             self.canvas_right.live_cell_clicked.connect(self._on_live_cell_clicked)
+            # Also use clicks for calibration grid view (when no live session)
+            self.canvas_left.live_cell_clicked.connect(self._on_calibration_cell_clicked)
+            self.canvas_right.live_cell_clicked.connect(self._on_calibration_cell_clicked)
         except Exception:
             pass
         self.top_tabs_left.setCurrentWidget(self.canvas_left)
@@ -108,6 +114,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.live_testing_panel.load_45v_requested.connect(self._on_load_45v)
             self.controls.live_testing_panel.generate_heatmap_requested.connect(self._on_generate_heatmap)
             self.controls.live_testing_panel.heatmap_selected.connect(self._on_heatmap_selected)
+            self.controls.live_testing_panel.heatmap_view_changed.connect(self._on_heatmap_view_changed)
         except Exception:
             pass
         self.canvas_left.mound_device_selected.connect(self._on_mound_device_selected)
@@ -147,6 +154,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.live_testing_panel.package_model_requested.connect(self._on_package_model_clicked)
             self.controls.live_testing_panel.activate_model_requested.connect(self._on_activate_model)
             self.controls.live_testing_panel.deactivate_model_requested.connect(self._on_deactivate_model)
+            # Temperature Testing wiring
+            self.controls.temperature_testing_panel.browse_requested.connect(self._on_temp_browse_folder)
+            self.controls.temperature_testing_panel.run_requested.connect(self._on_temp_run_requested)
+            self.controls.temperature_testing_panel.test_changed.connect(self._on_temp_test_changed)
+            self.controls.temperature_testing_panel.processed_selected.connect(self._on_temp_processed_selected)
+            self.controls.temperature_testing_panel.view_mode_changed.connect(self._on_temp_view_mode_changed)
+            self.controls.temperature_testing_panel.stage_changed.connect(self._on_temp_stage_changed)
         except Exception:
             pass
 
@@ -162,6 +176,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._arming_window_ms: int = 2000
         self._arming_cell: Optional[Tuple[int, int]] = None
         self._arming_start_ms: Optional[int] = None
+        # Stage/time tracking for processed slicing
+        self._last_snapshot_time_ms: Optional[int] = None
+        self._stage_mark_active_idx: Optional[int] = None
+        self._stage_mark_pending_start: bool = False
 
         # Automated tare scheduler state
         self._next_tare_due_ms: Optional[int] = None
@@ -169,6 +187,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tare_active: bool = False
         self._tare_countdown_remaining_s: int = 0
         self._tare_last_tick_s: Optional[int] = None
+
+        # Backend config/capture wiring (callbacks set by controller via main.py)
+        self._on_update_dynamo_config_cb: Optional[Callable[[str, object], None]] = None
+        self._on_set_model_bypass_cb: Optional[Callable[[bool], None]] = None
+        self._resolve_group_id_cb: Optional[Callable[[str], Optional[str]]] = None
+        self._on_apply_temp_corr_cb: Optional[Callable[[], None]] = None
+        # Temp testing: pending device for metadata update
+        self._temp_meta_device_id: Optional[str] = None
+        # Track capture lifecycle tied to live session
+        self._capture_active: bool = False
+        self._capture_group_id: str = ""
+        # Track if we enabled model bypass to revert at end
+        self._should_revert_bypass: bool = False
 
         # Initialize live testing start button availability
         try:
@@ -418,8 +449,63 @@ class MainWindow(QtWidgets.QMainWindow):
         if result != LiveTestSetupDialog.Accepted:
             self._log("start_session: dialog cancelled")
             return
-        tester, bw_n = dlg.get_values()
-        self._log(f"setup_values: tester='{tester}', model_id={model_id}, device_id={dev_id}, bw_n={bw_n:.1f}")
+        tester, bw_n, is_temp_test, do_capture, save_dir = dlg.get_values()
+        self._log(f"setup_values: tester='{tester}', model_id={model_id}, device_id={dev_id}, bw_n={bw_n:.1f}, temp={is_temp_test}, capture={do_capture}")
+
+        # If capture selected, configure backend capture settings prior to session
+        if do_capture:
+            try:
+                if callable(self._on_update_dynamo_config_cb):
+                    import os as _os
+                    self._on_update_dynamo_config_cb("autoSaveCsvs", True)
+                    # Ensure per-device directories exist in both categories
+                    try:
+                        # Compute project root from this file (src/ui -> src -> root)
+                        _root = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", ".."))
+                        # Use real device id in folder name (allow '.', '-', '_')
+                        dev_norm = "".join(ch for ch in (dev_id or "") if ch.isalnum() or ch in (".", "-", "_"))
+                        base_temp = _os.path.join(_root, "temp_testing")
+                        base_live = _os.path.join(_root, "live_test_logs")
+                        temp_dir = _os.path.join(base_temp, dev_norm) if dev_norm else base_temp
+                        live_dir = _os.path.join(base_live, dev_norm) if dev_norm else base_live
+                        try:
+                            _os.makedirs(temp_dir, exist_ok=True)
+                        except Exception:
+                            pass
+                        try:
+                            _os.makedirs(live_dir, exist_ok=True)
+                        except Exception:
+                            pass
+                        # Resolve directory to use for this session: user choice or default
+                        resolved_dir_in = (save_dir or "").strip()
+                        # If user picked a base folder (without device subfolder), append device folder
+                        if not resolved_dir_in:
+                            resolved_dir = temp_dir if is_temp_test else live_dir
+                        else:
+                            norm_in = _os.path.normpath(resolved_dir_in)
+                            if dev_norm:
+                                if _os.path.normpath(norm_in) == _os.path.normpath(base_temp) and is_temp_test:
+                                    resolved_dir = _os.path.join(base_temp, dev_norm)
+                                elif _os.path.normpath(norm_in) == _os.path.normpath(base_live) and not is_temp_test:
+                                    resolved_dir = _os.path.join(base_live, dev_norm)
+                                else:
+                                    resolved_dir = resolved_dir_in
+                            else:
+                                resolved_dir = resolved_dir_in
+                        # Ensure final directory exists
+                        try:
+                            _os.makedirs(resolved_dir, exist_ok=True)
+                        except Exception:
+                            pass
+                        self._on_update_dynamo_config_cb("csvSaveDirectory", str(resolved_dir))
+                    except Exception:
+                        pass
+                    self._on_update_dynamo_config_cb("captureDetail", "allTemp")
+                    self._on_update_dynamo_config_cb("captureDetailRatio", 1)
+                    self._on_update_dynamo_config_cb("normalizeData", False)
+                # No longer managing model bypass from session setup; backend handles it
+            except Exception:
+                pass
         # Grid dimensions driven by config (canonical device space)
         rows, cols = config.GRID_DIMS_BY_MODEL.get(model_id, (3, 3))
 
@@ -443,23 +529,38 @@ class MainWindow(QtWidgets.QMainWindow):
             thresholds=thresholds,
             grid_rows=rows,
             grid_cols=cols,
+            is_temp_test=bool(is_temp_test),
         )
 
-        # Build 6 stages
+        # Build stages
         import math
         lb_to_n = 4.44822
-        targets = [45 * lb_to_n, bw_n, bw_n]  # DB, BW, BW-one-foot (full BW)
-        names = ["45 lb DB", "Body Weight", "Body Weight One Foot"]
-        stage_idx = 1
-        for location in ("A", "B"):
-            for i in range(3):
-                stage = LiveTestStage(index=stage_idx, name=names[i], location=location, target_n=targets[i], total_cells=rows * cols)
-                # Prepopulate result slots
+        if is_temp_test:
+            # Temperature Test: two phases total — 45 lb DB and two-leg Body Weight
+            names = ["45 lb DB", "Body Weight"]
+            targets = [45 * lb_to_n, bw_n]
+            stage_idx = 1
+            for i in range(len(names)):
+                stage = LiveTestStage(index=stage_idx, name=names[i], location="A", target_n=targets[i], total_cells=rows * cols)
                 for r in range(rows):
                     for c in range(cols):
                         stage.results[(r, c)] = GridCellResult(row=r, col=c)
                 session.stages.append(stage)
                 stage_idx += 1
+        else:
+            # Default: 6 stages (A/B) x (DB, BW, BW-one-foot)
+            targets = [45 * lb_to_n, bw_n, bw_n]  # DB, BW, BW-one-foot (full BW)
+            names = ["45 lb DB", "Body Weight", "Body Weight One Foot"]
+            stage_idx = 1
+            for location in ("A", "B"):
+                for i in range(3):
+                    stage = LiveTestStage(index=stage_idx, name=names[i], location=location, target_n=targets[i], total_cells=rows * cols)
+                    # Prepopulate result slots
+                    for r in range(rows):
+                        for c in range(cols):
+                            stage.results[(r, c)] = GridCellResult(row=r, col=c)
+                    session.stages.append(stage)
+                    stage_idx += 1
 
         self._live_session = session
         self._live_stage_idx = 0
@@ -506,6 +607,97 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception:
                     pass
             self._log(f"session_initialized: rows={rows}, cols={cols}, stages={len(self._live_session.stages)}")
+        except Exception:
+            pass
+        # Persist minimal metadata for future temperature testing grading
+        try:
+            import time as _t
+            started_ms = int(_t.time() * 1000)
+            # Best-effort: store resolved CSV dir and default capture name if computed later
+            csv_dir = ""
+            try:
+                csv_dir = str(getattr(self, "_capture_csv_dir", "") or "")
+            except Exception:
+                csv_dir = ""
+            cap_name = ""
+            try:
+                cap_name = str(getattr(self, "_capture_csv_name", "") or "")
+            except Exception:
+                cap_name = ""
+            meta_store.insert_live_session_meta(
+                device_id=dev_id,
+                model_id=model_id,
+                tester=tester,
+                body_weight_n=bw_n,
+                capture_name=cap_name,
+                csv_dir=csv_dir,
+                started_at_ms=started_ms,
+            )
+            # Initialize stage mark pending; first snapshot records start
+            try:
+                self._stage_mark_active_idx = 1
+                self._stage_mark_pending_start = True
+                self._log(f"stage_mark_init: idx=1 pending_start=True")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        # Start capture if requested
+        if do_capture:
+            try:
+                group_id = ""
+                try:
+                    # Prefer backend-resolved group for selected device
+                    if callable(self._resolve_group_id_cb):
+                        group_id = str(self._resolve_group_id_cb(dev_id) or "").strip()
+                    # Fallback to manual entry
+                    if not group_id:
+                        group_id = self.controls.group_edit.text().strip()
+                except Exception:
+                    group_id = ""
+                self._capture_group_id = group_id or ""
+                # Build capture start payload compatible with Controller.start_capture
+                # Use 'simple' configuration by default
+                from datetime import datetime
+                ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+                # Include device id (sanitized) in captureName
+                def _sanitize(s: str) -> str:
+                    try:
+                        # Allow '.' in capture name to preserve real device id format
+                        return "".join(ch for ch in s if (ch.isalnum() or ch in (".", "-", "_")))
+                    except Exception:
+                        return s
+                dev_part = _sanitize(dev_id or "")
+                default_name = f"{'temp' if is_temp_test else 'live'}-raw-{dev_part}-{ts}" if dev_part else f"{'temp' if is_temp_test else 'live'}-raw-{ts}"
+                payload = {
+                    "capture_name": default_name,
+                    "capture_configuration": "simple",
+                    "group_id": self._capture_group_id,
+                    "athlete_id": "",
+                    "tags": ["raw", "full-detail"],
+                }
+                # Remember capture file target for post-processing
+                try:
+                    self._capture_csv_dir = str(resolved_dir)
+                    self._capture_csv_name = str(default_name)
+                    self._capture_device_id_real = str(dev_id or "")
+                except Exception:
+                    pass
+                # Reuse ControlPanel signal so Controller handles wiring
+                self.controls.start_capture_requested.emit(payload)
+                self._capture_active = True
+                self._log(f"capture_started: group_id='{self._capture_group_id}' name='{default_name}'")
+            except Exception:
+                pass
+
+        # If temperature test, ensure temperature correction is turned off on backend
+        try:
+            if is_temp_test and callable(self._on_update_dynamo_config_cb):
+                self._on_update_dynamo_config_cb("useTemperatureCorrection", False)
+                if callable(self._on_apply_temp_corr_cb):
+                    self._on_apply_temp_corr_cb()
+                self._log("temp_test: disabled temperature correction (applied)")
         except Exception:
             pass
 
@@ -573,6 +765,7 @@ class MainWindow(QtWidgets.QMainWindow):
             from PySide6.QtGui import QColor
             model_id = (self._live_session.model_id or "06").strip()
             is_db = (stage.name.lower().find("db") >= 0)
+            is_temp = bool(getattr(self._live_session, "is_temp_test", False))
             # Use per-session thresholds (DB fixed-N, BW derived from BW% of body weight)
             base_tol = (
                 float(self._live_session.thresholds.dumbbell_tol_n)
@@ -589,19 +782,22 @@ class MainWindow(QtWidgets.QMainWindow):
                 try:
                     if cell is None or cell.fz_mean_n is None:
                         continue
-                    err = cell.error_n
-                    if err is None:
-                        err = abs(float(cell.fz_mean_n) - float(stage.target_n))
-                    if err <= base_tol * mult.get("green", 1.0):
-                        color = QColor(0, 200, 0, 120)
-                    elif err <= base_tol * mult.get("light_green", 1.25):
-                        color = QColor(80, 220, 80, 120)
-                    elif err <= base_tol * mult.get("yellow", 1.5):
-                        color = QColor(220, 200, 0, 120)
-                    elif err <= base_tol * mult.get("orange", 2.0):
-                        color = QColor(230, 140, 0, 120)
+                    if is_temp:
+                        color = QColor(160, 90, 255, 140)  # purple
                     else:
-                        color = QColor(220, 0, 0, 120)
+                        err = cell.error_n
+                        if err is None:
+                            err = abs(float(cell.fz_mean_n) - float(stage.target_n))
+                        if err <= base_tol * mult.get("green", 1.0):
+                            color = QColor(0, 200, 0, 120)
+                        elif err <= base_tol * mult.get("light_green", 1.25):
+                            color = QColor(80, 220, 80, 120)
+                        elif err <= base_tol * mult.get("yellow", 1.5):
+                            color = QColor(220, 200, 0, 120)
+                        elif err <= base_tol * mult.get("orange", 2.0):
+                            color = QColor(230, 140, 0, 120)
+                        else:
+                            color = QColor(220, 0, 0, 120)
                     self.canvas_left.set_live_cell_color(int(r), int(c), color)
                     self.canvas_right.set_live_cell_color(int(r), int(c), color)
                 except Exception:
@@ -614,9 +810,9 @@ class MainWindow(QtWidgets.QMainWindow):
             total = int(stage.total_cells)
             stage_text = f"Stage {stage.index}: {stage.name} @ {stage.location}"
             self.controls.live_testing_panel.set_stage_progress(stage_text, completed, total)
-            # Keep Next enabled for free navigation
+            # Enable Next only when stage done
             try:
-                self.controls.live_testing_panel.btn_next.setEnabled(True)
+                self.controls.live_testing_panel.btn_next.setEnabled(bool(completed >= total))
             except Exception:
                 pass
             # Set label to Finish when last stage is next
@@ -782,6 +978,30 @@ class MainWindow(QtWidgets.QMainWindow):
             return None
 
     def _submit_results_and_end(self) -> None:
+        # If capture active, stop it before computing summary
+        try:
+            if self._capture_active and (self._capture_group_id or "").strip():
+                self.controls.stop_capture_requested.emit({"group_id": self._capture_group_id})
+                self._log(f"capture_stopped: group_id='{self._capture_group_id}'")
+        except Exception:
+            pass
+        finally:
+            self._capture_active = False
+            self._capture_group_id = ""
+        # Attempt to rewrite device_id column in capture CSV to real device id
+        try:
+            self._rewrite_capture_csv_device_id()
+        except Exception:
+            pass
+        # Revert model bypass if we enabled it for this session
+        try:
+            if self._should_revert_bypass and callable(self._on_set_model_bypass_cb):
+                self._on_set_model_bypass_cb(False)
+                self._log("model_bypass_reverted:false")
+        except Exception:
+            pass
+        finally:
+            self._should_revert_bypass = False
         summary = self._compute_summary()
         if summary is None:
             self._on_live_end()
@@ -869,6 +1089,667 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         self._on_live_end()
+
+    # Controller callback registrations
+    def on_update_dynamo_config(self, slot: Callable[[str, object], None]) -> None:
+        self._on_update_dynamo_config_cb = slot
+
+    def on_set_model_bypass(self, slot: Callable[[bool], None]) -> None:
+        self._on_set_model_bypass_cb = slot
+
+    def on_resolve_group_id(self, slot: Callable[[str], Optional[str]]) -> None:
+        self._resolve_group_id_cb = slot
+
+    # --- Capture CSV post-processing ---
+    def _rewrite_capture_csv_device_id(self) -> None:
+        try:
+            import os
+            import csv
+            directory = str(getattr(self, "_capture_csv_dir", "") or "")
+            name = str(getattr(self, "_capture_csv_name", "") or "")
+            real_id = str(getattr(self, "_capture_device_id_real", "") or "")
+            if not directory or not name or not real_id:
+                return
+            path = os.path.join(directory, f"{name}.csv")
+            if not os.path.isfile(path):
+                return
+            # Read and rewrite only if 'device_id' column exists
+            tmp_path = path + ".tmp"
+            with open(path, "r", newline="", encoding="utf-8") as fin, open(tmp_path, "w", newline="", encoding="utf-8") as fout:
+                reader = csv.reader(fin)
+                writer = csv.writer(fout)
+                header = next(reader, None)
+                if not header:
+                    return
+                writer.writerow(header)
+                # Try common column names
+                idx = -1
+                candidates = ["device_id", "deviceId", "device"]
+                low = [h.strip() for h in header]
+                for cand in candidates:
+                    try:
+                        if cand in low:
+                            idx = low.index(cand)
+                            break
+                    except Exception:
+                        continue
+                if idx < 0:
+                    # Write remainder unchanged
+                    for row in reader:
+                        writer.writerow(row)
+                else:
+                    for row in reader:
+                        try:
+                            if len(row) > idx:
+                                row[idx] = real_id
+                        except Exception:
+                            pass
+                        writer.writerow(row)
+            try:
+                os.replace(tmp_path, path)
+            except Exception:
+                try:
+                    # Fallback on Windows
+                    os.remove(path)
+                    os.rename(tmp_path, path)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # Called by controller when stopCaptureStatus returns success
+    def on_capture_stopped(self, _payload: Optional[dict] = None) -> None:
+        try:
+            self._rewrite_capture_csv_device_id()
+        except Exception:
+            pass
+
+    # --- Temperature Testing handlers ---
+    def _on_temp_browse_folder(self) -> None:
+        # Choose a device folder under repo_root/temp_testing
+        import os
+        try:
+            # Project root: two levels up from this file (src/ui -> src -> root)
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+            start = os.path.join(repo_root, "temp_testing")
+        except Exception:
+            start = ""
+        try:
+            options = QtWidgets.QFileDialog.Options()
+            directory = QtWidgets.QFileDialog.getExistingDirectory(self, "Choose Temperature Testing Device Folder", start, options=options)
+        except Exception:
+            directory = ""
+        if not directory:
+            return
+        try:
+            # Normalize directory path
+            import os as _os
+            directory = _os.path.normpath(directory.strip())
+            self.controls.temperature_testing_panel.set_folder(directory)
+            # Device id = last folder name
+            dev = os.path.basename(directory.rstrip("\\/"))
+            self.controls.temperature_testing_panel.set_device_id(dev)
+            # Populate tests in folder (*.csv)
+            files = self._collect_csvs(directory)
+            try:
+                self._log(f"temp_browse: dir='{directory}' files_found={len(files)}")
+                for f in files[:10]:
+                    self._log(f"temp_browse_file: {f}")
+            except Exception:
+                pass
+            self.controls.temperature_testing_panel.set_tests(sorted(files))
+            # Load last known body weight for device
+            try:
+                bw_last = meta_store.get_latest_body_weight(dev)
+            except Exception:
+                bw_last = None
+            try:
+                self.controls.temperature_testing_panel.set_body_weight_n(bw_last)
+            except Exception:
+                pass
+            # Request latest model metadata for this device (without requiring it be plugged in)
+            if self._request_model_metadata_cb and dev.strip():
+                self._temp_meta_device_id = dev.strip()
+                try:
+                    self._request_model_metadata_cb(dev.strip())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _on_temp_run_requested(self, payload: dict) -> None:
+        # Expect payload: { folder, device_id, csv_path, slopes:{x,y,z} }
+        try:
+            folder = str(payload.get("folder") or "").strip()
+            device_id = str(payload.get("device_id") or "").strip()
+            csv_path = str(payload.get("csv_path") or "").strip()
+            slopes = payload.get("slopes") or {"x": 3.0, "y": 3.0, "z": 3.0}
+        except Exception:
+            return
+        if not (folder and device_id and csv_path):
+            try:
+                QtWidgets.QMessageBox.information(self, "Temperature Testing", "Please select a device folder and a CSV test file.")
+            except Exception:
+                pass
+            return
+        try:
+            self._log(f"temp_run: folder='{folder}' device='{device_id}' csv='{csv_path}' slopes={slopes}")
+        except Exception:
+            pass
+        # Delegate to controller to perform backend config and processing twice
+        on_path = None
+        off_path = None
+        if hasattr(self, "_on_temp_process_cb") and callable(self._on_temp_process_cb):
+            try:
+                self._log("temp_run: invoking controller.run_temperature_processing")
+                res = self._on_temp_process_cb(folder, device_id, csv_path, dict(slopes))
+                if isinstance(res, tuple) and len(res) == 2:
+                    on_path, off_path = res
+                self._log(f"temp_run: controller returned on='{on_path}' off='{off_path}'")
+            except Exception:
+                on_path, off_path = None, None
+                try:
+                    self._log("temp_run: controller call raised exception")
+                except Exception:
+                    pass
+        # Ingest processed CSVs into heatmap view and update processed list
+        try:
+            if off_path:
+                self._log(f"temp_run: ingest OFF path='{off_path}'")
+                self._ingest_processed_csv("TEMP OFF", off_path)
+                self._temp_baseline_key = off_path
+            if on_path:
+                self._log(f"temp_run: ingest ON path='{on_path}'")
+                self._ingest_processed_csv("TEMP ON", on_path)
+                self._temp_selected_key = on_path
+            # Rebuild processed runs list for this csv
+            self._log("temp_run: rebuilding processed runs list")
+            self._on_temp_test_changed(csv_path)
+            # Apply views
+            self._log("temp_run: applying views")
+            self._apply_temp_views()
+            self._log("temp_run: apply views done")
+        except Exception:
+            pass
+
+    def _ingest_processed_csv(self, tag: str, csv_path: str, t_start_ms: Optional[int] = None, t_end_ms: Optional[int] = None) -> None:
+        # Parse processed CSV and add to heatmap stores under a key derived from filename
+        import os
+        import csv as _csv
+        # Compose key with time-window suffix for stage slicing
+        key = csv_path
+        if t_start_ms is not None or t_end_ms is not None:
+            key = f"{csv_path}#t:{t_start_ms or ''}-{t_end_ms or ''}"
+        base = os.path.basename(csv_path)
+        label = f"{tag}: {base}"
+        points: list[tuple[float, float, str]] = []
+        raw_points: list[dict] = []
+        count = 0
+        abs_pcts: list[float] = []
+        signed_pcts: list[float] = []
+        try:
+            self._log(f"ingest_csv: tag='{tag}' path='{csv_path}' window=({t_start_ms},{t_end_ms}) key='{key}'")
+        except Exception:
+            pass
+        try:
+            with open(csv_path, "r", newline="", encoding="utf-8") as f:
+                reader = _csv.DictReader(f)
+                for row in reader:
+                    try:
+                        # Optional time window filter
+                        if t_start_ms is not None or t_end_ms is not None:
+                            try:
+                                tval = int(float(row.get("time", row.get("time_ms", 0)) or 0))
+                            except Exception:
+                                tval = 0
+                            if t_start_ms is not None and tval < int(t_start_ms):
+                                continue
+                            if t_end_ms is not None and tval > int(t_end_ms):
+                                continue
+                        # Prefer COP columns when present, else x_mm/y_mm, else x/y
+                        try:
+                            x_mm = float(row.get("COPx", row.get("x_mm", row.get("x", 0.0))) or 0.0)
+                            y_mm = float(row.get("COPy", row.get("y_mm", row.get("y", 0.0))) or 0.0)
+                        except Exception:
+                            x_mm = float(row.get("x_mm", row.get("x", 0.0)) or 0.0)
+                            y_mm = float(row.get("y_mm", row.get("y", 0.0)) or 0.0)
+                        # Optional percent/ratio fields; if missing, derive a presence ratio (1.0) based on sum-z being nonzero
+                        try:
+                            ratio = float(row.get("ratio"))  # type: ignore[arg-type]
+                        except Exception:
+                            ratio = 0.0
+                        try:
+                            abs_pct = float(row.get("abs_pct", row.get("absPercent", 0.0)) or 0.0)
+                        except Exception:
+                            abs_pct = 0.0
+                        try:
+                            signed_pct = float(row.get("signed_pct", row.get("signedPercent", 0.0)) or 0.0)
+                        except Exception:
+                            signed_pct = 0.0
+                        if ratio == 0.0:
+                            try:
+                                sum_z = float(row.get("sum-z", row.get("sum_z", 0.0)) or 0.0)
+                            except Exception:
+                                sum_z = 0.0
+                            # Mark presence if any force recorded
+                            if abs(sum_z) > 0.0:
+                                ratio = 1.0
+                        # Choose a bin color heuristic based on ratio if available
+                        mult = getattr(config, "COLOR_BIN_MULTIPLIERS", {"green": 1.0, "light_green": 1.25, "yellow": 1.5, "orange": 2.0})
+                        if ratio <= mult.get("green", 1.0):
+                            bin_color = "green"
+                        elif ratio <= mult.get("light_green", 1.25):
+                            bin_color = "light_green"
+                        elif ratio <= mult.get("yellow", 1.5):
+                            bin_color = "yellow"
+                        elif ratio <= mult.get("orange", 2.0):
+                            bin_color = "orange"
+                        else:
+                            bin_color = "red"
+                        points.append((x_mm, y_mm, bin_color))
+                        raw_points.append({"x_mm": x_mm, "y_mm": y_mm, "ratio": ratio, "abs_pct": abs_pct, "signed_pct": signed_pct})
+                        count += 1
+                        abs_pcts.append(abs_pct)
+                        signed_pcts.append(signed_pct)
+                    except Exception:
+                        continue
+        except Exception:
+            return
+        # Store into heatmap structures
+        try:
+            self._heatmaps[key] = points
+            self._heatmap_points_raw[key] = raw_points
+            # Basic metrics
+            def _median(vals: list[float]) -> float:
+                if not vals:
+                    return 0.0
+                vs = sorted(vals)
+                return vs[len(vs)//2]
+            self._heatmap_metrics[key] = {
+                "count": count,
+                "mean_pct": (sum(abs_pcts) / len(abs_pcts)) if abs_pcts else 0.0,
+                "median_pct": _median(abs_pcts),
+                "max_pct": max(abs_pcts) if abs_pcts else 0.0,
+                "signed_bias_pct": (sum(signed_pcts) / len(signed_pcts)) if signed_pcts else 0.0,
+            }
+            try:
+                m = self._heatmap_metrics[key]
+                self._log(f"ingest_csv_done: key='{key}' points={len(points)} metrics={{count:{m.get('count')}, mean:{m.get('mean_pct'):.2f}%, med:{m.get('median_pct'):.2f}%, max:{m.get('max_pct'):.2f}%, bias:{m.get('signed_bias_pct'):.2f}%}}")
+            except Exception:
+                pass
+            # Add entry to list
+            try:
+                self.controls.live_testing_panel.add_heatmap_entry(label, key, count)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _collect_csvs(self, directory: str) -> list[str]:
+        # Return CSV files in the directory (non-recursive only)
+        import os
+        results: list[str] = []
+        try:
+            for name in os.listdir(directory):
+                try:
+                    # Be robust to multiple dots; check last extension only
+                    stripped = name.strip()
+                    last_dot = stripped.rfind(".")
+                    ext = stripped[last_dot + 1 :].lower() if last_dot >= 0 else ""
+                    if ext == "csv":
+                        results.append(os.path.join(directory, stripped))
+                except Exception:
+                    continue
+        except Exception:
+            results = []
+        return results
+
+    # --- Temperature Testing stage handlers ---
+    def _on_temp_test_changed(self, csv_path: str) -> None:
+        # Build processed runs list and stage list for this CSV
+        entries: list[dict] = []
+        stages_ui: list[str] = ["All"]
+        try:
+            # Processed runs
+            runs = meta_store.get_runs_for_csv(csv_path)
+            try:
+                self._log(f"temp_runs: {len(runs)} entries for csv='{csv_path}'")
+            except Exception:
+                pass
+            baseline_added = False
+            for r in runs:
+                offp = (r or {}).get("output_off")
+                onp = (r or {}).get("output_on")
+                if offp and not baseline_added:
+                    entries.append({"label": "No values (Baseline)", "path": offp, "is_baseline": True})
+                    baseline_added = True
+                if onp:
+                    sx = r.get("slope_x"); sy = r.get("slope_y"); sz = r.get("slope_z")
+                    label = f"{sx:.3g},{sy:.3g},{sz:.3g}" if all(v is not None for v in (sx, sy, sz)) else "x,y,z"
+                    entries.append({"label": label, "path": onp, "slope_x": sx, "slope_y": sy, "slope_z": sz, "is_baseline": False})
+            # Stage list (from DB)
+            try:
+                device_id = self.controls.temperature_testing_panel.lbl_device_id.text().strip()
+                import os as _os
+                cap_name = _os.path.splitext(_os.path.basename(csv_path))[0]
+                marks = meta_store.get_stage_marks(device_id, cap_name)
+                names = [m.get("stage_name") for m in (marks or []) if m.get("stage_name")]
+                # unique order-preserving
+                seen = set()
+                for n in names:
+                    if n not in seen:
+                        stages_ui.append(n)
+                        seen.add(n)
+                try:
+                    self._log(f"temp_stages: {len(stages_ui)-1} stages for capture='{cap_name}'")
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        except Exception:
+            entries = []
+        try:
+            self.controls.temperature_testing_panel.set_processed_runs(entries)
+            self.controls.temperature_testing_panel.set_stages(stages_ui)
+        except Exception:
+            pass
+        # Set baseline key if available
+        try:
+            base = next((e for e in entries if e.get("is_baseline")), None)
+            if base:
+                self._temp_baseline_raw = str(base.get("path"))
+        except Exception:
+            pass
+
+    def _on_temp_processed_selected(self, entry: dict) -> None:
+        path = str((entry or {}).get("path") or "")
+        if not path:
+            return
+        self._temp_selected_raw = path
+        # Re-apply views to reflect new selection
+        self._apply_temp_views()
+
+    def _on_temp_view_mode_changed(self, mode: str) -> None:
+        self._temp_view_mode = mode or "Heatmap"
+        self._apply_temp_views()
+
+    def _on_temp_stage_changed(self, stage_name: str) -> None:
+        self._temp_stage_name = stage_name or "All"
+        self._apply_temp_views()
+
+    def _stage_window_for(self, csv_path: str, stage_name: str) -> tuple[Optional[int], Optional[int]]:
+        if not stage_name or stage_name == "All":
+            return (None, None)
+        try:
+            device_id = self.controls.temperature_testing_panel.lbl_device_id.text().strip()
+        except Exception:
+            device_id = ""
+        if not device_id:
+            return (None, None)
+        import os as _os
+        cap_name = _os.path.splitext(_os.path.basename(csv_path))[0]
+        marks = meta_store.get_stage_marks(device_id, cap_name)
+        # Combine windows of same stage into [min_start, max_end]
+        starts = []
+        ends = []
+        for m in (marks or []):
+            if (m or {}).get("stage_name") == stage_name:
+                s = m.get("start_ms"); e = m.get("end_ms")
+                if s is not None:
+                    starts.append(int(s))
+                if e is not None:
+                    ends.append(int(e))
+        if not starts:
+            return (None, None)
+        t0 = min(starts)
+        t1 = max(ends) if ends else None
+        return (t0, t1)
+
+    def _apply_temp_views(self) -> None:
+        # Determine time window for stage
+        t0 = t1 = None
+        stage = getattr(self, "_temp_stage_name", "All")
+        base_raw = getattr(self, "_temp_baseline_raw", None)
+        sel_raw = getattr(self, "_temp_selected_raw", None)
+        try:
+            self._log(f"apply_views: stage='{stage}' base='{base_raw or ''}' sel='{sel_raw or ''}'")
+        except Exception:
+            pass
+        if stage and stage != "All":
+            # Derive stage windows from baseline if possible; else from selected
+            ref = base_raw or sel_raw
+            if ref:
+                t0, t1 = self._stage_window_for(ref, stage)
+        try:
+            self._log(f"apply_views: time_window=({t0},{t1})")
+        except Exception:
+            pass
+        # If a specific stage is selected, replay processed CSV like live (arming + stability) and color grid by accuracy
+        stage_rendered = False
+        if stage and stage != "All":
+            try:
+                dev_type = (self.state.selected_device_type or "06").strip()
+                rows, cols = getattr(config, "GRID_DIMS_BY_MODEL", {}).get(dev_type, (3, 3))
+                # Prepare canvases
+                self.canvas_left.set_heatmap_points([])
+                self.canvas_right.set_heatmap_points([])
+                self.canvas_left.show_live_grid(int(rows), int(cols))
+                self.canvas_right.show_live_grid(int(rows), int(cols))
+                # Targets and tolerance for this stage
+                def _targets_for(stage_name: str) -> tuple[float, float]:
+                    lb_to_n = 4.44822
+                    is_db = (stage_name.lower().find("db") >= 0)
+                    if is_db:
+                        target = 45.0 * lb_to_n
+                        tol_n = float(getattr(config, "THRESHOLDS_DB_N_BY_MODEL", {}).get(dev_type, 6.0))
+                    else:
+                        try:
+                            bw_n = meta_store.get_latest_body_weight(self.controls.temperature_testing_panel.lbl_device_id.text().strip()) or 0.0
+                        except Exception:
+                            bw_n = 0.0
+                        pct = float(getattr(config, "THRESHOLDS_BW_PCT_BY_MODEL", {}).get(dev_type, 0.01))
+                        target = float(bw_n)
+                        tol_n = round(float(bw_n) * pct, 1)
+                    return float(target), float(tol_n)
+                target_n, tol_n = _targets_for(stage or "Body Weight")
+                # Replay helper
+                from collections import deque
+                def _replay(csv_path: str) -> dict[tuple[int, int], tuple[float, float]]:
+                    results: dict[tuple[int, int], tuple[float, float]] = {}
+                    if not csv_path:
+                        return results
+                    try:
+                        import csv as _csv
+                        with open(csv_path, "r", newline="", encoding="utf-8") as f:
+                            r = _csv.DictReader(f)
+                            active_cell: tuple[int, int] | None = None
+                            window: deque[tuple[int, float, float, float]] = deque()
+                            arming_cell: tuple[int, int] | None = None
+                            arming_start: int | None = None
+                            for row in r:
+                                try:
+                                    t_ms = int(float(row.get("time", row.get("time_ms", 0)) or 0))
+                                except Exception:
+                                    continue
+                                if t0 is not None and t_ms < int(t0):
+                                    continue
+                                if t1 is not None and t_ms > int(t1):
+                                    break
+                                try:
+                                    x_mm = float(row.get("COPx", 0.0) or 0.0)
+                                    y_mm = float(row.get("COPy", 0.0) or 0.0)
+                                    fz = float(row.get("sum-z", row.get("sum_z", 0.0)) or 0.0)
+                                except Exception:
+                                    continue
+                                cell = self._cell_from_mm(x_mm, y_mm, dev_type, int(rows), int(cols))
+                                if cell is None:
+                                    arming_cell = None
+                                    arming_start = None
+                                    active_cell = None
+                                    window.clear()
+                                    continue
+                                # append and trim window to stability horizon
+                                window.append((t_ms, x_mm, y_mm, fz))
+                                while window and (window[-1][0] - window[0][0]) > max(0, self._stability_window_ms):
+                                    window.popleft()
+                                # Arming (≥50 N for 2.0s in same cell)
+                                if active_cell is None:
+                                    if abs(fz) >= 50.0:
+                                        if arming_cell == cell:
+                                            arm_span = int(t_ms) - int(arming_start or t_ms)
+                                        else:
+                                            arming_cell = cell
+                                            arming_start = int(t_ms)
+                                            arm_span = 0
+                                        if (cell not in results) and arm_span >= self._arming_window_ms:
+                                            active_cell = cell
+                                            window.clear()
+                                    else:
+                                        arming_cell = None
+                                        arming_start = None
+                                        continue
+                                else:
+                                    if cell != active_cell:
+                                        active_cell = None
+                                        window.clear()
+                                        continue
+                                    if not window:
+                                        continue
+                                    t_span = window[-1][0] - window[0][0]
+                                    required_ms = max(0, self._stability_window_ms - self._stability_tolerance_ms)
+                                    if t_span < required_ms:
+                                        continue
+                                    vals = [w[3] for w in window]
+                                    mean_fz = sum(vals) / len(vals)
+                                    var = sum((v - mean_fz) ** 2 for v in vals) / max(1, (len(vals) - 1))
+                                    std_fz = var ** 0.5
+                                    if std_fz <= 5.0:
+                                        err_n = abs(mean_fz - target_n)
+                                        results[active_cell] = (float(mean_fz), float(err_n))
+                                        active_cell = None
+                                        window.clear()
+                        return results
+                    except Exception:
+                        return results
+                # Paint results
+                from PySide6.QtGui import QColor
+                mult = getattr(config, "COLOR_BIN_MULTIPLIERS", {"green": 1.0, "light_green": 1.25, "yellow": 1.5, "orange": 2.0})
+                def _paint(results: dict[tuple[int, int], tuple[float, float]], canvas) -> dict:
+                    metrics = {"count": 0, "mean_pct": 0.0, "median_pct": 0.0, "max_pct": 0.0, "signed_bias_pct": 0.0}
+                    if not results:
+                        return metrics
+                    pcts = []
+                    signed = []
+                    for (r, c), (mean_fz, err_n) in results.items():
+                        pct = (abs(err_n) / (target_n if abs(target_n) > 1e-6 else 1.0)) * 100.0
+                        pcts.append(pct)
+                        signed.append(((mean_fz - target_n) / (target_n if abs(target_n) > 1e-6 else 1.0)) * 100.0)
+                        if err_n <= tol_n * mult.get("green", 1.0):
+                            color = QColor(0, 200, 0, 120)
+                        elif err_n <= tol_n * mult.get("light_green", 1.25):
+                            color = QColor(80, 220, 80, 120)
+                        elif err_n <= tol_n * mult.get("yellow", 1.5):
+                            color = QColor(230, 210, 0, 120)
+                        elif err_n <= tol_n * mult.get("orange", 2.0):
+                            color = QColor(230, 140, 0, 120)
+                        else:
+                            color = QColor(220, 0, 0, 120)
+                        try:
+                            canvas.set_live_cell_color(int(r), int(c), color)
+                        except Exception:
+                            pass
+                    pcts_sorted = sorted(pcts)
+                    metrics["count"] = len(pcts)
+                    metrics["mean_pct"] = sum(pcts) / len(pcts) if pcts else 0.0
+                    metrics["median_pct"] = pcts_sorted[len(pcts_sorted)//2] if pcts_sorted else 0.0
+                    metrics["max_pct"] = max(pcts) if pcts else 0.0
+                    metrics["signed_bias_pct"] = sum(signed) / len(signed) if signed else 0.0
+                    return metrics
+                base_metrics = {}
+                sel_metrics = {}
+                if base_raw:
+                    base_metrics = _paint(_replay(base_raw), self.canvas_left)
+                if sel_raw:
+                    sel_metrics = _paint(_replay(sel_raw), self.canvas_right)
+                # Update metrics pane
+                try:
+                    self.controls.temperature_testing_panel.lbl_base_cnt.setText(str(int(base_metrics.get("count", 0))))
+                    self.controls.temperature_testing_panel.lbl_base_mean.setText(f"{float(base_metrics.get('mean_pct', 0.0)):.1f}%")
+                    self.controls.temperature_testing_panel.lbl_base_med.setText(f"{float(base_metrics.get('median_pct', 0.0)):.1f}%")
+                    self.controls.temperature_testing_panel.lbl_base_max.setText(f"{float(base_metrics.get('max_pct', 0.0)):.1f}%")
+                    self.controls.temperature_testing_panel.lbl_sel_cnt.setText(str(int(sel_metrics.get("count", 0))))
+                    self.controls.temperature_testing_panel.lbl_sel_mean.setText(f"{float(sel_metrics.get('mean_pct', 0.0)):.1f}%")
+                    self.controls.temperature_testing_panel.lbl_sel_med.setText(f"{float(sel_metrics.get('median_pct', 0.0)):.1f}%")
+                    self.controls.temperature_testing_panel.lbl_sel_max.setText(f"{float(sel_metrics.get('max_pct', 0.0)):.1f}%")
+                except Exception:
+                    pass
+                stage_rendered = True
+            except Exception:
+                stage_rendered = False
+        # Re-ingest with filter (non-stage/all fallback) and set keys
+        if not stage_rendered:
+            try:
+                if base_raw:
+                    self._ingest_processed_csv("TEMP OFF", base_raw, t0, t1)
+                    self._temp_baseline_key = f"{base_raw}#t:{t0 or ''}-{t1 or ''}" if (t0 or t1) else base_raw
+                if sel_raw:
+                    self._ingest_processed_csv("TEMP ON", sel_raw, t0, t1)
+                    self._temp_selected_key = f"{sel_raw}#t:{t0 or ''}-{t1 or ''}" if (t0 or t1) else sel_raw
+            except Exception:
+                pass
+        # Apply to canvases
+        try:
+            if getattr(self, "_temp_view_mode", "Heatmap") == "Grid View":
+                # Grid view: show grids; colors already managed in ingestion outputs to metrics only
+                if self._temp_baseline_key:
+                    self.canvas_left.set_heatmap_points([])
+                    self.canvas_left.show_live_grid(*getattr(config, "GRID_DIMS_BY_MODEL", {}).get(self.state.selected_device_type or "06", (3, 3)))
+                if self._temp_selected_key:
+                    self.canvas_right.set_heatmap_points([])
+                    self.canvas_right.show_live_grid(*getattr(config, "GRID_DIMS_BY_MODEL", {}).get(self.state.selected_device_type or "06", (3, 3)))
+            else:
+                if self._temp_baseline_key:
+                    pts = self._heatmaps.get(self._temp_baseline_key, [])
+                    self.canvas_left.set_heatmap_points(pts)
+                if self._temp_selected_key:
+                    pts2 = self._heatmaps.get(self._temp_selected_key, [])
+                    self.canvas_right.set_heatmap_points(pts2)
+                try:
+                    self.top_tabs_left.setCurrentWidget(self.canvas_left)
+                    self.top_tabs_right.setCurrentWidget(self.canvas_right)
+                except Exception:
+                    pass
+            # Metrics pane update (if available)
+            def _metrics_for(key: Optional[str]) -> dict:
+                if not key:
+                    return {}
+                return dict(self._heatmap_metrics.get(key, {}))
+            if not stage_rendered:
+                base_m = _metrics_for(getattr(self, "_temp_baseline_key", None))
+                sel_m = _metrics_for(getattr(self, "_temp_selected_key", None))
+                try:
+                    self.controls.temperature_testing_panel.lbl_base_cnt.setText(str(int(base_m.get("count") or 0)))
+                    self.controls.temperature_testing_panel.lbl_base_mean.setText(f"{float(base_m.get('mean_pct') or 0.0):.1f}%")
+                    self.controls.temperature_testing_panel.lbl_base_med.setText(f"{float(base_m.get('median_pct') or 0.0):.1f}%")
+                    self.controls.temperature_testing_panel.lbl_base_max.setText(f"{float(base_m.get('max_pct') or 0.0):.1f}%")
+                    self.controls.temperature_testing_panel.lbl_sel_cnt.setText(str(int(sel_m.get("count") or 0)))
+                    self.controls.temperature_testing_panel.lbl_sel_mean.setText(f"{float(sel_m.get('mean_pct') or 0.0):.1f}%")
+                    self.controls.temperature_testing_panel.lbl_sel_med.setText(f"{float(sel_m.get('median_pct') or 0.0):.1f}%")
+                    self.controls.temperature_testing_panel.lbl_sel_max.setText(f"{float(sel_m.get('max_pct') or 0.0):.1f}%")
+                    try:
+                        self._log(f"apply_views_done: base={{cnt:{int(base_m.get('count') or 0)}, mean:{float(base_m.get('mean_pct') or 0.0):.1f}%}} sel={{cnt:{int(sel_m.get('count') or 0)}, mean:{float(sel_m.get('mean_pct') or 0.0):.1f}%}}")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def on_temp_process(self, slot: Callable[[str, str, str, dict], None]) -> None:
+        self._on_temp_process_cb = slot
+
+    def on_apply_temperature_correction(self, slot: Callable[[], None]) -> None:
+        self._on_apply_temp_corr_cb = slot
 
     def _on_end_session_clicked(self) -> None:
         # Submit whatever progress exists, using the active model id display
@@ -1009,6 +1890,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.live_testing_panel.set_session_model_id(current_text)
             # Remember for summary/export
             self._active_model_label = (current_text or "").strip() or None
+            # If temperature testing requested metadata for a device, set label there too
+            try:
+                if hasattr(self.controls, "temperature_testing_panel") and self._temp_meta_device_id is not None:
+                    self.controls.temperature_testing_panel.set_model_label(current_text)
+                    self._temp_meta_device_id = None
+            except Exception:
+                pass
             # Update calibration gating based on new model
             self._update_calibration_enabled()
         except Exception:
@@ -1078,78 +1966,92 @@ class MainWindow(QtWidgets.QMainWindow):
             self._set_last_csv_dir(directory)
         except Exception:
             pass
-        # Find candidate files with '45V' in name (case-insensitive) and .csv
+        # Find candidate files with '45V', 'OLS', 'TLS' in name (case-insensitive) and .csv
         import os
-        candidates: list[str] = []
+        cand_45v: list[str] = []
+        cand_ols: list[str] = []
+        cand_tls: list[str] = []
         try:
             for name in os.listdir(directory):
                 try:
                     low = name.lower()
-                    if ("45v" in low) and low.endswith(".csv"):
-                        candidates.append(os.path.join(directory, name))
+                    full = os.path.join(directory, name)
+                    if not low.endswith(".csv"):
+                        continue
+                    if "45v" in low:
+                        cand_45v.append(full)
+                    elif "ols" in low:
+                        cand_ols.append(full)
+                    elif "tls" in low:
+                        cand_tls.append(full)
                 except Exception:
                     continue
         except Exception:
-            candidates = []
-        if not candidates:
+            cand_45v, cand_ols, cand_tls = [], [], []
+        if not (cand_45v or cand_ols or cand_tls):
             try:
-                QtWidgets.QMessageBox.information(self, "Calibration", "No 45V CSV files found in the selected folder.")
-                self.controls.live_testing_panel.set_calibration_status("No 45V files found")
+                QtWidgets.QMessageBox.information(self, "Calibration", "No 45V/OLS/TLS CSV files found in the selected folder.")
+                self.controls.live_testing_panel.set_calibration_status("No calibration files found")
             except Exception:
                 pass
             return
-        # If multiple, prompt to choose
-        chosen_path = candidates[0]
-        if len(candidates) > 1:
-            try:
-                basenames = [os.path.basename(p) for p in candidates]
-                item, ok = QtWidgets.QInputDialog.getItem(self, "Select 45V File", "Choose file:", basenames, 0, False)
-                if ok and item:
-                    idx = basenames.index(item)
-                    chosen_path = candidates[idx]
-                else:
-                    self.controls.live_testing_panel.set_calibration_status("—")
-                    return
-            except Exception:
-                pass
+        # Choose first match for each type (simple heuristic). Future: prompt if multiple.
+        chosen_45v = cand_45v[0] if cand_45v else ""
+        chosen_ols = cand_ols[0] if cand_ols else ""
+        chosen_tls = cand_tls[0] if cand_tls else ""
         # Update status label and enable generate
         try:
-            self.controls.live_testing_panel.set_calibration_status(os.path.basename(chosen_path))
+            # Compact status with checks in preferred order
+            checks: list[str] = []
+            # Use green checks via HTML span
+            check_sym = '<span style="color:#2ecc71;">✓</span>'
+            if chosen_45v:
+                checks.append(f"45V {check_sym}")
+            if chosen_tls:
+                checks.append(f"TLS {check_sym}")
+            if chosen_ols:
+                checks.append(f"OLS {check_sym}")
+            status = ("Loaded: " + "  ".join(checks)) if checks else "Loaded: —"
+            self.controls.live_testing_panel.set_calibration_status(status)
             self.controls.live_testing_panel.set_generate_enabled(True)
         except Exception:
             pass
         # Store for processing
         try:
-            self._cal_45v_path = chosen_path
+            self._cal_45v_path = chosen_45v
+            self._cal_ols_path = chosen_ols
+            self._cal_tls_path = chosen_tls
         except Exception:
             pass
-        # If a backend-processed file already exists in calibration_output, remember it
+        # If backend-processed files already exist in calibration_output, remember them
         try:
             import os as _os
-            base = _os.path.splitext(_os.path.basename(chosen_path))[0]
-            out_dir = _os.path.join(_os.path.dirname(chosen_path), "calibration_output")
-            existing = ""
-            if _os.path.isdir(out_dir):
-                for name in _os.listdir(out_dir):
-                    low = name.lower()
-                    if base.lower() in low and ("__processed" in low or "processed" in low) and low.endswith(".csv"):
-                        existing = _os.path.join(out_dir, name)
-                        break
-            self._cal_45v_processed = existing or ""
-            if self._cal_45v_processed:
-                try:
-                    self.controls.live_testing_panel.set_calibration_status(f"Found existing processed file: { _os.path.basename(self._cal_45v_processed) }")
-                except Exception:
-                    pass
+            out_dir = ""
+            for key, src in (("45v", chosen_45v), ("ols", chosen_ols), ("tls", chosen_tls)):
+                if not src:
+                    setattr(self, f"_cal_{key}_processed", "")
+                    continue
+                base = _os.path.splitext(_os.path.basename(src))[0]
+                out_dir = _os.path.join(_os.path.dirname(src), "calibration_output")
+                existing = ""
+                if _os.path.isdir(out_dir):
+                    for name in _os.listdir(out_dir):
+                        low = name.lower()
+                        if base.lower() in low and ("__processed" in low or "processed" in low) and low.endswith(".csv"):
+                            existing = _os.path.join(out_dir, name)
+                            break
+                setattr(self, f"_cal_{key}_processed", existing or "")
         except Exception:
             pass
 
     def _on_generate_heatmap(self) -> None:
-        # Require a selected 45V file
-        path = getattr(self, "_cal_45v_path", "") or ""
-        if not path:
+        # Require at least one selected calibration file
+        p45 = getattr(self, "_cal_45v_path", "") or ""
+        pols = getattr(self, "_cal_ols_path", "") or ""
+        ptls = getattr(self, "_cal_tls_path", "") or ""
+        if not (p45 or pols or ptls):
             try:
-                QtWidgets.QMessageBox.information(self, "Calibration", "Please load a 45V CSV first.")
+                QtWidgets.QMessageBox.information(self, "Calibration", "Please load a calibration folder with 45V/OLS/TLS CSVs first.")
             except Exception:
                 pass
             return
@@ -1158,11 +2060,13 @@ class MainWindow(QtWidgets.QMainWindow):
         device_id = (self.state.selected_device_id or "").strip()
         # Import processor with fallback (relative then absolute), log any errors
         process_45v = None
+        process_ols = None
+        process_tls = None
         try:
-            from ..calibration.processor import process_45v  # type: ignore
+            from ..calibration.processor import process_45v, process_ols, process_tls  # type: ignore
         except Exception as e1:
             try:
-                from calibration.processor import process_45v  # type: ignore
+                from calibration.processor import process_45v, process_ols, process_tls  # type: ignore
             except Exception as e2:
                 try:
                     print(f"[calib] import processor failed: rel={e1} abs={e2}")
@@ -1172,48 +2076,39 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.live_testing_panel.set_calibration_status("Processing…")
         except Exception:
             pass
-        try:
-            existing_processed = str(getattr(self, "_cal_45v_processed", "") or "").strip() or None
-            result = process_45v(path, model_id, plate_type, device_id, existing_processed) if callable(process_45v) else {"error": "no_processor"}
-        except Exception as e:
-            result = {"error": str(e)}
-        # Handle result
-        if isinstance(result, dict) and not result.get("error"):
-            pts = result.get("points") or []
-            metrics = result.get("metrics") or {}
-            processed_csv = str(result.get("processed_csv") or "").strip()
+        # Process each available test independently
+        summary_msgs: list[str] = []
+        statuses: dict[str, bool] = {}
+        debug_series: list[dict] = []
+        def _run_one(tag: str, src_path: str, processed_hint_attr: str, fn) -> None:
+            if not src_path or not callable(fn):
+                return
             try:
-                print(f"[calib] processed_csv={processed_csv}")
-                print(f"[calib] metrics={metrics}")
+                existing_processed = str(getattr(self, processed_hint_attr, "") or "").strip() or None
             except Exception:
-                pass
-            # Map to tuples for canvas
+                existing_processed = None
             try:
-                tuples = [(float(p.get("x_mm", 0.0)), float(p.get("y_mm", 0.0)), str(p.get("bin", "green"))) for p in pts]
-            except Exception:
-                tuples = []
-            try:
-                self.canvas_right.set_heatmap_points(tuples)
-                # Switch the right pane to Plate View to show the heatmap
+                res = fn(src_path, model_id, plate_type, device_id, existing_processed)
+            except Exception as e:
+                res = {"error": str(e)}
+            if isinstance(res, dict) and not res.get("error"):
+                pts = res.get("points") or []
+                metrics = res.get("metrics") or {}
+                processed_csv = str(res.get("processed_csv") or "").strip()
+                dbg = res.get("debug") or {}
+                # Map to tuples for canvas
                 try:
-                    self.top_tabs_right.setCurrentWidget(self.canvas_right)
+                    tuples = [(float(p.get("x_mm", 0.0)), float(p.get("y_mm", 0.0)), str(p.get("bin", "green"))) for p in pts]
                 except Exception:
-                    pass
-            except Exception:
-                pass
-            # Update status with metrics
-            try:
-                cnt = int(metrics.get("count", 0))
-                mean_e = float(metrics.get("mean_err", 0.0))
-                max_e = float(metrics.get("max_err", 0.0))
-                med_e = float(metrics.get("median_err", 0.0))
-                base = processed_csv.split("/")[-1] if "/" in processed_csv else processed_csv.split("\\")[-1]
-                tail = (base if len(base) < 48 else (base[:22] + "…" + base[-22:])) if base else ""
-                suffix = (f" • {tail}" if tail else "")
-                self.controls.live_testing_panel.set_calibration_status(f"Heatmap: {cnt} pts • mean {mean_e:.1f} N • max {max_e:.1f} N{suffix}")
-                # Add to heatmap list with key=processed_csv
-                if processed_csv:
-                    label = base or processed_csv
+                    tuples = []
+                try:
+                    # Add to store; don't overwrite existing entries for other files
+                    if processed_csv:
+                        base = processed_csv.split("/")[-1] if "/" in processed_csv else processed_csv.split("\\")[-1]
+                        label = base or processed_csv
+                    else:
+                        label = f"{tag} heatmap"
+                        processed_csv = f"__{tag}__"
                     try:
                         self._heatmaps
                     except Exception:
@@ -1222,49 +2117,155 @@ class MainWindow(QtWidgets.QMainWindow):
                         self._heatmap_metrics
                     except Exception:
                         self._heatmap_metrics = {}
-                    self._heatmaps[processed_csv] = tuples
-                    self._heatmap_metrics[processed_csv] = {
-                        "count": cnt,
-                        "mean_err": mean_e,
-                        "max_err": max_e,
-                        "median_err": med_e,
-                    }
-                    # Rebuild heatmap list including 'All Heatmaps'
                     try:
-                        self._rebuild_heatmap_list()
+                        self._heatmap_points_raw
+                    except Exception:
+                        self._heatmap_points_raw = {}
+                    self._heatmaps[processed_csv] = tuples
+                    # Store raw points for grid view and percent metrics
+                    self._heatmap_points_raw[processed_csv] = [
+                        {
+                            "x_mm": float(p.get("x_mm", 0.0)),
+                            "y_mm": float(p.get("y_mm", 0.0)),
+                            "ratio": float(p.get("ratio", 0.0)),
+                            "abs_pct": float(p.get("abs_pct", 0.0)),
+                            "signed_pct": float(p.get("signed_pct", 0.0)),
+                        }
+                        for p in (pts or [])
+                    ]
+                    cnt = int(metrics.get("count", 0))
+                    # Store full metrics as provided (includes N and %)
+                    self._heatmap_metrics[processed_csv] = dict(metrics)
+                    summary_msgs.append(f"{tag}: {cnt} pts, mean {float(metrics.get('mean_err', 0.0)):.1f} N ({float(metrics.get('mean_pct', 0.0)):.1f}%)")
+                    statuses[tag] = True
+                    # Keep debug for combined plotting
+                    try:
+                        if isinstance(dbg, dict) and dbg.get("t_ms"):
+                            dcopy = dict(dbg)
+                            dcopy["tag"] = tag
+                            debug_series.append(dcopy)
                     except Exception:
                         pass
-                # Update metrics display for the current selection
-                try:
-                    self.controls.live_testing_panel.set_heatmap_metrics(cnt, mean_e, max_e, med_e)
                 except Exception:
                     pass
-            except Exception:
-                pass
-        else:
-            try:
-                err = (result or {}).get("error") if isinstance(result, dict) else "processing_failed"
-                self.controls.live_testing_panel.set_calibration_status(f"Failed: {err}")
-            except Exception:
-                pass
+            else:
+                try:
+                    err = (res or {}).get("error") if isinstance(res, dict) else "processing_failed"
+                    summary_msgs.append(f"{tag}: failed ({err})")
+                    statuses[tag] = False
+                except Exception:
+                    pass
 
-    def _on_heatmap_selected(self, key: str) -> None:
+        _run_one("45V", p45, "_cal_45v_processed", process_45v)
+        _run_one("OLS", pols, "_cal_ols_processed", process_ols)
+        _run_one("TLS", ptls, "_cal_tls_processed", process_tls)
+        # Update canvas to last processed (prefer 45V if available, else OLS, else TLS)
         try:
-            tuples = (self._heatmaps or {}).get(str(key))
-        except Exception:
-            tuples = None
-        if tuples:
-            try:
-                self.canvas_right.set_heatmap_points(tuples)
-                self.top_tabs_right.setCurrentWidget(self.canvas_right)
-            except Exception:
-                pass
-        # Update metrics area
-        try:
-            m = (self._heatmap_metrics or {}).get(str(key)) or {}
-            self.controls.live_testing_panel.set_heatmap_metrics(int(m.get("count", 0)), float(m.get("mean_err", 0.0)), float(m.get("max_err", 0.0)), float(m.get("median_err", 0.0)))
+            key_order = []
+            # Build keys in same order as processed
+            for tag, src in (("45V", p45), ("OLS", pols), ("TLS", ptls)):
+                if not src:
+                    continue
+                # Attempt to find stored key by matching base name
+                import os as _os
+                out_dir = _os.path.join(_os.path.dirname(src), "calibration_output")
+                base = _os.path.splitext(_os.path.basename(src))[0]
+                chosen_key = ""
+                for k in (self._heatmaps or {}).keys():
+                    if base.lower() in k.lower():
+                        chosen_key = k
+                        break
+                if chosen_key:
+                    key_order.append(chosen_key)
+            if key_order:
+                last_key = key_order[-1]
+                self._apply_heatmap_or_grid(last_key)
         except Exception:
             pass
+        # Rebuild list including All Heatmaps
+        try:
+            self._rebuild_heatmap_list()
+        except Exception:
+            pass
+        # Status summary
+        try:
+            # Build concise generated status line with checks and xs (red) per attempted test
+            tokens: list[str] = []
+            green = '<span style="color:#2ecc71;">✓</span>'
+            red = '<span style="color:#e74c3c;">✗</span>'
+            for tag, src in (("45V", p45), ("TLS", ptls), ("OLS", pols)):
+                if not src:
+                    continue
+                ok = statuses.get(tag, False)
+                sym = green if ok else red
+                tokens.append(f"{tag} {sym}")
+            status_line = "Heatmaps Generated: " + ("  ".join(tokens) if tokens else "—")
+            self.controls.live_testing_panel.set_calibration_status(status_line)
+        except Exception:
+            pass
+        # Optional combined debug plot: 3 panels (45V, OLS, TLS) with window markers
+        try:
+            import os as _os
+            if str(_os.environ.get("AXIO_CALIB_PLOT", "0")).strip() == "1" and debug_series:
+                self._plot_calibration_debug_multi(debug_series)
+        except Exception:
+            pass
+
+    def _plot_calibration_debug_multi(self, series_list: list[dict]) -> None:
+        try:
+            import matplotlib.pyplot as plt
+        except Exception:
+            return
+        # Keep consistent ordering: 45V, OLS, TLS if present
+        order = ["45V", "OLS", "TLS"]
+        ordered = []
+        for name in order:
+            for d in (series_list or []):
+                if str(d.get("tag") or "").upper() == name:
+                    ordered.append(d)
+                    break
+        # Append any others not matched
+        for d in (series_list or []):
+            if d not in ordered:
+                ordered.append(d)
+        if not ordered:
+            return
+        rows = len(ordered)
+        fig, axes = plt.subplots(rows, 1, sharex=False, figsize=(10, max(3 * rows, 6)))
+        if rows == 1:
+            axes = [axes]
+        for ax, d in zip(axes, ordered):
+            t = list(d.get("t_ms") or [])
+            if not t:
+                continue
+            t0 = t[0]
+            ts = [((x - t0) / 1000.0) for x in t]
+            bz = list(d.get("bz") or [])
+            sumz = list(d.get("sum_z") or [])
+            bzs = list(d.get("bz_smooth") or [])
+            wins = list(d.get("windows_idx") or [])
+            ax.plot(ts, bz, label="bz (truth)", linewidth=1.0, color="#1f77b4")
+            ax.plot(ts, sumz, label="sum-z (model)", linewidth=1.0, color="#ff7f0e")
+            if bzs and len(bzs) == len(bz):
+                ax.plot(ts, bzs, label="bz_smooth", linewidth=1.8, color="#2ca02c")
+            for (i0, j) in wins:
+                if 0 <= i0 < len(ts) and 0 < j <= len(ts):
+                    ax.axvline(ts[i0], color="#2ca02c", linestyle="--", alpha=0.6)
+                    ax.axvline(ts[j - 1], color="#d62728", linestyle="--", alpha=0.6)
+            tag = str(d.get("tag") or "")
+            ax.set_title(f"{tag} (windows={len(wins)})")
+            ax.set_ylabel("N")
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc="upper right")
+        axes[-1].set_xlabel("Time (s)")
+        fig.tight_layout()
+        try:
+            plt.show(block=False)
+        except TypeError:
+            plt.show()
+
+    def _on_heatmap_selected(self, key: str) -> None:
+        self._apply_heatmap_or_grid(key)
 
     def _rebuild_heatmap_list(self) -> None:
         try:
@@ -1277,6 +2278,7 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
         # Build combined '__ALL__'
         combined: list[tuple[float, float, str]] = []
+        combined_raw: list[dict] = []
         total_count = 0
         total_mean_num = 0.0
         medians: list[float] = []
@@ -1285,6 +2287,12 @@ class MainWindow(QtWidgets.QMainWindow):
             if not isinstance(pts, list):
                 continue
             combined.extend(pts)
+            # Combine raw points (may be empty)
+            try:
+                for rp in (self._heatmap_points_raw or {}).get(k, []):
+                    combined_raw.append(dict(rp))
+            except Exception:
+                pass
             m = (self._heatmap_metrics or {}).get(k) or {}
             c = int(m.get("count", 0))
             total_count += c
@@ -1294,18 +2302,25 @@ class MainWindow(QtWidgets.QMainWindow):
         if combined:
             # Store combined
             self._heatmaps["__ALL__"] = combined
-            mean_all = (total_mean_num / max(1, total_count)) if total_count > 0 else 0.0
+            self._heatmap_points_raw["__ALL__"] = combined_raw
+            # Compute percent-based combined metrics from raw points
+            abs_pcts = [float(r.get("abs_pct", 0.0)) for r in combined_raw if isinstance(r, dict)]
+            signed_pcts = [float(r.get("signed_pct", 0.0)) for r in combined_raw if isinstance(r, dict)]
+            mean_pct_all = (sum(abs_pcts) / len(abs_pcts)) if abs_pcts else 0.0
             try:
-                medians.sort()
-                median_all = medians[len(medians)//2] if medians else 0.0
+                abs_pcts_sorted = sorted(abs_pcts)
+                median_pct_all = abs_pcts_sorted[len(abs_pcts_sorted)//2] if abs_pcts_sorted else 0.0
             except Exception:
-                median_all = 0.0
-            max_all = max(maxes) if maxes else 0.0
+                median_pct_all = 0.0
+            max_pct_all = max(abs_pcts) if abs_pcts else 0.0
+            bias_pct_all = (sum(signed_pcts) / len(signed_pcts)) if signed_pcts else 0.0
+            # Keep count; omit N-based summaries to avoid misleading across tests
             self._heatmap_metrics["__ALL__"] = {
                 "count": total_count,
-                "mean_err": mean_all,
-                "median_err": median_all,
-                "max_err": max_all,
+                "mean_pct": mean_pct_all,
+                "median_pct": median_pct_all,
+                "max_pct": max_pct_all,
+                "signed_bias_pct": bias_pct_all,
             }
             try:
                 self.controls.live_testing_panel.add_heatmap_entry("All Heatmaps", "__ALL__", total_count)
@@ -1316,9 +2331,209 @@ class MainWindow(QtWidgets.QMainWindow):
             try:
                 base = k.split("/")[-1] if "/" in k else k.split("\\")[-1]
                 c = int((self._heatmap_metrics or {}).get(k, {}).get("count", 0))
-                self.controls.live_testing_panel.add_heatmap_entry(base or k, k, c)
+                # Short label based on test type in filename
+                low = base.lower()
+                if "45v" in low:
+                    short = "45V"
+                elif "ols" in low:
+                    short = "OLS"
+                elif "tls" in low:
+                    short = "TLS"
+                else:
+                    short = "HM"
+                self.controls.live_testing_panel.add_heatmap_entry(short, k, c)
             except Exception:
                 continue
+
+    def _on_calibration_cell_clicked(self, row: int, col: int) -> None:
+        # Only when not in a live session and in Grid View
+        if getattr(self, "_live_session", None) is not None:
+            return
+        try:
+            if self.controls.live_testing_panel.current_heatmap_view() != "Grid View":
+                return
+            item = self.controls.live_testing_panel.heatmap_list.currentItem()
+            key = item.data(QtCore.Qt.UserRole) if item is not None else None
+            if not key:
+                return
+            raw = (self._heatmap_points_raw or {}).get(str(key)) or []
+            # Compute per-cell ratios (reuse mapping)
+            dev_type = (self.state.selected_device_type or "06").strip()
+            rows, cols = getattr(config, "GRID_DIMS_BY_MODEL", {}).get(dev_type, (3, 3))
+            signed_pcts: list[float] = []
+            for pt in raw:
+                try:
+                    x_mm = float(pt.get("x_mm", 0.0))
+                    y_mm = float(pt.get("y_mm", 0.0))
+                    sp = float(pt.get("signed_pct", 0.0))
+                except Exception:
+                    continue
+                cell = self._cell_from_mm(x_mm, y_mm, dev_type, int(rows), int(cols))
+                if cell == (int(row), int(col)):
+                    signed_pcts.append(sp)
+            count = len(signed_pcts)
+            avg_signed = (sum(signed_pcts) / count) if count else 0.0
+            # Show on-grid overlay status and highlight the clicked cell
+            try:
+                self.canvas_right.set_live_active_cell(int(row), int(col))
+            except Exception:
+                pass
+            try:
+                sign = "+" if avg_signed >= 0 else ""
+                status = f"Signed Error: {sign}{avg_signed:.1f}%\nCount: {count}"
+                self.canvas_right.set_live_status(status)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _on_heatmap_view_changed(self, _mode: str) -> None:
+        # Re-apply current selection with new view mode
+        try:
+            item = self.controls.live_testing_panel.heatmap_list.currentItem()
+            key = item.data(QtCore.Qt.UserRole) if item is not None else None
+            if key:
+                self._apply_heatmap_or_grid(str(key))
+        except Exception:
+            pass
+
+    def _apply_heatmap_or_grid(self, key: str) -> None:
+        try:
+            mode = self.controls.live_testing_panel.current_heatmap_view()
+        except Exception:
+            mode = "Heatmap"
+        # Clear any prior grid selection/status on selection change
+        try:
+            self.canvas_right.set_live_active_cell(None, None)
+            self.canvas_right.set_live_status(None)
+        except Exception:
+            pass
+        # Update metrics area
+        try:
+            m = (self._heatmap_metrics or {}).get(str(key)) or {}
+            self.controls.live_testing_panel.set_heatmap_metrics(dict(m), is_all=(str(key) == "__ALL__"))
+        except Exception:
+            pass
+        if mode == "Grid View":
+            self._apply_grid_view(key)
+        else:
+            # Heatmap
+            tuples = (self._heatmaps or {}).get(str(key)) or []
+            try:
+                self.canvas_right.hide_live_grid()
+            except Exception:
+                pass
+            try:
+                self.canvas_right.set_heatmap_points(tuples)
+                self.top_tabs_right.setCurrentWidget(self.canvas_right)
+            except Exception:
+                pass
+
+    def _apply_grid_view(self, key: str) -> None:
+        raw = (self._heatmap_points_raw or {}).get(str(key)) or []
+        # Determine grid dims by device type
+        dev_type = (self.state.selected_device_type or "06").strip()
+        rows, cols = getattr(config, "GRID_DIMS_BY_MODEL", {}).get(dev_type, (3, 3))
+        # Clear heatmap blobs and show grid
+        try:
+            self.canvas_right.set_heatmap_points([])
+            self.canvas_right.show_live_grid(int(rows), int(cols))
+        except Exception:
+            pass
+        # Aggregate ratios per cell
+        per_cell: dict[tuple[int, int], list[float]] = {}
+        for pt in raw:
+            try:
+                x_mm = float(pt.get("x_mm", 0.0))
+                y_mm = float(pt.get("y_mm", 0.0))
+                ratio = float(pt.get("ratio", 0.0))
+            except Exception:
+                continue
+            cell = self._cell_from_mm(x_mm, y_mm, dev_type, int(rows), int(cols))
+            if cell is None:
+                continue
+            per_cell.setdefault(cell, []).append(ratio)
+        # Color cells using ratio vs multipliers
+        mult = getattr(config, "COLOR_BIN_MULTIPLIERS", {
+            "green": 1.0, "light_green": 1.25, "yellow": 1.5, "orange": 2.0, "red": 1e9
+        })
+        from PySide6.QtGui import QColor
+        for r in range(int(rows)):
+            for c in range(int(cols)):
+                vals = per_cell.get((r, c))
+                if not vals:
+                    # clear/no color
+                    try:
+                        self.canvas_right.clear_live_cell_color(r, c)
+                    except Exception:
+                        pass
+                    continue
+                avg_ratio = sum(vals) / len(vals)
+                if avg_ratio <= mult.get("green", 1.0):
+                    color = QColor(0, 200, 0, 120)
+                elif avg_ratio <= mult.get("light_green", 1.25):
+                    color = QColor(80, 220, 80, 120)
+                elif avg_ratio <= mult.get("yellow", 1.5):
+                    color = QColor(230, 210, 0, 120)
+                elif avg_ratio <= mult.get("orange", 2.0):
+                    color = QColor(230, 140, 0, 120)
+                else:
+                    color = QColor(220, 0, 0, 120)
+                try:
+                    self.canvas_right.set_live_cell_color(r, c, color)
+                except Exception:
+                    pass
+        try:
+            self.top_tabs_right.setCurrentWidget(self.canvas_right)
+        except Exception:
+            pass
+
+    def _cell_from_mm(self, x_mm_val: float, y_mm_val: float, dev_type: str, rows: int, cols: int) -> Optional[tuple[int, int]]:
+        # Map COP (x_mm, y_mm) to grid cell using canonical device space (no rotation)
+        rx, ry = x_mm_val, y_mm_val
+        if dev_type == "06":
+            w_mm = config.TYPE06_W_MM
+            h_mm = config.TYPE06_H_MM
+        elif dev_type == "07":
+            w_mm = config.TYPE07_W_MM
+            h_mm = config.TYPE07_H_MM
+        elif dev_type == "11":
+            w_mm = config.TYPE11_W_MM
+            h_mm = config.TYPE11_H_MM
+        else:
+            w_mm = config.TYPE08_W_MM
+            h_mm = config.TYPE08_H_MM
+        half_w = w_mm / 2.0
+        half_h = h_mm / 2.0
+        if dev_type in ("07", "11"):
+            if abs(rx) > half_w or abs(ry) > half_h:
+                return None
+            col_f = (rx + half_w) / w_mm * cols
+            col_i = int(col_f)
+            if col_i < 0:
+                col_i = 0
+            elif col_i >= cols:
+                col_i = cols - 1
+            t = (half_h - ry) / h_mm
+            row_f = t * rows
+            row_i = int(row_f)
+        else:
+            if abs(ry) > half_w or abs(rx) > half_h:
+                return None
+            col_f = (ry + half_w) / w_mm * cols
+            col_i = int(col_f)
+            if col_i < 0:
+                col_i = 0
+            elif col_i >= cols:
+                col_i = cols - 1
+            t = (half_h - rx) / h_mm
+            row_f = t * rows
+            row_i = int(row_f)
+        if row_i < 0:
+            row_i = 0
+        elif row_i >= rows:
+            row_i = rows - 1
+        return (int(row_i), int(col_i))
 
     def _on_activate_model(self, model_id: str) -> None:
         dev_id = (self.state.selected_device_id or "").strip()
@@ -1327,6 +2542,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._on_activate_model_cb(dev_id, model_id)
             except Exception:
                 pass
+        # Ensure model bypass is disabled when activating a model
+        try:
+            if callable(getattr(self, "_on_set_model_bypass_cb", None)):
+                self._on_set_model_bypass_cb(False)
+                self._log("model_bypass_set:false on activate_model")
+        except Exception:
+            pass
 
     def _on_deactivate_model(self, model_id: str) -> None:
         dev_id = (self.state.selected_device_id or "").strip()
@@ -1409,6 +2631,21 @@ class MainWindow(QtWidgets.QMainWindow):
             x_mm, y_mm, fz_n, t_ms, is_visible, raw_x_mm, raw_y_mm = snap
         except Exception:
             return
+        # Track latest backend time for stage marks and start current stage if pending
+        try:
+            self._last_snapshot_time_ms = int(t_ms)
+            if self._stage_mark_pending_start and self._stage_mark_active_idx is not None:
+                try:
+                    stage = self._live_session.stages[self._live_stage_idx]
+                except Exception:
+                    stage = None
+                if stage is not None:
+                    dev_id = (self._live_session.device_id or "").strip()
+                    cap = str(getattr(self, "_capture_csv_name", "") or "")
+                    meta_store.start_stage_mark(dev_id, cap, stage.name, int(stage.index), int(self._last_snapshot_time_ms))
+                    self._stage_mark_pending_start = False
+        except Exception:
+            pass
 
         # Evaluate scheduled tare guidance before modifying arming/stability state
         self._maybe_run_tare_guidance(fz_n, int(t_ms), bool(is_visible))
@@ -1654,17 +2891,20 @@ class MainWindow(QtWidgets.QMainWindow):
                             float(self._live_session.thresholds.dumbbell_tol_n)
                             if is_db else float(self._live_session.thresholds.bodyweight_tol_n)
                         )
-                        g = config.COLOR_BIN_MULTIPLIERS
-                        if err <= base_tol * g["green"]:
-                            color = QColor(0, 200, 0, 120)
-                        elif err <= base_tol * g["light_green"]:
-                            color = QColor(80, 220, 80, 120)
-                        elif err <= base_tol * g["yellow"]:
-                            color = QColor(220, 200, 0, 120)
-                        elif err <= base_tol * g["orange"]:
-                            color = QColor(230, 140, 0, 120)
+                        if bool(getattr(self._live_session, "is_temp_test", False)):
+                            color = QColor(160, 90, 255, 140)  # purple
                         else:
-                            color = QColor(220, 0, 0, 120)
+                            g = config.COLOR_BIN_MULTIPLIERS
+                            if err <= base_tol * g["green"]:
+                                color = QColor(0, 200, 0, 120)
+                            elif err <= base_tol * g["light_green"]:
+                                color = QColor(80, 220, 80, 120)
+                            elif err <= base_tol * g["yellow"]:
+                                color = QColor(220, 200, 0, 120)
+                            elif err <= base_tol * g["orange"]:
+                                color = QColor(230, 140, 0, 120)
+                            else:
+                                color = QColor(220, 0, 0, 120)
                         self.canvas_left.set_live_cell_color(ar, ac, color)
                         self.canvas_right.set_live_cell_color(ar, ac, color)
 
