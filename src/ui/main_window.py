@@ -654,6 +654,11 @@ class MainWindow(QtWidgets.QMainWindow):
                     # Fallback to manual entry
                     if not group_id:
                         group_id = self.controls.group_edit.text().strip()
+                    # If still empty during this live/temperature test, default to device id
+                    # This mirrors backend behavior where single-device groups often use
+                    # the device axf_id as the group axf_id (e.g., "07.00000051").
+                    if not group_id and is_temp_test and dev_id:
+                        group_id = str(dev_id).strip()
                 except Exception:
                     group_id = ""
                 self._capture_group_id = group_id or ""
