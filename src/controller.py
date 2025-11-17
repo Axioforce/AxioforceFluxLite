@@ -375,6 +375,11 @@ class Controller:
                 "groupId": payload.get("group_id", ""),
                 "athleteId": payload.get("athlete_id", ""),
             }
+            # Debug: log outgoing capture payload, especially groupId for device groups
+            try:
+                print(f"[ctrl] start_capture: ui_payload={payload} socket_payload={p}")
+            except Exception:
+                pass
             if payload.get("capture_name"):
                 p["captureName"] = payload["capture_name"]
             if payload.get("tags"):
@@ -412,7 +417,16 @@ class Controller:
                 # Some servers may put array under 'groups' or 'response'
                 self._groups = list(data.get("groups") or data.get("response") or [])
             try:
-                print(f"[ctrl] getGroupsStatus: groups={len(self._groups)}")
+                # Debug: summarize group ids received from backend
+                gids: list[str] = []
+                for g in (self._groups or []):
+                    try:
+                        gid = str((g or {}).get("axfId") or (g or {}).get("axf_id") or (g or {}).get("id") or "")
+                        if gid:
+                            gids.append(gid)
+                    except Exception:
+                        continue
+                print(f"[ctrl] getGroupsStatus: groups={len(self._groups)} ids={gids}")
             except Exception:
                 pass
         except Exception:
@@ -424,6 +438,10 @@ class Controller:
         if not did_norm or not isinstance(self._groups, list):
             return None
         # Search groups for device membership
+        try:
+            print(f"[ctrl] resolve_group_id_for_device: device_id='{device_id}' normalized='{did_norm}' groups={len(self._groups)}")
+        except Exception:
+            pass
         for g in self._groups:
             try:
                 grp = g or {}
@@ -437,6 +455,10 @@ class Controller:
                     try:
                         cand = str(d.get("axfId") or d.get("id") or d.get("deviceId") or d.get("device_id") or "").strip()
                         if cand and self._normalize_device_id(cand) == did_norm:
+                            try:
+                                print(f"[ctrl] resolve_group_id_for_device: matched via devices cand='{cand}' groupId='{gid}'")
+                            except Exception:
+                                pass
                             return gid
                     except Exception:
                         continue
@@ -445,6 +467,10 @@ class Controller:
                     try:
                         cand = str(m.get("deviceId") or m.get("device_id") or "").strip()
                         if cand and self._normalize_device_id(cand) == did_norm:
+                            try:
+                                print(f"[ctrl] resolve_group_id_for_device: matched via mappings cand='{cand}' groupId='{gid}'")
+                            except Exception:
+                                pass
                             return gid
                     except Exception:
                         continue
@@ -453,11 +479,19 @@ class Controller:
                     try:
                         cand = str(m.get("deviceId") or m.get("device_id") or m.get("axfId") or m.get("id") or "").strip()
                         if cand and self._normalize_device_id(cand) == did_norm:
+                            try:
+                                print(f"[ctrl] resolve_group_id_for_device: matched via members cand='{cand}' groupId='{gid}'")
+                            except Exception:
+                                pass
                             return gid
                     except Exception:
                         continue
             except Exception:
                 continue
+        try:
+            print(f"[ctrl] resolve_group_id_for_device: no group found for device_id='{device_id}'")
+        except Exception:
+            pass
         return None
 
     # --- Temperature processing helpers ---------------------------------------
