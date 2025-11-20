@@ -114,6 +114,20 @@ class MainWindow(QtWidgets.QMainWindow):
         ctrl_row.addWidget(self.temp_plot_axis_combo)
         ctrl_row.addStretch(1)
         tpl.addLayout(ctrl_row)
+
+        # Per-plot multiplier and adjusted slope (for dashed line) summary
+        meta_row = QtWidgets.QHBoxLayout()
+        meta_row.setContentsMargins(0, 0, 0, 0)
+        meta_row.setSpacing(12)
+        meta_row.addWidget(QtWidgets.QLabel("Multiplier:"))
+        self.temp_plot_mult_label = QtWidgets.QLabel("—")
+        meta_row.addWidget(self.temp_plot_mult_label)
+        meta_row.addSpacing(16)
+        meta_row.addWidget(QtWidgets.QLabel("Adj slope:"))
+        self.temp_plot_slope_label = QtWidgets.QLabel("—")
+        meta_row.addWidget(self.temp_plot_slope_label)
+        meta_row.addStretch(1)
+        tpl.addLayout(meta_row)
         self.top_tabs_left.addTab(self.temp_plot_tab, "Temp Plot")
         # Re-plot when any Temp Plot setting changes (if a test is selected)
         try:
@@ -212,70 +226,31 @@ class MainWindow(QtWidgets.QMainWindow):
         z_grid.addWidget(self.lbl_slope_all_z, 3, 1)
         z_grid.addWidget(self.lbl_std_all_z, 3, 2)
 
-        # Load-adjusted (weight-scaled) slope model tables
-        tsl.addWidget(_lbl("Load-Adjusted Model (per-sensor avg; using |sum-z|/8.0)"))
+        # Arrange raw slope tables top-to-bottom
+        tsl.addWidget(x_box)
+        tsl.addWidget(y_box)
+        tsl.addWidget(z_box)
 
-        def _make_weight_axis_table(title: str):
-            box = QtWidgets.QGroupBox(f"{title} Axis (Load-Adjusted)")
-            grid = QtWidgets.QGridLayout(box)
-            grid.setContentsMargins(6, 6, 6, 6)
-            grid.setHorizontalSpacing(10)
-            grid.setVerticalSpacing(4)
-            grid.addWidget(_lbl("Test"), 0, 0)
-            grid.addWidget(_lbl("Adj Slope"), 0, 1)
-            return box, grid
-
-        # X axis load-adjusted table (45/BW only)
-        wx_box, wx_grid = _make_weight_axis_table("X")
-        wx_grid.addWidget(_lbl("45 lb"), 1, 0)
-        self.lbl_w_slope_db_x = _lbl("—")
-        wx_grid.addWidget(self.lbl_w_slope_db_x, 1, 1)
-        wx_grid.addWidget(_lbl("Bodyweight"), 2, 0)
-        self.lbl_w_slope_bw_x = _lbl("—")
-        wx_grid.addWidget(self.lbl_w_slope_bw_x, 2, 1)
-
-        # Y axis load-adjusted table (45/BW only)
-        wy_box, wy_grid = _make_weight_axis_table("Y")
-        wy_grid.addWidget(_lbl("45 lb"), 1, 0)
-        self.lbl_w_slope_db_y = _lbl("—")
-        wy_grid.addWidget(self.lbl_w_slope_db_y, 1, 1)
-        wy_grid.addWidget(_lbl("Bodyweight"), 2, 0)
-        self.lbl_w_slope_bw_y = _lbl("—")
-        wy_grid.addWidget(self.lbl_w_slope_bw_y, 2, 1)
-
-        # Z axis load-adjusted table (45/BW only)
-        wz_box, wz_grid = _make_weight_axis_table("Z")
-        wz_grid.addWidget(_lbl("45 lb"), 1, 0)
-        self.lbl_w_slope_db_z = _lbl("—")
-        wz_grid.addWidget(self.lbl_w_slope_db_z, 1, 1)
-        wz_grid.addWidget(_lbl("Bodyweight"), 2, 0)
-        self.lbl_w_slope_bw_z = _lbl("—")
-        wz_grid.addWidget(self.lbl_w_slope_bw_z, 2, 1)
-
-        # Arrange raw and load-adjusted tables side-by-side for each axis
-        row_x = QtWidgets.QWidget()
-        row_x_lay = QtWidgets.QHBoxLayout(row_x)
-        row_x_lay.setContentsMargins(0, 0, 0, 0)
-        row_x_lay.setSpacing(12)
-        row_x_lay.addWidget(x_box)
-        row_x_lay.addWidget(wx_box)
-        tsl.addWidget(row_x)
-
-        row_y = QtWidgets.QWidget()
-        row_y_lay = QtWidgets.QHBoxLayout(row_y)
-        row_y_lay.setContentsMargins(0, 0, 0, 0)
-        row_y_lay.setSpacing(12)
-        row_y_lay.addWidget(y_box)
-        row_y_lay.addWidget(wy_box)
-        tsl.addWidget(row_y)
-
-        row_z = QtWidgets.QWidget()
-        row_z_lay = QtWidgets.QHBoxLayout(row_z)
-        row_z_lay.setContentsMargins(0, 0, 0, 0)
-        row_z_lay.setSpacing(12)
-        row_z_lay.addWidget(z_box)
-        row_z_lay.addWidget(wz_box)
-        tsl.addWidget(row_z)
+        # Current-plot adjustment summary table (uses Temp Plot selection & load multiplier)
+        tsl.addWidget(_lbl("Current Plot Adjustment (Temp Plot using |sum-z|/8.0 load)"))
+        current_box = QtWidgets.QGroupBox("Current Plot")
+        cgrid = QtWidgets.QGridLayout(current_box)
+        cgrid.setContentsMargins(6, 6, 6, 6)
+        cgrid.setHorizontalSpacing(10)
+        cgrid.setVerticalSpacing(4)
+        cgrid.addWidget(_lbl("Base slope (solid line)"), 0, 0)
+        self.lbl_plot_base_slope = _lbl("—")
+        cgrid.addWidget(self.lbl_plot_base_slope, 0, 1)
+        cgrid.addWidget(_lbl("Multiplier"), 1, 0)
+        self.lbl_plot_multiplier = _lbl("—")
+        cgrid.addWidget(self.lbl_plot_multiplier, 1, 1)
+        cgrid.addWidget(_lbl("Adj slope (dashed line)"), 2, 0)
+        self.lbl_plot_adj_slope = _lbl("—")
+        cgrid.addWidget(self.lbl_plot_adj_slope, 2, 1)
+        cgrid.addWidget(_lbl("% better vs base (SSE)"), 3, 0)
+        self.lbl_plot_improve_pct = _lbl("—")
+        cgrid.addWidget(self.lbl_plot_improve_pct, 3, 1)
+        tsl.addWidget(current_box)
 
         tsl.addStretch(1)
         self.top_tabs_right.addTab(self.temp_slope_tab, "Temp Slopes")
@@ -411,6 +386,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._discrete_tare_mode: bool = False
         self._discrete_ready_for_data: bool = False
         self._discrete_waiting_for_unload: bool = False
+        # When True in a discrete temp session, the next tare (auto or manual)
+        # should be treated as completing the discrete tare sequence and
+        # advancing the flow.
+        self._discrete_pending_tare_complete: bool = False
         # Discrete Temp: currently selected test path for Temps-in-Test / Temp Plot
         self._selected_discrete_test_path: str = ""
         # Discrete Temp: cached per-sensor slopes and aggregated slope summaries
@@ -420,6 +399,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # Discrete Temp: load-adjusted (weight-scaled) slope model per axis
         # axis -> {"base": float, "k45": float, "kBW": float, "F45": float, "FBW": float}
         self._temp_weight_models: Dict[str, Dict[str, float]] = {}
+        # Discrete Temp: last plotted adjustment stats (for Temp Slopes "Current Plot" table)
+        self._temp_plot_last_base_slope: Optional[float] = None
+        self._temp_plot_last_multiplier: Optional[float] = None
+        self._temp_plot_last_adj_slope: Optional[float] = None
+        self._temp_plot_last_improve_pct: Optional[float] = None
         # Sensor View temperature smoothing (15 s rolling average for selected device)
         self._sensor_temp_buffer: list[Tuple[int, float]] = []  # (t_ms, tempF)
         self._sensor_temp_smoothed_f: Optional[float] = None
@@ -630,7 +614,29 @@ class MainWindow(QtWidgets.QMainWindow):
         self.controls.stop_capture_requested.connect(lambda payload: slot(payload))
 
     def on_tare(self, slot: Callable[[str], None]) -> None:
-        self.controls.tare_requested.connect(lambda gid: slot(gid))
+        """Connect backend tare handler, with discrete-temp flow integration.
+
+        In discrete temp sessions, a manual tare (e.g., after cancelling the auto-tare
+        dialog) should still count as completing the discrete tare sequence and advance
+        the flow just like an auto-tare.
+        """
+
+        def _wrapped_tare(gid: str) -> None:
+            # Always forward to backend/controller first
+            slot(gid)
+            # In discrete temp mode, treat manual tares as completing any pending
+            # discrete tare sequence (e.g., after cancelling the guidance dialog).
+            try:
+                if (
+                    self._live_session is not None
+                    and bool(getattr(self._live_session, "is_discrete_temp", False))
+                    and bool(getattr(self, "_discrete_pending_tare_complete", False))
+                ):
+                    self._on_discrete_tare_completed()
+            except Exception:
+                pass
+
+        self.controls.tare_requested.connect(_wrapped_tare)
 
     def on_config_changed(self, slot: Callable[[], None]) -> None:
         self.controls.config_changed.connect(slot)
@@ -1139,7 +1145,6 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             avgs = self._temp_slope_avgs or {}
             stds = getattr(self, "_temp_slope_stds", {}) or {}
-            models = getattr(self, "_temp_weight_models", {}) or {}
             def _get(ph: str, ax: str) -> float:
                 try:
                     return float(avgs.get(ph, {}).get(ax, 0.0))
@@ -1150,25 +1155,6 @@ class MainWindow(QtWidgets.QMainWindow):
                     return float(stds.get(ph, {}).get(ax, 0.0))
                 except Exception:
                     return 0.0
-            def _get_weighted(ph: str, ax: str) -> float:
-                """Return load-adjusted effective slope for this phase using multiplier model."""
-                try:
-                    model = models.get(ax, {}) or {}
-                    base = float(model.get("base", avgs.get("all", {}).get(ax, 0.0)))
-                    k45 = float(model.get("k45", 1.0))
-                    kBW = float(model.get("kBW", 1.0))
-                    F45 = float(model.get("F45", 0.0))
-                    FBW = float(model.get("FBW", 0.0))
-                except Exception:
-                    base = float(avgs.get("all", {}).get(ax, 0.0))
-                    k45, kBW, F45, FBW = 1.0, 1.0, 0.0, 0.0
-                if base == 0.0:
-                    return 0.0
-                if ph == "45lb":
-                    return base * k45
-                if ph == "bodyweight":
-                    return base * kBW
-                return base
             # X axis
             try:
                 self.lbl_slope_db_x.setText(f"{_get('45lb', 'x'):.6f}")
@@ -1177,9 +1163,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.lbl_std_bw_x.setText(f"{_get_std('bodyweight', 'x'):.6f}")
                 self.lbl_slope_all_x.setText(f"{_get('all', 'x'):.6f}")
                 self.lbl_std_all_x.setText(f"{_get_std('all', 'x'):.6f}")
-                # Load-adjusted table: average of corrected slopes for 45/BW using multiplier model
-                self.lbl_w_slope_db_x.setText(f"{_get_weighted('45lb', 'x'):.6f}")
-                self.lbl_w_slope_bw_x.setText(f"{_get_weighted('bodyweight', 'x'):.6f}")
             except Exception:
                 pass
             # Y axis
@@ -1190,8 +1173,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.lbl_std_bw_y.setText(f"{_get_std('bodyweight', 'y'):.6f}")
                 self.lbl_slope_all_y.setText(f"{_get('all', 'y'):.6f}")
                 self.lbl_std_all_y.setText(f"{_get_std('all', 'y'):.6f}")
-                self.lbl_w_slope_db_y.setText(f"{_get_weighted('45lb', 'y'):.6f}")
-                self.lbl_w_slope_bw_y.setText(f"{_get_weighted('bodyweight', 'y'):.6f}")
             except Exception:
                 pass
             # Z axis
@@ -1202,8 +1183,43 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.lbl_std_bw_z.setText(f"{_get_std('bodyweight', 'z'):.6f}")
                 self.lbl_slope_all_z.setText(f"{_get('all', 'z'):.6f}")
                 self.lbl_std_all_z.setText(f"{_get_std('all', 'z'):.6f}")
-                self.lbl_w_slope_db_z.setText(f"{_get_weighted('45lb', 'z'):.6f}")
-                self.lbl_w_slope_bw_z.setText(f"{_get_weighted('bodyweight', 'z'):.6f}")
+            except Exception:
+                pass
+
+            # Update "Current Plot" table from last plotted adjustment stats
+            try:
+                base = getattr(self, "_temp_plot_last_base_slope", None)
+                mult = getattr(self, "_temp_plot_last_multiplier", None)
+                adj = getattr(self, "_temp_plot_last_adj_slope", None)
+                imp = getattr(self, "_temp_plot_last_improve_pct", None)
+            except Exception:
+                base = mult = adj = imp = None
+            try:
+                if base is None:
+                    self.lbl_plot_base_slope.setText("—")
+                else:
+                    self.lbl_plot_base_slope.setText(f"{float(base):.6f}")
+            except Exception:
+                pass
+            try:
+                if mult is None:
+                    self.lbl_plot_multiplier.setText("—")
+                else:
+                    self.lbl_plot_multiplier.setText(f"{float(mult):.4f}")
+            except Exception:
+                pass
+            try:
+                if adj is None:
+                    self.lbl_plot_adj_slope.setText("—")
+                else:
+                    self.lbl_plot_adj_slope.setText(f"{float(adj):.6f}")
+            except Exception:
+                pass
+            try:
+                if imp is None:
+                    self.lbl_plot_improve_pct.setText("—")
+                else:
+                    self.lbl_plot_improve_pct.setText(f"{float(imp):.1f}%")
             except Exception:
                 pass
         except Exception:
@@ -1386,6 +1402,47 @@ class MainWindow(QtWidgets.QMainWindow):
                 symbolBrush=(200, 250, 200),
                 symbolSize=8,
             )
+
+            # Compute how much better the adjusted line fits vs base (using SSE)
+            try:
+                sse_solid = sum((float(y) - float(yb)) ** 2 for y, yb in zip(ys, solid_ys))
+                sse_dashed = sum((float(y) - float(yd)) ** 2 for y, yd in zip(ys, dashed_ys))
+                if sse_solid > 0.0:
+                    improve_pct = (sse_solid - sse_dashed) / sse_solid * 100.0
+                else:
+                    improve_pct = 0.0
+            except Exception:
+                improve_pct = 0.0
+
+            # Persist current-plot stats for Temp Slopes tab
+            try:
+                self._temp_plot_last_base_slope = float(m_solid)
+                self._temp_plot_last_multiplier = float(k_ref)
+                self._temp_plot_last_adj_slope = float(m_dashed)
+                self._temp_plot_last_improve_pct = float(improve_pct)
+            except Exception:
+                self._temp_plot_last_base_slope = m_solid
+                self._temp_plot_last_multiplier = k_ref
+                self._temp_plot_last_adj_slope = m_dashed
+                self._temp_plot_last_improve_pct = improve_pct
+
+            # Update per-plot multiplier and adjusted slope labels on Temp Plot tab
+            try:
+                if hasattr(self, "temp_plot_mult_label"):
+                    self.temp_plot_mult_label.setText(f"{k_ref:.4f}")
+            except Exception:
+                pass
+            try:
+                if hasattr(self, "temp_plot_slope_label"):
+                    self.temp_plot_slope_label.setText(f"{m_dashed:.6f}")
+            except Exception:
+                pass
+
+            # Also refresh Temp Slopes "Current Plot" table
+            try:
+                self._update_temp_slope_panel()
+            except Exception:
+                pass
         except Exception:
             pass
         # Bring Temp Plot tab to front on the left
@@ -1499,6 +1556,12 @@ class MainWindow(QtWidgets.QMainWindow):
         # Use same dialog/countdown as normal, but without periodic scheduling
         try:
             self._tare_active = True
+            # Mark that the next successful tare (auto or manual) should be
+            # treated as completing this discrete tare sequence.
+            try:
+                self._discrete_pending_tare_complete = True
+            except Exception:
+                self._discrete_pending_tare_complete = True
             # Let guidance logic seed countdown and last_tick on first sample
             self._tare_countdown_remaining_s = 0
             self._tare_last_tick_s = None
@@ -1511,6 +1574,11 @@ class MainWindow(QtWidgets.QMainWindow):
         """Advance discrete temp flow after a tare completes."""
         if self._live_session is None or not bool(getattr(self._live_session, "is_discrete_temp", False)):
             return
+        # Clear pending flag now that this discrete tare has completed.
+        try:
+            self._discrete_pending_tare_complete = False
+        except Exception:
+            self._discrete_pending_tare_complete = False
         # First tare after warmup: mark ready and show circle; do not advance stage
         if not bool(getattr(self, "_discrete_ready_for_data", False)):
             try:
@@ -2533,10 +2601,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._discrete_ready_for_data = False
             if hasattr(self, "_discrete_waiting_for_unload"):
                 self._discrete_waiting_for_unload = False
+            if hasattr(self, "_discrete_pending_tare_complete"):
+                self._discrete_pending_tare_complete = False
         except Exception:
             self._discrete_tare_mode = False
             self._discrete_ready_for_data = False
             self._discrete_waiting_for_unload = False
+            self._discrete_pending_tare_complete = False
         try:
             if self._tare_dialog is not None:
                 self._tare_dialog.reject()
@@ -4820,24 +4891,20 @@ class MainWindow(QtWidgets.QMainWindow):
                         try:
                             self.controls.tare_requested.emit(gid)
                             self._log("auto_tare(discrete, delayed): tare_requested emitted")
-                            self._on_discrete_tare_completed()
                         except Exception:
                             pass
                     try:
                         QtCore.QTimer.singleShot(2000, _do_delayed_tare)
                     except Exception:
-                        # Fallback: tare immediately if timer fails
+                        # Fallback: tare immediately if timer fails; discrete
+                        # completion will be handled by the wrapped tare handler.
                         self.controls.tare_requested.emit(gid)
                         self._log("auto_tare(discrete, fallback): tare_requested emitted")
-                        self._on_discrete_tare_completed()
                     return
-                # Subsequent discrete tares: immediate tare + flow continuation
+                # Subsequent discrete tares: immediate tare; discrete completion
+                # will be handled by the wrapped tare handler if pending.
                 self.controls.tare_requested.emit(gid)
                 self._log("auto_tare(discrete): tare_requested emitted")
-                try:
-                    self._on_discrete_tare_completed()
-                except Exception:
-                    pass
                 return
             # Normal (non-discrete) tare
             self.controls.tare_requested.emit(gid)
@@ -4862,7 +4929,11 @@ class MainWindow(QtWidgets.QMainWindow):
                         self._tare_dialog.set_force(float(fz_n))
                 except Exception:
                     pass
-                threshold = float(getattr(config, "TARE_STEP_OFF_THRESHOLD_N", 30.0))
+                # Use a higher step-off threshold during discrete temp sessions so
+                # the countdown can start once Fz is comfortably low, without
+                # affecting normal live testing behavior.
+                base_threshold = float(getattr(config, "TARE_STEP_OFF_THRESHOLD_N", 30.0))
+                threshold = 100.0 if is_discrete else base_threshold
                 countdown_seed = int(getattr(config, "TARE_COUNTDOWN_S", 15))
                 below = abs(float(fz_n)) < threshold
                 now_s = int(int(t_ms) / 1000)
