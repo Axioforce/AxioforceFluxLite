@@ -1545,20 +1545,20 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         idx = int(self._live_stage_idx)
         total_stages = len(self._live_session.stages)
-        # After DB stages (0, 2): wait for unload (Fz < 100 N) before advancing
-        if idx in (0, 2):
+        # After DB stages (0, 2, 4): wait for unload (Fz < 100 N) before advancing/tare
+        if idx in (0, 2, 4):
             try:
                 self._discrete_waiting_for_unload = True
                 self.controls.live_testing_panel.set_debug_status("Remove the load from the plate to continue (Fz < 100 N)…")
             except Exception:
                 self._discrete_waiting_for_unload = True
             return
-        # After BW stage 1: run tare sequence before continuing
-        if idx == 1:
+        # After BW stages 1 and 3: run tare sequence before continuing to next DB stage
+        if idx in (1, 3):
             self._start_discrete_tare_sequence()
             return
-        # After final BW stage 3: finish the session
-        if idx == 3:
+        # After final BW stage 5: finish the session
+        if idx == 5:
             try:
                 # Before generic summary/cleanup, write discrete session CSV rows
                 rows = self._write_discrete_session_csv()
@@ -1876,7 +1876,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return True
 
     def _start_discrete_temp_session(self, test_path: str, tester_override: Optional[str] = None, body_weight_n_override: Optional[float] = None, skip_dialog: bool = False) -> None:
-        """Start a discrete temperature live session: single center location, 6 phases."""
+        """Start a discrete temperature live session: single center location, 6 phases (3x DB, 3x BW)."""
         # Guard: only allow in single-device mode with a selected device
         if self.state.display_mode != "single" or not (self.state.selected_device_id or "").strip():
             try:
@@ -1939,16 +1939,20 @@ class MainWindow(QtWidgets.QMainWindow):
             is_discrete_temp=True,
         )
 
-        # Build 4 phases: DB/BW repeated 2x at center
+        # Build 6 phases: DB/BW repeated 3x at center
         import math
         lb_to_n = 4.44822
         names = [
-            "45 lb DB (1/2)",
-            "Body Weight (1/2)",
-            "45 lb DB (2/2)",
-            "Body Weight (2/2)",
+            "45 lb DB (1/3)",
+            "Body Weight (1/3)",
+            "45 lb DB (2/3)",
+            "Body Weight (2/3)",
+            "45 lb DB (3/3)",
+            "Body Weight (3/3)",
         ]
         targets = [
+            45 * lb_to_n,
+            bw_n,
             45 * lb_to_n,
             bw_n,
             45 * lb_to_n,
