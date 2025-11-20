@@ -115,19 +115,7 @@ class MainWindow(QtWidgets.QMainWindow):
         ctrl_row.addStretch(1)
         tpl.addLayout(ctrl_row)
 
-        # Per-plot multiplier and adjusted slope (for dashed line) summary
-        meta_row = QtWidgets.QHBoxLayout()
-        meta_row.setContentsMargins(0, 0, 0, 0)
-        meta_row.setSpacing(12)
-        meta_row.addWidget(QtWidgets.QLabel("Multiplier:"))
-        self.temp_plot_mult_label = QtWidgets.QLabel("—")
-        meta_row.addWidget(self.temp_plot_mult_label)
-        meta_row.addSpacing(16)
-        meta_row.addWidget(QtWidgets.QLabel("Adj slope:"))
-        self.temp_plot_slope_label = QtWidgets.QLabel("—")
-        meta_row.addWidget(self.temp_plot_slope_label)
-        meta_row.addStretch(1)
-        tpl.addLayout(meta_row)
+        # Temp Plot summary for this tab is shown in the Temp Slopes \"Current Plot\" table on the right.
         self.top_tabs_left.addTab(self.temp_plot_tab, "Temp Plot")
         # Re-plot when any Temp Plot setting changes (if a test is selected)
         try:
@@ -232,7 +220,6 @@ class MainWindow(QtWidgets.QMainWindow):
         tsl.addWidget(z_box)
 
         # Current-plot adjustment summary table (uses Temp Plot selection & load multiplier)
-        tsl.addWidget(_lbl("Current Plot Adjustment (Temp Plot using |sum-z|/8.0 load)"))
         current_box = QtWidgets.QGroupBox("Current Plot")
         cgrid = QtWidgets.QGridLayout(current_box)
         cgrid.setContentsMargins(6, 6, 6, 6)
@@ -375,6 +362,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._last_snapshot_time_ms: Optional[int] = None
         self._stage_mark_active_idx: Optional[int] = None
         self._stage_mark_pending_start: bool = False
+        # Temperature Test: track cells completed in current stage "turn" for auto-switching
+        self._temp_cells_this_turn: int = 0
+        # Temperature Test: pending stage index to switch to once Fz drops below threshold
+        self._temp_pending_stage_idx: Optional[int] = None
 
         # Automated tare scheduler state
         self._next_tare_due_ms: Optional[int] = None
@@ -397,15 +388,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self._temp_slope_avgs: Dict[str, Dict[str, float]] = {}  # "bodyweight"/"45lb"/"all" -> axis -> slope
         self._temp_slope_stds: Dict[str, Dict[str, float]] = {}  # "bodyweight"/"45lb"/"all" -> axis -> std
         # Discrete Temp: load-adjusted (weight-scaled) slope model per axis
-        # axis -> {"base": float, "k45": float, "kBW": float, "F45": float, "FBW": float}
+        # axis -> {"base": float, "k45": float, "kBW": float, "F45": float, "FBW": float, "a": float, "b": float}
         self._temp_weight_models: Dict[str, Dict[str, float]] = {}
         # Discrete Temp: last plotted adjustment stats (for Temp Slopes "Current Plot" table)
         self._temp_plot_last_base_slope: Optional[float] = None
         self._temp_plot_last_multiplier: Optional[float] = None
         self._temp_plot_last_adj_slope: Optional[float] = None
         self._temp_plot_last_improve_pct: Optional[float] = None
+        self._temp_plot_last_a: Optional[float] = None
+        self._temp_plot_last_b: Optional[float] = None
+        self._temp_plot_last_Fref: Optional[float] = None
+        self._temp_plot_last_is_sum: bool = False
         # Sensor View temperature smoothing (15 s rolling average for selected device)
         self._sensor_temp_buffer: list[Tuple[int, float]] = []  # (t_ms, tempF)
+        # Temperature Test: track warmup state so tare dialog does not appear early
+        self._temp_warmup_active: bool = False
         self._sensor_temp_smoothed_f: Optional[float] = None
 
         # Backend config/capture wiring (callbacks set by controller via main.py)
@@ -1127,12 +1124,20 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 k45 = 1.0
                 kBW = 1.0
+            if F45 > 0.0 and FBW > F45:
+                b = (kBW - k45) / (FBW - F45)
+                a = k45 - b * F45
+            else:
+                a = 1.0
+                b = 0.0
             weight_models[ax] = {
                 "base": base,
                 "k45": k45,
                 "kBW": kBW,
                 "F45": F45,
                 "FBW": FBW,
+                "a": a,
+                "b": b,
             }
 
         self._temp_slopes_by_sensor = slopes_by_sensor
@@ -1142,88 +1147,108 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _update_temp_slope_panel(self) -> None:
         """Refresh the Temp Slopes tab on the right with current averages/stds."""
-        try:
-            avgs = self._temp_slope_avgs or {}
-            stds = getattr(self, "_temp_slope_stds", {}) or {}
-            def _get(ph: str, ax: str) -> float:
-                try:
-                    return float(avgs.get(ph, {}).get(ax, 0.0))
-                except Exception:
-                    return 0.0
-            def _get_std(ph: str, ax: str) -> float:
-                try:
-                    return float(stds.get(ph, {}).get(ax, 0.0))
-                except Exception:
-                    return 0.0
-            # X axis
-            try:
-                self.lbl_slope_db_x.setText(f"{_get('45lb', 'x'):.6f}")
-                self.lbl_std_db_x.setText(f"{_get_std('45lb', 'x'):.6f}")
-                self.lbl_slope_bw_x.setText(f"{_get('bodyweight', 'x'):.6f}")
-                self.lbl_std_bw_x.setText(f"{_get_std('bodyweight', 'x'):.6f}")
-                self.lbl_slope_all_x.setText(f"{_get('all', 'x'):.6f}")
-                self.lbl_std_all_x.setText(f"{_get_std('all', 'x'):.6f}")
-            except Exception:
-                pass
-            # Y axis
-            try:
-                self.lbl_slope_db_y.setText(f"{_get('45lb', 'y'):.6f}")
-                self.lbl_std_db_y.setText(f"{_get_std('45lb', 'y'):.6f}")
-                self.lbl_slope_bw_y.setText(f"{_get('bodyweight', 'y'):.6f}")
-                self.lbl_std_bw_y.setText(f"{_get_std('bodyweight', 'y'):.6f}")
-                self.lbl_slope_all_y.setText(f"{_get('all', 'y'):.6f}")
-                self.lbl_std_all_y.setText(f"{_get_std('all', 'y'):.6f}")
-            except Exception:
-                pass
-            # Z axis
-            try:
-                self.lbl_slope_db_z.setText(f"{_get('45lb', 'z'):.6f}")
-                self.lbl_std_db_z.setText(f"{_get_std('45lb', 'z'):.6f}")
-                self.lbl_slope_bw_z.setText(f"{_get('bodyweight', 'z'):.6f}")
-                self.lbl_std_bw_z.setText(f"{_get_std('bodyweight', 'z'):.6f}")
-                self.lbl_slope_all_z.setText(f"{_get('all', 'z'):.6f}")
-                self.lbl_std_all_z.setText(f"{_get_std('all', 'z'):.6f}")
-            except Exception:
-                pass
+        avgs = self._temp_slope_avgs or {}
+        stds = getattr(self, "_temp_slope_stds", {}) or {}
 
-            # Update "Current Plot" table from last plotted adjustment stats
+        def _get(ph: str, ax: str) -> float:
             try:
-                base = getattr(self, "_temp_plot_last_base_slope", None)
-                mult = getattr(self, "_temp_plot_last_multiplier", None)
-                adj = getattr(self, "_temp_plot_last_adj_slope", None)
-                imp = getattr(self, "_temp_plot_last_improve_pct", None)
+                return float(avgs.get(ph, {}).get(ax, 0.0))
             except Exception:
-                base = mult = adj = imp = None
+                return 0.0
+
+        def _get_std(ph: str, ax: str) -> float:
             try:
-                if base is None:
-                    self.lbl_plot_base_slope.setText("—")
-                else:
-                    self.lbl_plot_base_slope.setText(f"{float(base):.6f}")
+                return float(stds.get(ph, {}).get(ax, 0.0))
             except Exception:
-                pass
-            try:
-                if mult is None:
-                    self.lbl_plot_multiplier.setText("—")
-                else:
-                    self.lbl_plot_multiplier.setText(f"{float(mult):.4f}")
-            except Exception:
-                pass
-            try:
-                if adj is None:
-                    self.lbl_plot_adj_slope.setText("—")
-                else:
-                    self.lbl_plot_adj_slope.setText(f"{float(adj):.6f}")
-            except Exception:
-                pass
-            try:
-                if imp is None:
-                    self.lbl_plot_improve_pct.setText("—")
-                else:
-                    self.lbl_plot_improve_pct.setText(f"{float(imp):.1f}%")
-            except Exception:
-                pass
+                return 0.0
+
+        # X axis
+        try:
+            self.lbl_slope_db_x.setText(f"{_get('45lb', 'x'):.6f}")
+            self.lbl_std_db_x.setText(f"{_get_std('45lb', 'x'):.6f}")
+            self.lbl_slope_bw_x.setText(f"{_get('bodyweight', 'x'):.6f}")
+            self.lbl_std_bw_x.setText(f"{_get_std('bodyweight', 'x'):.6f}")
+            self.lbl_slope_all_x.setText(f"{_get('all', 'x'):.6f}")
+            self.lbl_std_all_x.setText(f"{_get_std('all', 'x'):.6f}")
         except Exception:
-            # On failure, leave existing labels as-is
+            pass
+        # Y axis
+        try:
+            self.lbl_slope_db_y.setText(f"{_get('45lb', 'y'):.6f}")
+            self.lbl_std_db_y.setText(f"{_get_std('45lb', 'y'):.6f}")
+            self.lbl_slope_bw_y.setText(f"{_get('bodyweight', 'y'):.6f}")
+            self.lbl_std_bw_y.setText(f"{_get_std('bodyweight', 'y'):.6f}")
+            self.lbl_slope_all_y.setText(f"{_get('all', 'y'):.6f}")
+            self.lbl_std_all_y.setText(f"{_get_std('all', 'y'):.6f}")
+        except Exception:
+            pass
+        # Z axis
+        try:
+            self.lbl_slope_db_z.setText(f"{_get('45lb', 'z'):.6f}")
+            self.lbl_std_db_z.setText(f"{_get_std('45lb', 'z'):.6f}")
+            self.lbl_slope_bw_z.setText(f"{_get('bodyweight', 'z'):.6f}")
+            self.lbl_std_bw_z.setText(f"{_get_std('bodyweight', 'z'):.6f}")
+            self.lbl_slope_all_z.setText(f"{_get('all', 'z'):.6f}")
+            self.lbl_std_all_z.setText(f"{_get_std('all', 'z'):.6f}")
+        except Exception:
+            pass
+
+        # Update "Current Plot" table from last plotted adjustment stats
+        try:
+            base = getattr(self, "_temp_plot_last_base_slope", None)
+            mult = getattr(self, "_temp_plot_last_multiplier", None)
+            adj = getattr(self, "_temp_plot_last_adj_slope", None)
+            imp = getattr(self, "_temp_plot_last_improve_pct", None)
+            a = getattr(self, "_temp_plot_last_a", None)
+            b = getattr(self, "_temp_plot_last_b", None)
+            Fref = getattr(self, "_temp_plot_last_Fref", None)
+            is_sum = bool(getattr(self, "_temp_plot_last_is_sum", False))
+        except Exception:
+            base = mult = adj = imp = a = b = Fref = None
+            is_sum = False
+
+        try:
+            if base is None:
+                self.lbl_plot_base_slope.setText("—")
+            else:
+                val = float(base)
+                if is_sum:
+                    val /= 8.0
+                self.lbl_plot_base_slope.setText(f"{val:.6f}")
+        except Exception:
+            pass
+
+        try:
+            if mult is None:
+                self.lbl_plot_multiplier.setText("—")
+            else:
+                # Show equation-style: k = a + bF with actual values from last plot
+                if a is None or b is None or Fref is None:
+                    self.lbl_plot_multiplier.setText(f"k = {float(mult):.4f}")
+                else:
+                    self.lbl_plot_multiplier.setText(
+                        f"k = {float(mult):.4f} = {float(a):.4f} + {float(b):.6f} * {float(Fref):.2f}"
+                    )
+        except Exception:
+            pass
+
+        try:
+            if adj is None:
+                self.lbl_plot_adj_slope.setText("—")
+            else:
+                val = float(adj)
+                if is_sum:
+                    val /= 8.0
+                self.lbl_plot_adj_slope.setText(f"{val:.6f}")
+        except Exception:
+            pass
+
+        try:
+            if imp is None:
+                self.lbl_plot_improve_pct.setText("—")
+            else:
+                self.lbl_plot_improve_pct.setText(f"{float(imp):.1f}%")
+        except Exception:
             pass
 
     def _on_plot_discrete_test(self) -> None:
@@ -1285,11 +1310,19 @@ class MainWindow(QtWidgets.QMainWindow):
                         continue
                     xs.append(temp_f)
                     ys.append(y_val)
-                    # Track average per-sensor load for this row using |sum-z|/8.0
+                    # Track average per-sensor load for this row.
+                    # For Sum plots, use |sum-z|/8.0 to get per-sensor equivalent.
+                    # For individual sensors, use that sensor's own |z| value.
                     try:
-                        sum_z = float(row.get("sum-z") or 0.0)
-                        if sum_z != 0.0:
-                            loads_per_sensor.append(abs(sum_z) / 8.0)
+                        if sensor_label.lower().startswith("sum"):
+                            sum_z = float(row.get("sum-z") or 0.0)
+                            if sum_z != 0.0:
+                                loads_per_sensor.append(abs(sum_z) / 8.0)
+                        else:
+                            z_col = f"{prefix}-z"
+                            fz_sensor = float(row.get(z_col) or 0.0)
+                            if fz_sensor != 0.0:
+                                loads_per_sensor.append(abs(fz_sensor))
                     except Exception:
                         pass
         except Exception:
@@ -1326,27 +1359,26 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             base = m_all
         try:
-            k45 = float(m_model.get("k45", 1.0))
+            a = float(m_model.get("a", 1.0))
         except Exception:
-            k45 = 1.0
+            a = 1.0
         try:
-            kBW = float(m_model.get("kBW", 1.0))
+            b = float(m_model.get("b", 0.0))
         except Exception:
-            kBW = 1.0
+            b = 0.0
         try:
             F45 = float(m_model.get("F45", 0.0))
             FBW = float(m_model.get("FBW", 0.0))
         except Exception:
             F45, FBW = 0.0, 0.0
         F_ref = sum(loads_per_sensor) / float(len(loads_per_sensor)) if loads_per_sensor else 0.0
-        if F45 > 0.0 and FBW > F45 and F_ref > 0.0:
+        if F_ref > 0.0:
             try:
-                # Linear interpolation of multiplier between k45 and kBW
-                k_ref = k45 + (kBW - k45) * (F_ref - F45) / (FBW - F45)
+                k_ref = a + b * F_ref
             except Exception:
-                k_ref = k45
+                k_ref = a
         else:
-            k_ref = k45
+            k_ref = a
         # Effective per-sensor slope at this reference load
         m_eff_single = base * k_ref
         # For Sum plots, approximate slope as 8x per-sensor slope
@@ -1420,23 +1452,19 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._temp_plot_last_multiplier = float(k_ref)
                 self._temp_plot_last_adj_slope = float(m_dashed)
                 self._temp_plot_last_improve_pct = float(improve_pct)
+                self._temp_plot_last_a = float(a)
+                self._temp_plot_last_b = float(b)
+                self._temp_plot_last_Fref = float(F_ref)
+                self._temp_plot_last_is_sum = bool(sensor_label.lower().startswith("sum"))
             except Exception:
                 self._temp_plot_last_base_slope = m_solid
                 self._temp_plot_last_multiplier = k_ref
                 self._temp_plot_last_adj_slope = m_dashed
                 self._temp_plot_last_improve_pct = improve_pct
-
-            # Update per-plot multiplier and adjusted slope labels on Temp Plot tab
-            try:
-                if hasattr(self, "temp_plot_mult_label"):
-                    self.temp_plot_mult_label.setText(f"{k_ref:.4f}")
-            except Exception:
-                pass
-            try:
-                if hasattr(self, "temp_plot_slope_label"):
-                    self.temp_plot_slope_label.setText(f"{m_dashed:.6f}")
-            except Exception:
-                pass
+                self._temp_plot_last_a = a
+                self._temp_plot_last_b = b
+                self._temp_plot_last_Fref = F_ref
+                self._temp_plot_last_is_sum = sensor_label.lower().startswith("sum")
 
             # Also refresh Temp Slopes "Current Plot" table
             try:
@@ -1550,6 +1578,275 @@ class MainWindow(QtWidgets.QMainWindow):
                 json.dump(meta, f, indent=2)
         except Exception:
             pass
+
+    def _write_temp_session_meta(
+        self,
+        device_id: str,
+        model_id: str,
+        tester: str,
+        body_weight_n: float,
+        started_at_ms: int,
+        is_temp_test: bool,
+    ) -> None:
+        """Create or update a meta JSON file for a temperature test session next to its CSV."""
+        if not is_temp_test:
+            return
+        try:
+            import os, json, datetime, time as _t
+        except Exception:
+            return
+        # Resolve capture directory and base name for this session
+        try:
+            csv_dir = str(getattr(self, "_capture_csv_dir", "") or "").strip()
+        except Exception:
+            csv_dir = ""
+        try:
+            cap_name = str(getattr(self, "_capture_csv_name", "") or "").strip()
+        except Exception:
+            cap_name = ""
+        if not csv_dir or not cap_name:
+            return
+        try:
+            meta_path = os.path.join(csv_dir, f"{cap_name}.meta.json")
+        except Exception:
+            return
+
+        # Load existing meta if present so we can be additive
+        meta: dict = {}
+        try:
+            if os.path.isfile(meta_path):
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f) or {}
+        except Exception:
+            meta = {}
+
+        # Basic session identification
+        meta["version"] = int(meta.get("version") or 1)
+        meta["session_type"] = "temperature_test"
+        meta["device_id"] = str(device_id or "")
+        meta["model_id"] = str(model_id or "")
+        meta["tester_name"] = str(tester or "")
+        try:
+            meta["body_weight_n"] = float(body_weight_n)
+        except Exception:
+            pass
+
+        # Reuse short label/date style from discrete temp meta
+        if "short_label" not in meta:
+            try:
+                meta["short_label"] = self._short_device_label(device_id or "")
+            except Exception:
+                meta["short_label"] = str(device_id or "")
+        if "date" not in meta:
+            try:
+                dt = datetime.datetime.fromtimestamp(int(started_at_ms or int(_t.time() * 1000)) / 1000.0)
+                meta["date"] = dt.strftime("%m-%d-%Y")
+            except Exception:
+                pass
+
+        # Link back to capture on disk
+        meta["csv_dir"] = csv_dir
+        meta["capture_name"] = cap_name
+        try:
+            meta["started_at_ms"] = int(started_at_ms)
+        except Exception:
+            pass
+
+        # Ensure stage_events array exists for later appends
+        if not isinstance(meta.get("stage_events"), list):
+            meta["stage_events"] = []
+
+        try:
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2)
+        except Exception:
+            pass
+
+    def _append_temp_stage_event(self, stage_name: str, stage_index: int, started_at_ms: int) -> None:
+        """Append a stage start event to the temp session meta JSON (if this is a temp test)."""
+        try:
+            # Only log for temperature test sessions
+            if self._live_session is None or not bool(getattr(self._live_session, "is_temp_test", False)):
+                return
+        except Exception:
+            return
+        try:
+            import os, json
+        except Exception:
+            return
+        try:
+            csv_dir = str(getattr(self, "_capture_csv_dir", "") or "").strip()
+        except Exception:
+            csv_dir = ""
+        try:
+            cap_name = str(getattr(self, "_capture_csv_name", "") or "").strip()
+        except Exception:
+            cap_name = ""
+        if not csv_dir or not cap_name:
+            return
+        try:
+            meta_path = os.path.join(csv_dir, f"{cap_name}.meta.json")
+        except Exception:
+            return
+
+        meta: dict = {}
+        try:
+            if os.path.isfile(meta_path):
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f) or {}
+        except Exception:
+            meta = {}
+        events = meta.get("stage_events")
+        if not isinstance(events, list):
+            events = []
+        try:
+            events.append(
+                {
+                    "stage_index": int(stage_index),
+                    "stage_name": str(stage_name or ""),
+                    "changed_at_ms": int(started_at_ms),
+                }
+            )
+        except Exception:
+            return
+        meta["stage_events"] = events
+        try:
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2)
+        except Exception:
+            pass
+
+    def _temp_all_cells_done(self) -> bool:
+        """Return True if all cells are completed across all stages for a temp test session."""
+        try:
+            if self._live_session is None or not bool(getattr(self._live_session, "is_temp_test", False)):
+                return False
+        except Exception:
+            return False
+        try:
+            for st in (self._live_session.stages or []):
+                try:
+                    total = int(getattr(st, "total_cells", 0))
+                except Exception:
+                    total = 0
+                if total <= 0:
+                    continue
+                try:
+                    completed = sum(
+                        1
+                        for g in (getattr(st, "results", {}) or {}).values()
+                        if g is not None and getattr(g, "fz_mean_n", None) is not None
+                    )
+                except Exception:
+                    completed = 0
+                if completed < total:
+                    return False
+            return True
+        except Exception:
+            return False
+
+    def _temp_switch_stage_if_possible(self) -> bool:
+        """For temp tests, schedule a switch to the other stage if it has remaining cells."""
+        try:
+            if self._live_session is None or not bool(getattr(self._live_session, "is_temp_test", False)):
+                return False
+        except Exception:
+            return False
+        try:
+            stages = self._live_session.stages or []
+        except Exception:
+            return False
+        if len(stages) < 2:
+            return False
+        try:
+            cur_idx = int(self._live_stage_idx)
+        except Exception:
+            cur_idx = 0
+        other_idx = 1 if cur_idx == 0 else 0
+        try:
+            other_stage = stages[other_idx]
+        except Exception:
+            return False
+        # Only consider switch if the other stage still has incomplete cells
+        try:
+            has_incomplete = any(
+                (cell is not None and getattr(cell, "fz_mean_n", None) is None)
+                for cell in (getattr(other_stage, "results", {}) or {}).values()
+            )
+        except Exception:
+            has_incomplete = False
+        if not has_incomplete:
+            return False
+        # Defer the actual switch until Fz drops below a safe threshold
+        try:
+            self._temp_pending_stage_idx = other_idx
+        except Exception:
+            self._temp_pending_stage_idx = other_idx
+        return True
+
+    def _temp_maybe_perform_pending_stage_switch(self, fz_n: float, t_ms: int) -> None:
+        """If a temp-test stage switch is pending and Fz is low enough, perform it now."""
+        try:
+            if self._live_session is None or not bool(getattr(self._live_session, "is_temp_test", False)):
+                return
+        except Exception:
+            return
+        try:
+            pending_idx = self._temp_pending_stage_idx
+        except Exception:
+            pending_idx = None
+        if pending_idx is None:
+            return
+        # Require load sufficiently off the plate before switching stages
+        try:
+            if abs(float(fz_n)) >= 50.0:
+                return
+        except Exception:
+            return
+        # Avoid switching while a cell is actively armed/being captured
+        if self._active_cell is not None:
+            return
+        # Perform the switch
+        try:
+            stages = self._live_session.stages or []
+        except Exception:
+            stages = []
+        if not (0 <= int(pending_idx) < len(stages)):
+            try:
+                self._temp_pending_stage_idx = None
+            except Exception:
+                pass
+            return
+        try:
+            stage = stages[int(pending_idx)]
+        except Exception:
+            return
+        try:
+            self._live_stage_idx = int(pending_idx)
+        except Exception:
+            return
+        try:
+            self._apply_stage_context()
+        except Exception:
+            pass
+        # Log stage switch into temp meta JSON
+        try:
+            self._append_temp_stage_event(
+                stage_name=str(getattr(stage, "name", "")),
+                stage_index=int(getattr(stage, "index", 0)),
+                started_at_ms=int(t_ms),
+            )
+        except Exception:
+            pass
+        # Reset pending state and per-turn counter
+        try:
+            self._temp_pending_stage_idx = None
+        except Exception:
+            pass
+        try:
+            self._temp_cells_this_turn = 0
+        except Exception:
+            self._temp_cells_this_turn = 0
 
     def _start_discrete_tare_sequence(self) -> None:
         """Kick off a 15-second settle-and-tare sequence using existing guidance logic."""
@@ -2306,6 +2603,11 @@ class MainWindow(QtWidgets.QMainWindow):
                     self._request_model_metadata_cb(dev_id)
                 except Exception:
                     pass
+            # Apply initial stage context so Temperature Test shows its banner from the start
+            try:
+                self._apply_stage_context()
+            except Exception:
+                pass
             self._log(f"session_initialized: rows={rows}, cols={cols}, stages={len(self._live_session.stages)}")
         except Exception:
             pass
@@ -2389,6 +2691,26 @@ class MainWindow(QtWidgets.QMainWindow):
                     self._capture_device_id_real = str(dev_id or "")
                 except Exception:
                     pass
+
+                # Initialize temp-testing session meta JSON next to the capture CSV
+                if is_temp_test:
+                    try:
+                        import time as _t
+                        started_ms_for_meta = int(_t.time() * 1000)
+                    except Exception:
+                        started_ms_for_meta = 0
+                    try:
+                        self._write_temp_session_meta(
+                            device_id=dev_id,
+                            model_id=model_id,
+                            tester=tester,
+                            body_weight_n=bw_n,
+                            started_at_ms=started_ms_for_meta,
+                            is_temp_test=bool(is_temp_test),
+                        )
+                    except Exception:
+                        pass
+
                 # Reuse ControlPanel signal so Controller handles wiring
                 self.controls.start_capture_requested.emit(payload)
                 self._capture_active = True
@@ -2405,6 +2727,38 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._log("temp_test: disabled temperature correction (applied)")
         except Exception:
             pass
+
+        # Temperature Test: run warm-up and an initial auto-tare sequence before measurements
+        if is_temp_test:
+            # Warm-up sequence (20 s) before initial tare, mirroring discrete temp behavior
+            try:
+                # Mark warmup as active so tare guidance does not show its dialog yet
+                self._temp_warmup_active = True
+                warm = WarmupPromptDialog(self, duration_s=20)
+                res = warm.exec()
+            except Exception:
+                res = 0
+            if res != WarmupPromptDialog.Accepted:
+                try:
+                    self._log("temp_test: warmup cancelled")
+                except Exception:
+                    pass
+                try:
+                    self._temp_warmup_active = False
+                except Exception:
+                    self._temp_warmup_active = False
+                self._on_live_end()
+                return
+            # Kick off initial tare guidance: 15 s under threshold before auto-tare
+            try:
+                self._temp_warmup_active = False
+                self._tare_active = True
+                self._tare_countdown_remaining_s = 0
+                self._tare_last_tick_s = None
+                self._next_tare_due_ms = None
+                self._open_tare_dialog()
+            except Exception:
+                pass
 
     def _on_next_stage(self) -> None:
         if self._live_session is None:
@@ -2515,16 +2869,40 @@ class MainWindow(QtWidgets.QMainWindow):
             total = int(stage.total_cells)
             stage_text = f"Stage {stage.index}: {stage.name} @ {stage.location}"
             self.controls.live_testing_panel.set_stage_progress(stage_text, completed, total)
-            # Enable Next only when stage done
-            try:
-                self.controls.live_testing_panel.btn_next.setEnabled(bool(completed >= total))
-            except Exception:
-                pass
-            # Set label to Finish when last stage is next
-            if self._live_stage_idx + 1 >= len(self._live_session.stages):
-                self.controls.live_testing_panel.set_next_stage_label("Finish")
+            # For temperature tests, navigation is automated; keep Next/Prev disabled
+            is_temp = bool(getattr(self._live_session, "is_temp_test", False))
+            if is_temp:
+                # Show a prominent banner on the plate view indicating the current stage
+                try:
+                    banner = f"{stage.name}"
+                    self.canvas_left.set_live_status(banner)
+                except Exception:
+                    try:
+                        self.canvas_left.set_live_status(stage_text)
+                    except Exception:
+                        pass
+                try:
+                    self.controls.live_testing_panel.btn_next.setEnabled(False)
+                    self.controls.live_testing_panel.btn_prev.setEnabled(False)
+                    self.controls.live_testing_panel.set_next_stage_label("Next Stage")
+                except Exception:
+                    pass
             else:
-                self.controls.live_testing_panel.set_next_stage_label("Next Stage")
+                # Clear any temp-test banner when not in temp mode
+                try:
+                    self.canvas_left.set_live_status(None)
+                except Exception:
+                    pass
+                # Enable Next only when stage done in normal mode
+                try:
+                    self.controls.live_testing_panel.btn_next.setEnabled(bool(completed >= total))
+                except Exception:
+                    pass
+                # Set label to Finish when last stage is next
+                if self._live_stage_idx + 1 >= len(self._live_session.stages):
+                    self.controls.live_testing_panel.set_next_stage_label("Finish")
+                else:
+                    self.controls.live_testing_panel.set_next_stage_label("Next Stage")
         except Exception:
             pass
 
@@ -2736,6 +3114,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
         except Exception:
             # Fall through to normal summary path if anything goes wrong
+            pass
+
+        # Temperature tests: skip summary/export dialog; capture/cleanup above is sufficient
+        try:
+            if self._live_session is not None and bool(getattr(self._live_session, "is_temp_test", False)) and not bool(
+                getattr(self._live_session, "is_discrete_temp", False)
+            ):
+                self._on_live_end()
+                return
+        except Exception:
             pass
 
         summary = self._compute_summary()
@@ -4459,6 +4847,11 @@ class MainWindow(QtWidgets.QMainWindow):
             x_mm, y_mm, fz_n, t_ms, is_visible, raw_x_mm, raw_y_mm = snap
         except Exception:
             return
+        # For temperature tests, perform any pending stage switch only once load is off (Fz < 50 N)
+        try:
+            self._temp_maybe_perform_pending_stage_switch(float(fz_n), int(t_ms))
+        except Exception:
+            pass
         # Track latest backend time for stage marks and start current stage if pending
         try:
             self._last_snapshot_time_ms = int(t_ms)
@@ -4471,6 +4864,15 @@ class MainWindow(QtWidgets.QMainWindow):
                     dev_id = (self._live_session.device_id or "").strip()
                     cap = str(getattr(self, "_capture_csv_name", "") or "")
                     meta_store.start_stage_mark(dev_id, cap, stage.name, int(stage.index), int(self._last_snapshot_time_ms))
+                    # Also append this stage start to the temp-testing session meta JSON (if applicable)
+                    try:
+                        self._append_temp_stage_event(
+                            stage_name=stage.name,
+                            stage_index=int(stage.index),
+                            started_at_ms=int(self._last_snapshot_time_ms),
+                        )
+                    except Exception:
+                        pass
                     self._stage_mark_pending_start = False
         except Exception:
             pass
@@ -4793,8 +5195,32 @@ class MainWindow(QtWidgets.QMainWindow):
                         total = stage.total_cells
                         stage_text = f"Stage {stage.index}: {stage.name} @ {stage.location}"
                         self.controls.live_testing_panel.set_stage_progress(stage_text, completed, total)
-                        # Enable Next Stage button when all cells are done (normal mode only)
-                        if not is_discrete:
+
+                        # Temperature Test: auto cycle between stages after two cells per "turn"
+                        is_temp = bool(getattr(self._live_session, "is_temp_test", False))
+                        if is_temp and not is_discrete:
+                            # Count cells completed in this stage's current turn
+                            try:
+                                self._temp_cells_this_turn = int(getattr(self, "_temp_cells_this_turn", 0)) + 1
+                            except Exception:
+                                self._temp_cells_this_turn = 1
+                            # If all cells across both stages are done, end the session automatically
+                            try:
+                                if self._temp_all_cells_done():
+                                    self._submit_results_and_end()
+                                    return
+                            except Exception:
+                                pass
+                            # After two cells in this stage, try switching to the other stage
+                            try:
+                                if self._temp_cells_this_turn >= 2:
+                                    if self._temp_switch_stage_if_possible():
+                                        self._temp_cells_this_turn = 0
+                            except Exception:
+                                pass
+
+                        # Enable Next Stage button when all cells are done (normal, non-temp mode only)
+                        if not is_discrete and not bool(getattr(self._live_session, "is_temp_test", False)):
                             try:
                                 self.controls.live_testing_panel.btn_next.setEnabled(True)
                             except Exception:
@@ -4823,14 +5249,22 @@ class MainWindow(QtWidgets.QMainWindow):
                             if is_discrete:
                                 self._on_discrete_stage_completed()
                             else:
-                                # Normal mode: enable manual advance and adjust label
-                                try:
-                                    self.controls.live_testing_panel.btn_next.setEnabled(True)
-                                    # Change button label to Finish on the last stage
-                                    if self._live_stage_idx + 1 >= len(self._live_session.stages):
-                                        self.controls.live_testing_panel.set_next_stage_label("Finish")
-                                except Exception:
-                                    pass
+                                is_temp = bool(getattr(self._live_session, "is_temp_test", False))
+                                if is_temp:
+                                    # For Temperature Test, if the other stage has remaining cells, schedule a switch
+                                    try:
+                                        self._temp_switch_stage_if_possible()
+                                    except Exception:
+                                        pass
+                                else:
+                                    # Normal mode: enable manual advance and adjust label
+                                    try:
+                                        self.controls.live_testing_panel.btn_next.setEnabled(True)
+                                        # Change button label to Finish on the last stage
+                                        if self._live_stage_idx + 1 >= len(self._live_session.stages):
+                                            self.controls.live_testing_panel.set_next_stage_label("Finish")
+                                    except Exception:
+                                        pass
                 except Exception:
                     pass
 
@@ -4918,8 +5352,12 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         try:
             is_discrete = bool(getattr(self._live_session, "is_discrete_temp", False))
-            # Initialize schedule if needed (normal mode only)
-            if not is_discrete and self._next_tare_due_ms is None:
+            is_temp = bool(getattr(self._live_session, "is_temp_test", False))
+            # During Temperature Test warmup, do not show or update tare guidance yet
+            if is_temp and bool(getattr(self, "_temp_warmup_active", False)):
+                return
+            # Initialize schedule if needed (normal mode only; temp/discrete use explicit flows)
+            if not is_discrete and not is_temp and self._next_tare_due_ms is None:
                 self._next_tare_due_ms = int(t_ms) + int(getattr(config, "TARE_INTERVAL_S", 90)) * 1000
 
             # Update dialog if active

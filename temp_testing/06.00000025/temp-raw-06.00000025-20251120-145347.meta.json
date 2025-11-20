@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "session_type": "temperature_test",
+  "device_id": "06.00000025",
+  "model_id": "06",
+  "tester_name": "caleb",
+  "body_weight_n": 877.0,
+  "short_label": "06-25",
+  "date": "11-20-2025",
+  "csv_dir": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025",
+  "capture_name": "temp-raw-06.00000025-20251120-145347",
+  "started_at_ms": 1763672027501,
+  "stage_events": [
+    {
+      "stage_index": 1,
+      "stage_name": "45 lb DB",
+      "changed_at_ms": 1763672027268
+    },
+    {
+      "stage_index": 2,
+      "stage_name": "Body Weight",
+      "changed_at_ms": 1763672095015
+    },
+    {
+      "stage_index": 1,
+      "stage_name": "45 lb DB",
+      "changed_at_ms": 1763672123397
+    },
+    {
+      "stage_index": 2,
+      "stage_name": "Body Weight",
+      "changed_at_ms": 1763672137572
+    },
+    {
+      "stage_index": 1,
+      "stage_name": "45 lb DB",
+      "changed_at_ms": 1763672149890
+    }
+  ]
+}
