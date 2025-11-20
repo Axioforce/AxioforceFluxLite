@@ -7,12 +7,14 @@ from PySide6 import QtCore, QtWidgets
 
 
 class LiveTestSetupDialog(QtWidgets.QDialog):
-    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None, is_temp_test: bool = False) -> None:
         super().__init__(parent)
         self.setWindowTitle("Live Testing - Session Setup")
         self.setModal(True)
 
         self._device_id: str = ""
+        # Session mode (Normal vs Temperature Test) is now provided by caller.
+        self._is_temp_test: bool = bool(is_temp_test)
 
         root = QtWidgets.QVBoxLayout(self)
         form = QtWidgets.QFormLayout()
@@ -27,9 +29,7 @@ class LiveTestSetupDialog(QtWidgets.QDialog):
         self.spin_bw.setSingleStep(1.0)
 
         # New options
-        self.combo_test_mode = QtWidgets.QComboBox()
-        self.combo_test_mode.addItems(["Normal", "Temperature (temp test)", "Discrete Temperature"])
-        # Keep label concise but clear
+        # Session type is now selected from the main Live Testing panel; no toggle here.
         self.chk_capture = QtWidgets.QCheckBox("Capture (CSV/logs)")
 
         # Save location row (hidden until Capture is enabled)
@@ -46,7 +46,6 @@ class LiveTestSetupDialog(QtWidgets.QDialog):
         form.addRow("Device ID:", self.lbl_device)
         form.addRow("Model ID:", self.lbl_model)
         form.addRow("Body Weight:", self.spin_bw)
-        form.addRow("Test Mode:", self.combo_test_mode)
         form.addRow(self.chk_capture)
         form.addRow("CSV Save Location:", save_row_widget)
         # Removed 'Bypass Models' control per backend ownership
@@ -56,7 +55,6 @@ class LiveTestSetupDialog(QtWidgets.QDialog):
 
         # Wire interactions
         self.chk_capture.toggled.connect(self._on_capture_toggled)
-        self.combo_test_mode.currentIndexChanged.connect(self._on_test_mode_changed)
         self.btn_browse.clicked.connect(self._choose_directory)
 
         btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
@@ -84,8 +82,8 @@ class LiveTestSetupDialog(QtWidgets.QDialog):
 
     def _ensure_default_save_dir(self) -> None:
         if not self.edit_save_dir.text().strip():
-            # Default based on Temperature Test toggle
-            self.edit_save_dir.setText(self._app_default_dir(self._is_temperature_mode()))
+            # Default based on session mode (Normal vs Temperature Test)
+            self.edit_save_dir.setText(self._app_default_dir(self._is_temp_test))
 
     def _set_capture_controls_visible(self, visible: bool) -> None:
         self.edit_save_dir.setVisible(visible)
@@ -96,28 +94,9 @@ class LiveTestSetupDialog(QtWidgets.QDialog):
         if enabled:
             self._ensure_default_save_dir()
 
-    def _is_temperature_mode(self) -> bool:
-        # Treat both explicit Temperature and Discrete Temperature as temperature-mode for storage/routing
-        idx = int(self.combo_test_mode.currentIndex())
-        return idx in (1, 2)
-
-    def _on_test_mode_changed(self, _index: int) -> None:
-        # If capture is enabled and the path is empty or equals the opposite-mode default, switch to current-mode default
-        if not self.chk_capture.isChecked():
-            return
-        current = self.edit_save_dir.text().strip()
-        live_default = self._app_default_dir(False)
-        temp_default = self._app_default_dir(True)
-        if self._is_temperature_mode():
-            if not current or current == live_default:
-                self.edit_save_dir.setText(temp_default)
-        else:
-            if not current or current == temp_default:
-                self.edit_save_dir.setText(live_default)
-
     def _choose_directory(self) -> None:
         options = QtWidgets.QFileDialog.Options()
-        start_dir = self.edit_save_dir.text().strip() or self._app_default_dir(self._is_temperature_mode())
+        start_dir = self.edit_save_dir.text().strip() or self._app_default_dir(self._is_temp_test)
         directory = QtWidgets.QFileDialog.getExistingDirectory(self, "Choose CSV Save Folder", start_dir, options=options)
         if directory:
             self.edit_save_dir.setText(directory)
@@ -134,10 +113,6 @@ class LiveTestSetupDialog(QtWidgets.QDialog):
         except Exception:
             pass
         # Defaults: off
-        try:
-            self.combo_test_mode.setCurrentIndex(0)  # Normal
-        except Exception:
-            pass
         self.chk_capture.setChecked(False)
         self.edit_save_dir.clear()
 
@@ -145,7 +120,7 @@ class LiveTestSetupDialog(QtWidgets.QDialog):
         return (
             self.edit_tester.text().strip(),
             float(self.spin_bw.value()),
-            bool(self._is_temperature_mode()),
+            bool(self._is_temp_test),
             bool(self.chk_capture.isChecked()),
             self.edit_save_dir.text().strip(),
         )

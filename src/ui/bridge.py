@@ -16,6 +16,8 @@ class UiBridge(QtCore.QObject):
     moments_ready = QtCore.Signal(object)  # Dict[str, Tuple[int, float, float, float]]
     mound_force_vectors_ready = QtCore.Signal(object)  # Dict[str, Tuple[int, float, float, float]] by zone
     dynamo_config_ready = QtCore.Signal(object)  # { 'samplingRate': int, 'emissionRate': int }
+    # Raw backend payload (used for discrete temp detailed capture)
+    raw_payload_ready = QtCore.Signal(object)  # Dict from backend JSON
 
     # Model management signals
     model_metadata_ready = QtCore.Signal(object)  # List[dict] | None

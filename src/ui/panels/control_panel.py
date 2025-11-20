@@ -27,6 +27,10 @@ class ControlPanel(QtWidgets.QWidget):
     autoscale_damp_toggled = QtCore.Signal(bool)
     autoscale_damp_n_changed = QtCore.Signal(int)
     live_testing_tab_selected = QtCore.Signal()
+    # Backend configuration quick actions (Config tab, right-hand pane)
+    backend_model_bypass_changed = QtCore.Signal(bool)
+    backend_capture_detail_changed = QtCore.Signal(str)
+    backend_temperature_apply_requested = QtCore.Signal(object)  # dict: { use_temperature_correction, slopes, room_temperature_f }
 
     def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -252,7 +256,14 @@ class ControlPanel(QtWidgets.QWidget):
 
         config_tab = QtWidgets.QWidget()
         cfg_layout = QtWidgets.QGridLayout(config_tab)
-        cfg_row = 0
+        cfg_layout.setColumnStretch(0, 2)
+        cfg_layout.setColumnStretch(1, 1)
+
+        # Left column: layout mode, device filters, and device list
+        cfg_left = QtWidgets.QWidget()
+        cfg_left_layout = QtWidgets.QVBoxLayout(cfg_left)
+        cfg_left_layout.setContentsMargins(0, 0, 0, 0)
+        cfg_left_layout.setSpacing(6)
 
         layout_row = QtWidgets.QWidget()
         layout_row_layout = QtWidgets.QHBoxLayout(layout_row)
@@ -264,9 +275,8 @@ class ControlPanel(QtWidgets.QWidget):
         layout_row_layout.addWidget(self.rb_layout_single)
         layout_row_layout.addWidget(self.rb_layout_mound)
         layout_row_layout.addStretch(1)
-        cfg_layout.addWidget(layout_row, cfg_row, 0, 1, 3)
+        cfg_left_layout.addWidget(layout_row)
         self.state.display_mode = "single"
-        cfg_row += 1
 
         filter_row = QtWidgets.QWidget()
         filter_row_layout = QtWidgets.QHBoxLayout(filter_row)
@@ -282,16 +292,103 @@ class ControlPanel(QtWidgets.QWidget):
         filter_row_layout.addWidget(self.chk_filter_07)
         filter_row_layout.addWidget(self.chk_filter_08)
         filter_row_layout.addStretch(1)
-        cfg_layout.addWidget(filter_row, cfg_row, 0, 1, 3)
-        cfg_row += 1
+        cfg_left_layout.addWidget(filter_row)
 
         # (moved) Refresh Devices button now lives next to the always-visible Tare button
-
         self.device_list = QtWidgets.QListWidget()
         self.device_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.device_list.setItemDelegate(DeviceListDelegate())
-        cfg_layout.addWidget(self.device_list, cfg_row, 0, 1, 3)
-        cfg_row += 1
+        cfg_left_layout.addWidget(self.device_list, 1)
+
+        cfg_layout.addWidget(cfg_left, 0, 0, 1, 1)
+
+        # Right column: Backend configuration quick settings
+        backend_box = QtWidgets.QGroupBox("Backend Config")
+        backend_layout = QtWidgets.QGridLayout(backend_box)
+        backend_layout.setVerticalSpacing(6)
+        row = 0
+
+        # Bypass models
+        self.chk_bypass_models = QtWidgets.QCheckBox("Bypass ML Models")
+        backend_layout.addWidget(self.chk_bypass_models, row, 0, 1, 2)
+        row += 1
+
+        # Capture detail
+        backend_layout.addWidget(QtWidgets.QLabel("Capture Detail:"), row, 0)
+        self.capture_detail_combo = QtWidgets.QComboBox()
+        self.capture_detail_combo.addItems(["basic", "all", "allSums", "allTemp"])
+        self.capture_detail_combo.setCurrentText("allTemp")
+        backend_layout.addWidget(self.capture_detail_combo, row, 1)
+        row += 1
+
+        # Temperature correction
+        temp_group = QtWidgets.QGroupBox("Temperature Correction")
+        temp_layout = QtWidgets.QGridLayout(temp_group)
+        temp_layout.setVerticalSpacing(4)
+        tr = 0
+        self.chk_use_temp_corr = QtWidgets.QCheckBox("Enable Temperature Correction")
+        temp_layout.addWidget(self.chk_use_temp_corr, tr, 0, 1, 2)
+        tr += 1
+        temp_layout.addWidget(QtWidgets.QLabel("Slope X:"), tr, 0)
+        self.spin_temp_x = QtWidgets.QDoubleSpinBox()
+        self.spin_temp_x.setRange(-1000.0, 1000.0)
+        self.spin_temp_x.setDecimals(3)
+        self.spin_temp_x.setSingleStep(0.1)
+        self.spin_temp_x.setValue(3.0)
+        temp_layout.addWidget(self.spin_temp_x, tr, 1)
+        tr += 1
+        temp_layout.addWidget(QtWidgets.QLabel("Slope Y:"), tr, 0)
+        self.spin_temp_y = QtWidgets.QDoubleSpinBox()
+        self.spin_temp_y.setRange(-1000.0, 1000.0)
+        self.spin_temp_y.setDecimals(3)
+        self.spin_temp_y.setSingleStep(0.1)
+        self.spin_temp_y.setValue(3.0)
+        temp_layout.addWidget(self.spin_temp_y, tr, 1)
+        tr += 1
+        temp_layout.addWidget(QtWidgets.QLabel("Slope Z:"), tr, 0)
+        self.spin_temp_z = QtWidgets.QDoubleSpinBox()
+        self.spin_temp_z.setRange(-1000.0, 1000.0)
+        self.spin_temp_z.setDecimals(3)
+        self.spin_temp_z.setSingleStep(0.1)
+        self.spin_temp_z.setValue(3.0)
+        temp_layout.addWidget(self.spin_temp_z, tr, 1)
+        tr += 1
+        temp_layout.addWidget(QtWidgets.QLabel("Room Temp (°F):"), tr, 0)
+        self.spin_room_temp = QtWidgets.QDoubleSpinBox()
+        self.spin_room_temp.setRange(-100.0, 300.0)
+        self.spin_room_temp.setDecimals(1)
+        self.spin_room_temp.setSingleStep(0.5)
+        self.spin_room_temp.setValue(72.0)
+        temp_layout.addWidget(self.spin_room_temp, tr, 1)
+        tr += 1
+        self.btn_apply_temp_corr = QtWidgets.QPushButton("Apply Temperature Correction")
+        _fix_btn(self.btn_apply_temp_corr, 200)
+        temp_layout.addWidget(self.btn_apply_temp_corr, tr, 0, 1, 2)
+
+        backend_layout.addWidget(temp_group, row, 0, 1, 2)
+        row += 1
+
+        # Sampling rate quick control
+        sampling_row = QtWidgets.QWidget()
+        sampling_layout = QtWidgets.QHBoxLayout(sampling_row)
+        sampling_layout.setContentsMargins(0, 0, 0, 0)
+        sampling_layout.setSpacing(6)
+        sampling_layout.addWidget(QtWidgets.QLabel("Sampling Hz:"))
+        self.backend_sampling_spin = QtWidgets.QSpinBox()
+        self.backend_sampling_spin.setRange(-1, 1200)
+        self.backend_sampling_spin.setValue(1000)
+        _fixh(self.backend_sampling_spin)
+        self.backend_sampling_spin.setMaximumWidth(80)
+        sampling_layout.addWidget(self.backend_sampling_spin)
+        self.backend_sampling_apply_btn = QtWidgets.QPushButton("Apply")
+        _fix_btn(self.backend_sampling_apply_btn, 70)
+        sampling_layout.addWidget(self.backend_sampling_apply_btn)
+        sampling_layout.addStretch(1)
+        backend_layout.addWidget(sampling_row, row, 0, 1, 2)
+        row += 1
+
+        backend_layout.setRowStretch(row, 1)
+        cfg_layout.addWidget(backend_box, 0, 1, 1, 1)
 
         self._config_tab_index = tabs.addTab(config_tab, "Config")
         tabs.addTab(connection_tab, "Connection")
@@ -356,14 +453,44 @@ class ControlPanel(QtWidgets.QWidget):
             except Exception:
                 pass
         self.apply_sampling_btn.clicked.connect(_emit_sampling)
+        # Mirror backend sampling Apply in Config tab quick controls
+        self.backend_sampling_apply_btn.clicked.connect(
+            lambda: self.sampling_rate_changed.emit(int(self.backend_sampling_spin.value()))
+        )
         self.apply_emission_btn.clicked.connect(_emit_emission)
         self.sampling_spin.lineEdit().returnPressed.connect(_emit_sampling)
         self.emission_spin.lineEdit().returnPressed.connect(_emit_emission)
+        self.backend_sampling_spin.lineEdit().returnPressed.connect(
+            lambda: self.sampling_rate_changed.emit(int(self.backend_sampling_spin.value()))
+        )
         # Interface: ui tick & autoscale damping
         self.apply_ui_tick_btn.clicked.connect(lambda: self.ui_tick_hz_changed.emit(int(self.ui_tick_spin.value())))
         self.ui_tick_spin.lineEdit().returnPressed.connect(lambda: self.ui_tick_hz_changed.emit(int(self.ui_tick_spin.value())))
         self.chk_autoscale_damp.toggled.connect(lambda v: self.autoscale_damp_toggled.emit(bool(v)))
         self.autoscale_every_spin.valueChanged.connect(lambda v: self.autoscale_damp_n_changed.emit(int(v)))
+        # Backend Config quick actions
+        self.chk_bypass_models.toggled.connect(lambda v: self.backend_model_bypass_changed.emit(bool(v)))
+        self.capture_detail_combo.currentTextChanged.connect(
+            lambda text: self.backend_capture_detail_changed.emit(str(text))
+        )
+        self.btn_apply_temp_corr.clicked.connect(self._emit_backend_temp_corr)
+
+    def _emit_backend_temp_corr(self) -> None:
+        """Emit a single payload for backend temperature correction settings."""
+        try:
+            payload = {
+                "use_temperature_correction": bool(self.chk_use_temp_corr.isChecked()),
+                "slopes": {
+                    "x": float(self.spin_temp_x.value()),
+                    "y": float(self.spin_temp_y.value()),
+                    "z": float(self.spin_temp_z.value()),
+                },
+                "room_temperature_f": float(self.spin_room_temp.value()),
+            }
+            self.backend_temperature_apply_requested.emit(payload)
+        except Exception:
+            # Never crash on UI-side conversion issues
+            pass
 
     def set_backend_rates(self, sampling_hz: int, emission_hz: int) -> None:
         try:

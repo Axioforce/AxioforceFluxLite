@@ -2,9 +2,45 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtWidgets, QtGui
 
 from ..state import ViewState
+
+
+class _DiscreteTestDelegate(QtWidgets.QStyledItemDelegate):
+    """Custom delegate to render discrete tests with left label, dotted leader, and right-aligned date."""
+
+    def paint(self, painter: QtGui.QPainter, option: QtWidgets.QStyleOptionViewItem, index: QtCore.QModelIndex) -> None:  # type: ignore[override]
+        # Let base class draw background/selection
+        QtWidgets.QStyledItemDelegate.paint(self, painter, option, index)
+        left = str(index.data(QtCore.Qt.UserRole + 1) or "")
+        date = str(index.data(QtCore.Qt.UserRole + 2) or "")
+        if not left and not date:
+            return
+        r = option.rect
+        fm = option.fontMetrics
+        painter.save()
+        painter.setPen(option.palette.color(QtGui.QPalette.Text))
+        # Vertical alignment
+        baseline_y = r.top() + (r.height() + fm.ascent() - fm.descent()) // 2
+        padding = 6
+        left_x = r.left() + padding
+        # Draw left label
+        painter.drawText(left_x, baseline_y, left)
+        left_w = fm.horizontalAdvance(left)
+        # Draw right date
+        date_w = fm.horizontalAdvance(date)
+        right_x = r.right() - padding - date_w
+        painter.drawText(right_x, baseline_y, date)
+        # Draw dotted leader between
+        dots_start_x = left_x + left_w + padding
+        dots_end_x = right_x - padding
+        dot_w = max(1, fm.horizontalAdvance("."))
+        if dots_end_x > dots_start_x + dot_w:
+            count = int((dots_end_x - dots_start_x) / dot_w)
+            dots = "." * max(0, count)
+            painter.drawText(dots_start_x, baseline_y, dots)
+        painter.restore()
 
 
 class LiveTestingPanel(QtWidgets.QWidget):
@@ -19,6 +55,11 @@ class LiveTestingPanel(QtWidgets.QWidget):
     generate_heatmap_requested = QtCore.Signal()
     heatmap_selected = QtCore.Signal(str)
     heatmap_view_changed = QtCore.Signal(str)
+    # Discrete temperature testing actions
+    discrete_new_requested = QtCore.Signal()
+    discrete_add_requested = QtCore.Signal(str)
+    discrete_test_selected = QtCore.Signal(str)
+    plot_test_requested = QtCore.Signal()
 
     def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -32,6 +73,52 @@ class LiveTestingPanel(QtWidgets.QWidget):
         controls_box = QtWidgets.QGroupBox("Session Controls")
         controls_layout = QtWidgets.QVBoxLayout(controls_box)
 
+        # Session type selector (Normal vs Temperature Test vs Discrete Temp.)
+        mode_row = QtWidgets.QHBoxLayout()
+        mode_row.addWidget(QtWidgets.QLabel("Session Type:"))
+        self.session_mode_combo = QtWidgets.QComboBox()
+        try:
+            # Modes: Normal live test, continuous temperature test, and discrete temperature test
+            self.session_mode_combo.addItems(["Normal", "Temperature Test", "Discrete Temp. Testing"])
+        except Exception:
+            pass
+        mode_row.addWidget(self.session_mode_combo)
+        mode_row.addStretch(1)
+        controls_layout.addLayout(mode_row)
+
+        # Discrete temp testing test picker (list, only visible in Discrete Temp. mode)
+        discrete_picker_box = QtWidgets.QVBoxLayout()
+        self.lbl_discrete_tests = QtWidgets.QLabel("Tests:")
+        discrete_picker_box.addWidget(self.lbl_discrete_tests)
+        self.discrete_test_list = QtWidgets.QListWidget()
+        try:
+            from PySide6 import QtWidgets as _QtW
+            self.discrete_test_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+            self.discrete_test_list.setUniformItemSizes(True)
+            self.discrete_test_list.setSizePolicy(_QtW.QSizePolicy.Expanding, _QtW.QSizePolicy.Expanding)
+            # Use custom delegate for dotted leader formatting
+            self.discrete_test_list.setItemDelegate(_DiscreteTestDelegate(self.discrete_test_list))
+        except Exception:
+            pass
+        discrete_picker_box.addWidget(self.discrete_test_list, 1)
+        controls_layout.addLayout(discrete_picker_box)
+
+        # Discrete temp testing actions (only visible in Discrete Temp. mode)
+        discrete_row = QtWidgets.QHBoxLayout()
+        self.btn_discrete_new = QtWidgets.QPushButton("Start New Test")
+        self.btn_discrete_add = QtWidgets.QPushButton("Add to Existing Test")
+        self.btn_discrete_add.setEnabled(False)
+        try:
+            # Make each button take half the width within the Session Controls group
+            from PySide6 import QtWidgets as _QtW
+            self.btn_discrete_new.setSizePolicy(_QtW.QSizePolicy.Expanding, _QtW.QSizePolicy.Fixed)
+            self.btn_discrete_add.setSizePolicy(_QtW.QSizePolicy.Expanding, _QtW.QSizePolicy.Fixed)
+        except Exception:
+            pass
+        discrete_row.addWidget(self.btn_discrete_new, 1)
+        discrete_row.addWidget(self.btn_discrete_add, 1)
+        controls_layout.addLayout(discrete_row)
+
         self.btn_start = QtWidgets.QPushButton("Start Session")
         self.btn_end = QtWidgets.QPushButton("End Session")
         self.btn_end.setEnabled(False)
@@ -39,13 +126,15 @@ class LiveTestingPanel(QtWidgets.QWidget):
         self.btn_next.setEnabled(False)
 
         stage_row = QtWidgets.QHBoxLayout()
-        stage_row.addWidget(QtWidgets.QLabel("Stage:"))
+        self.lbl_stage_title = QtWidgets.QLabel("Stage:")
+        stage_row.addWidget(self.lbl_stage_title)
         self.stage_label = QtWidgets.QLabel("—")
         stage_row.addWidget(self.stage_label)
         stage_row.addStretch(1)
 
         progress_row = QtWidgets.QHBoxLayout()
-        progress_row.addWidget(QtWidgets.QLabel("Progress:"))
+        self.lbl_progress_title = QtWidgets.QLabel("Progress:")
+        progress_row.addWidget(self.lbl_progress_title)
         self.progress_label = QtWidgets.QLabel("0 / 0 cells")
         progress_row.addWidget(self.progress_label)
         progress_row.addStretch(1)
@@ -136,8 +225,8 @@ class LiveTestingPanel(QtWidgets.QWidget):
         model_layout.addStretch(1)
 
         # Calibration Heatmap
-        cal_box = QtWidgets.QGroupBox("Calibration Heatmap")
-        cal_layout = QtWidgets.QVBoxLayout(cal_box)
+        self.cal_box = QtWidgets.QGroupBox("Calibration Heatmap")
+        cal_layout = QtWidgets.QVBoxLayout(self.cal_box)
         cal_row = QtWidgets.QHBoxLayout()
         cal_row.addWidget(QtWidgets.QLabel("Status:"))
         self.lbl_cal_status = QtWidgets.QLabel("—")
@@ -209,7 +298,7 @@ class LiveTestingPanel(QtWidgets.QWidget):
         hm_row = QtWidgets.QHBoxLayout()
         # Left: heatmap picker (expands)
         try:
-            self.heatmap_list.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
+            self.heatmap_list.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         except Exception:
             pass
         hm_row.addWidget(self.heatmap_list, 2)
@@ -221,17 +310,27 @@ class LiveTestingPanel(QtWidgets.QWidget):
         except Exception:
             pass
         hm_row.addWidget(self.metrics_table, 0, QtCore.Qt.AlignTop)
-        # Place directly after prior controls (no bottom pin)
-        cal_layout.addLayout(hm_row)
+        cal_layout.addLayout(hm_row, 1)
 
-        # Ensure tight sizing after layout settles
-        try:
-            QtCore.QTimer.singleShot(0, self._update_metrics_table_size)
-        except Exception:
-            pass
+        # Temps in Test: standalone pane to the right of Session Controls
+        self.temps_box = QtWidgets.QGroupBox("Temps in Test")
+        temps_layout = QtWidgets.QVBoxLayout(self.temps_box)
+        temps_header = QtWidgets.QHBoxLayout()
+        self.lbl_temps_baseline = QtWidgets.QLabel("Includes Baseline:")
+        self.lbl_temps_baseline_icon = QtWidgets.QLabel("✖")
+        temps_header.addWidget(self.lbl_temps_baseline)
+        temps_header.addWidget(self.lbl_temps_baseline_icon)
+        temps_header.addStretch(1)
+        temps_layout.addLayout(temps_header)
+        self.temps_list = QtWidgets.QListWidget()
+        temps_layout.addWidget(self.temps_list, 1)
+        # Plot button at bottom (enabled only when a test with data is selected)
+        self.btn_plot_test = QtWidgets.QPushButton("Plot Test")
+        self.btn_plot_test.setEnabled(False)
+        temps_layout.addWidget(self.btn_plot_test)
 
         # Evenly distribute boxes side-by-side within a constrained-height tab page
-        for w in (controls_box, guide_box, meta_box, model_box, cal_box):
+        for w in (controls_box, self.temps_box, guide_box, meta_box, model_box, self.cal_box):
             try:
                 w.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
             except Exception:
@@ -249,6 +348,142 @@ class LiveTestingPanel(QtWidgets.QWidget):
         self.btn_generate_heatmap.clicked.connect(lambda: self.generate_heatmap_requested.emit())
         self.heatmap_list.currentItemChanged.connect(self._on_heatmap_item_changed)
         self.heatmap_view_combo.currentTextChanged.connect(lambda s: self.heatmap_view_changed.emit(str(s)))
+
+        # Discrete temp testing hooks
+        try:
+            self.session_mode_combo.currentTextChanged.connect(self._on_session_mode_changed)
+            self.discrete_test_list.currentItemChanged.connect(self._on_discrete_test_changed)
+            self.btn_discrete_new.clicked.connect(lambda: self.discrete_new_requested.emit())
+            self.btn_discrete_add.clicked.connect(self._emit_discrete_add)
+            self.btn_plot_test.clicked.connect(lambda: self.plot_test_requested.emit())
+        except Exception:
+            pass
+
+        # Initialize visibility for session controls based on default mode
+        self._update_session_controls_for_mode()
+
+    def _is_discrete_temp_session(self) -> bool:
+        """Return True if the current session type is Discrete Temp. Testing."""
+        try:
+            text = str(self.session_mode_combo.currentText() or "")
+        except Exception:
+            text = ""
+        return text.strip().lower().startswith("discrete")
+
+    def _update_session_controls_for_mode(self) -> None:
+        """Show/hide controls depending on the selected session type."""
+        is_discrete = self._is_discrete_temp_session()
+        show_standard = not is_discrete
+        try:
+            # Standard live testing controls
+            self.btn_start.setVisible(show_standard)
+            self.btn_end.setVisible(show_standard)
+            self.btn_prev.setVisible(show_standard)
+            self.btn_next.setVisible(show_standard)
+            self.lbl_stage_title.setVisible(show_standard)
+            self.stage_label.setVisible(show_standard)
+            self.lbl_progress_title.setVisible(show_standard)
+            self.progress_label.setVisible(show_standard)
+        except Exception:
+            pass
+        try:
+            # Discrete temp testing controls
+            self.lbl_discrete_tests.setVisible(is_discrete)
+            self.discrete_test_list.setVisible(is_discrete)
+            self.btn_discrete_new.setVisible(is_discrete)
+            self.btn_discrete_add.setVisible(is_discrete)
+        except Exception:
+            pass
+        # Toggle Temps-in-Test pane and Calibration Heatmap based on mode
+        try:
+            if hasattr(self, "temps_box"):
+                self.temps_box.setVisible(is_discrete)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "cal_box"):
+                self.cal_box.setVisible(not is_discrete)
+        except Exception:
+            pass
+        # Reset add button enabled state whenever mode changes
+        if not is_discrete:
+            try:
+                self.btn_discrete_add.setEnabled(False)
+            except Exception:
+                pass
+
+    def _on_session_mode_changed(self, _text: str) -> None:
+        self._update_session_controls_for_mode()
+
+    def _on_discrete_test_changed(self, current: Optional[QtWidgets.QListWidgetItem], _previous: Optional[QtWidgets.QListWidgetItem]) -> None:
+        # Enable Add button only when a valid test is selected
+        has_selection = current is not None
+        try:
+            self.btn_discrete_add.setEnabled(bool(has_selection and self._is_discrete_temp_session()))
+        except Exception:
+            pass
+        # Emit selection for Temps-in-Test view
+        try:
+            if has_selection and current is not None:
+                key = current.data(QtCore.Qt.UserRole)
+                if key:
+                    self.discrete_test_selected.emit(str(key))
+            else:
+                # No selection: clear Temps-in-Test UI
+                self.discrete_test_selected.emit("")
+        except Exception:
+            pass
+
+    def _emit_discrete_add(self) -> None:
+        # Emit currently selected test key (if any)
+        try:
+            item = self.discrete_test_list.currentItem()
+            if item is None:
+                return
+            key = item.data(QtCore.Qt.UserRole)
+            if key:
+                self.discrete_add_requested.emit(str(key))
+        except Exception:
+            pass
+
+    def set_discrete_tests(self, tests: list[tuple[str, str, str]]) -> None:
+        """Populate discrete test picker with (label, date, key) triples."""
+        try:
+            self.discrete_test_list.blockSignals(True)
+        except Exception:
+            pass
+        try:
+            self.discrete_test_list.clear()
+            for label, date_str, key in (tests or []):
+                item = QtWidgets.QListWidgetItem()
+                try:
+                    item.setData(QtCore.Qt.UserRole, str(key))
+                    item.setData(QtCore.Qt.UserRole + 1, str(label))
+                    item.setData(QtCore.Qt.UserRole + 2, str(date_str))
+                except Exception:
+                    pass
+                self.discrete_test_list.addItem(item)
+        except Exception:
+            pass
+        finally:
+            try:
+                self.discrete_test_list.blockSignals(False)
+            except Exception:
+                pass
+        # After repopulating, recompute add button enabled state
+        try:
+            current = self.discrete_test_list.currentItem()
+        except Exception:
+            current = None
+        self._on_discrete_test_changed(current, None)
+
+    def is_temperature_session(self) -> bool:
+        """Return True if the current session type is Temperature Test."""
+        try:
+            text = str(self.session_mode_combo.currentText() or "")
+        except Exception:
+            text = ""
+        return text.strip().lower().startswith("temperature")
 
     # Overlay is now managed by the canvas; this panel keeps controls only
     def configure_grid(self, rows: int, cols: int) -> None:
@@ -377,6 +612,39 @@ class LiveTestingPanel(QtWidgets.QWidget):
         # Debug status deprecated in favor of Model panel; keep as no-op to avoid breaking call sites
         return
 
+    # Temps-in-Test tab helpers
+    def set_temps_in_test(self, includes_baseline: bool | None, temps_f: list[float]) -> None:
+        """Update the Temps in Test tab with baseline indicator and temperature list."""
+        try:
+            if includes_baseline is None:
+                # No selection: clear icon and style
+                self.lbl_temps_baseline_icon.setText("")
+                self.lbl_temps_baseline_icon.setStyleSheet("")
+            elif includes_baseline:
+                self.lbl_temps_baseline_icon.setText("✔")
+                self.lbl_temps_baseline_icon.setStyleSheet("color: #3CB371;")  # green
+            else:
+                self.lbl_temps_baseline_icon.setText("✖")
+                self.lbl_temps_baseline_icon.setStyleSheet("color: #CC4444;")  # red
+        except Exception:
+            pass
+        # Enable Plot button only when a test is selected and there is at least one session (including baseline-only)
+        try:
+            has_data = includes_baseline is True or bool(temps_f)
+            self.btn_plot_test.setEnabled(bool(has_data))
+        except Exception:
+            self.btn_plot_test.setEnabled(False)
+        try:
+            self.temps_list.clear()
+            for t in temps_f or []:
+                try:
+                    label = f"{float(t):.1f} °F"
+                except Exception:
+                    label = str(t)
+                self.temps_list.addItem(label)
+        except Exception:
+            pass
+
     # No stage selector UI anymore; navigation is via Previous/Next buttons
 
     def _emit_activate(self) -> None:
@@ -474,8 +742,6 @@ class LiveTestingPanel(QtWidgets.QWidget):
                 self.metrics_table.setItem(i, 1, QtWidgets.QTableWidgetItem(v))
             for i, v in enumerate(pct_vals):
                 self.metrics_table.setItem(i, 2, QtWidgets.QTableWidgetItem(v))
-            # Recompute tight size based on current content
-            self._update_metrics_table_size()
         except Exception:
             pass
 
@@ -484,36 +750,4 @@ class LiveTestingPanel(QtWidgets.QWidget):
             return str(self.heatmap_view_combo.currentText() or "Heatmap")
         except Exception:
             return "Heatmap"
-
-    # --- Internal layout helpers ---
-    def _update_metrics_table_size(self) -> None:
-        try:
-            # Columns sized to contents; compute tight total width
-            self.metrics_table.resizeColumnsToContents()
-            self.metrics_table.resizeRowsToContents()
-            hh = self.metrics_table.horizontalHeader()
-            total_w = 0
-            for c in range(self.metrics_table.columnCount()):
-                total_w += hh.sectionSize(c)
-            # Account for table frame and a small padding
-            total_w += max(8, self.metrics_table.frameWidth() * 2 + 6)
-            self.metrics_table.setFixedWidth(int(total_w))
-            # Compute tight height for all rows visible
-            header_h = self.metrics_table.horizontalHeader().height()
-            row_h_total = 0
-            for r in range(self.metrics_table.rowCount()):
-                row_h_total += self.metrics_table.rowHeight(r)
-            content_h = header_h + row_h_total + 2
-            self.metrics_table.setFixedHeight(int(content_h))
-            # Match picker height to metrics table to avoid tug-of-war
-            self.heatmap_list.setFixedHeight(int(content_h))
-        except Exception:
-            pass
-
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
-        super().resizeEvent(event)
-        try:
-            self._update_metrics_table_size()
-        except Exception:
-            pass
 

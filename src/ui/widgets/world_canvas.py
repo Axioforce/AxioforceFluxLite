@@ -622,12 +622,32 @@ class WorldCanvas(QtWidgets.QWidget):
 
     # Public API for live testing overlay
     def show_live_grid(self, rows: int, cols: int) -> None:
+        try:
+            self._grid_overlay.set_center_circle_mode(False)
+        except Exception:
+            pass
         self._grid_overlay.set_grid(rows, cols)
         self._grid_overlay.show()
         self.update()
 
     def hide_live_grid(self) -> None:
         self._grid_overlay.hide()
+        self.update()
+
+    def show_live_center_circle(self) -> None:
+        """Show single-center-circle overlay used for discrete temperature testing."""
+        try:
+            self._grid_overlay.set_center_circle_mode(True)
+            # 5 cm diameter => 2.5 cm radius => 25 mm; convert to pixels using current scale
+            try:
+                radius_px = int(25.0 * float(self.state.px_per_mm))
+            except Exception:
+                radius_px = 0
+            self._grid_overlay.set_center_circle_radius_px(radius_px if radius_px > 0 else None)
+        except Exception:
+            pass
+        self._grid_overlay.set_grid(1, 1)
+        self._grid_overlay.show()
         self.update()
 
     def _map_cell_for_rotation(self, row: int, col: int) -> Tuple[int, int]:

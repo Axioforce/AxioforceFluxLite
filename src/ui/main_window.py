@@ -15,6 +15,7 @@ from .dialogs.live_test_setup import LiveTestSetupDialog
 from .dialogs.live_test_summary import LiveTestSummaryDialog
 from .dialogs.tare_prompt import TarePromptDialog
 from .dialogs.model_packager import ModelPackagerDialog
+from .dialogs.warmup_prompt import WarmupPromptDialog
 from ..live_testing_model import GRID_BY_MODEL, LiveTestSession, LiveTestStage, GridCellResult, Thresholds
 from .widgets.force_plot import ForcePlotWidget
 from .widgets.moments_view import MomentsViewWidget
@@ -55,11 +56,77 @@ class MainWindow(QtWidgets.QMainWindow):
         moments_left = MomentsViewWidget()
         self.moments_view_left = moments_left
         self.top_tabs_left.addTab(moments_left, "Moments View")
+        # Discrete Temp: Temp-vs-Force plot tab (uses pyqtgraph if available)
+        self.temp_plot_tab = QtWidgets.QWidget()
+        tpl = QtWidgets.QVBoxLayout(self.temp_plot_tab)
+        tpl.setContentsMargins(6, 6, 6, 6)
+        tpl.setSpacing(6)
+        self._temp_plot_pg = None
+        self._temp_plot_widget = None
+        try:
+            import pyqtgraph as pg  # type: ignore[import-not-found]
+            self._temp_plot_pg = pg
+            self._temp_plot_widget = pg.PlotWidget(
+                background=tuple(getattr(config, "COLOR_BG", (18, 18, 20)))
+            )
+            try:
+                self._temp_plot_widget.showGrid(x=True, y=True, alpha=0.3)  # type: ignore[attr-defined]
+                self._temp_plot_widget.setLabel("bottom", "Temperature (°F)")  # type: ignore[attr-defined]
+                self._temp_plot_widget.setLabel("left", "Force")  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            tpl.addWidget(self._temp_plot_widget, 1)
+        except Exception:
+            # Fallback: simple label if pyqtgraph is not available
+            self._temp_plot_pg = None
+            self._temp_plot_widget = None
+            lbl = QtWidgets.QLabel("Temperature plot requires pyqtgraph; plot output not available.")
+            lbl.setStyleSheet("color: rgb(220,220,230);")
+            lbl.setAlignment(QtCore.Qt.AlignCenter)
+            tpl.addWidget(lbl, 1)
+        # Controls row for phase / sensor / axis selection
+        ctrl_row = QtWidgets.QHBoxLayout()
+        ctrl_row.setContentsMargins(0, 0, 0, 0)
+        ctrl_row.setSpacing(8)
+        ctrl_row.addWidget(QtWidgets.QLabel("Phase:"))
+        self.temp_plot_phase_combo = QtWidgets.QComboBox()
+        self.temp_plot_phase_combo.addItems(["Bodyweight", "45 lb"])
+        ctrl_row.addWidget(self.temp_plot_phase_combo)
+        ctrl_row.addWidget(QtWidgets.QLabel("Sensor:"))
+        self.temp_plot_sensor_combo = QtWidgets.QComboBox()
+        self.temp_plot_sensor_combo.addItems(
+            [
+                "Sum",
+                "Rear Right Outer",
+                "Rear Right Inner",
+                "Rear Left Outer",
+                "Rear Left Inner",
+                "Front Left Outer",
+                "Front Left Inner",
+                "Front Right Outer",
+                "Front Right Inner",
+            ]
+        )
+        ctrl_row.addWidget(self.temp_plot_sensor_combo)
+        ctrl_row.addWidget(QtWidgets.QLabel("Axis:"))
+        self.temp_plot_axis_combo = QtWidgets.QComboBox()
+        self.temp_plot_axis_combo.addItems(["z", "x", "y"])
+        ctrl_row.addWidget(self.temp_plot_axis_combo)
+        ctrl_row.addStretch(1)
+        tpl.addLayout(ctrl_row)
+        self.top_tabs_left.addTab(self.temp_plot_tab, "Temp Plot")
+        # Re-plot when any Temp Plot setting changes (if a test is selected)
+        try:
+            self.temp_plot_phase_combo.currentIndexChanged.connect(lambda _i: self._on_plot_discrete_test())
+            self.temp_plot_sensor_combo.currentIndexChanged.connect(lambda _i: self._on_plot_discrete_test())
+            self.temp_plot_axis_combo.currentIndexChanged.connect(lambda _i: self._on_plot_discrete_test())
+        except Exception:
+            pass
         # Live Testing UI will live in bottom control panel
-        
 
         self.top_tabs_right.addTab(self.canvas_right, "Plate View")
         sensor_right = QtWidgets.QWidget()
+        self._sensor_tab_right = sensor_right
         srl = QtWidgets.QVBoxLayout(sensor_right)
         srl.setContentsMargins(0, 0, 0, 0)
         self.sensor_plot_right = ForcePlotWidget()
@@ -68,6 +135,150 @@ class MainWindow(QtWidgets.QMainWindow):
         moments_right = MomentsViewWidget()
         self.moments_view_right = moments_right
         self.top_tabs_right.addTab(moments_right, "Moments View")
+        # Discrete Temp: slope summary tab on the right
+        self.temp_slope_tab = QtWidgets.QWidget()
+        tsl = QtWidgets.QVBoxLayout(self.temp_slope_tab)
+        tsl.setContentsMargins(8, 8, 8, 8)
+        tsl.setSpacing(6)
+
+        def _lbl(text: str) -> QtWidgets.QLabel:
+            lab = QtWidgets.QLabel(text)
+            lab.setStyleSheet("color: rgb(220,220,230);")
+            return lab
+
+        # Helper to build a 3x2 table (45/BW/All x [slope,std]) for one axis
+        def _make_axis_table(title: str):
+            box = QtWidgets.QGroupBox(f"{title} Axis")
+            grid = QtWidgets.QGridLayout(box)
+            grid.setContentsMargins(6, 6, 6, 6)
+            grid.setHorizontalSpacing(10)
+            grid.setVerticalSpacing(4)
+            grid.addWidget(_lbl("Test"), 0, 0)
+            grid.addWidget(_lbl("Slope"), 0, 1)
+            grid.addWidget(_lbl("Std"), 0, 2)
+            return box, grid
+
+        # X axis table (raw slopes)
+        x_box, x_grid = _make_axis_table("X")
+        x_grid.addWidget(_lbl("45 lb"), 1, 0)
+        self.lbl_slope_db_x = _lbl("—")
+        self.lbl_std_db_x = _lbl("—")
+        x_grid.addWidget(self.lbl_slope_db_x, 1, 1)
+        x_grid.addWidget(self.lbl_std_db_x, 1, 2)
+        x_grid.addWidget(_lbl("Bodyweight"), 2, 0)
+        self.lbl_slope_bw_x = _lbl("—")
+        self.lbl_std_bw_x = _lbl("—")
+        x_grid.addWidget(self.lbl_slope_bw_x, 2, 1)
+        x_grid.addWidget(self.lbl_std_bw_x, 2, 2)
+        x_grid.addWidget(_lbl("All Tests"), 3, 0)
+        self.lbl_slope_all_x = _lbl("—")
+        self.lbl_std_all_x = _lbl("—")
+        x_grid.addWidget(self.lbl_slope_all_x, 3, 1)
+        x_grid.addWidget(self.lbl_std_all_x, 3, 2)
+
+        # Y axis table
+        y_box, y_grid = _make_axis_table("Y")
+        y_grid.addWidget(_lbl("45 lb"), 1, 0)
+        self.lbl_slope_db_y = _lbl("—")
+        self.lbl_std_db_y = _lbl("—")
+        y_grid.addWidget(self.lbl_slope_db_y, 1, 1)
+        y_grid.addWidget(self.lbl_std_db_y, 1, 2)
+        y_grid.addWidget(_lbl("Bodyweight"), 2, 0)
+        self.lbl_slope_bw_y = _lbl("—")
+        self.lbl_std_bw_y = _lbl("—")
+        y_grid.addWidget(self.lbl_slope_bw_y, 2, 1)
+        y_grid.addWidget(self.lbl_std_bw_y, 2, 2)
+        y_grid.addWidget(_lbl("All Tests"), 3, 0)
+        self.lbl_slope_all_y = _lbl("—")
+        self.lbl_std_all_y = _lbl("—")
+        y_grid.addWidget(self.lbl_slope_all_y, 3, 1)
+        y_grid.addWidget(self.lbl_std_all_y, 3, 2)
+
+        # Z axis table
+        z_box, z_grid = _make_axis_table("Z")
+        z_grid.addWidget(_lbl("45 lb"), 1, 0)
+        self.lbl_slope_db_z = _lbl("—")
+        self.lbl_std_db_z = _lbl("—")
+        z_grid.addWidget(self.lbl_slope_db_z, 1, 1)
+        z_grid.addWidget(self.lbl_std_db_z, 1, 2)
+        z_grid.addWidget(_lbl("Bodyweight"), 2, 0)
+        self.lbl_slope_bw_z = _lbl("—")
+        self.lbl_std_bw_z = _lbl("—")
+        z_grid.addWidget(self.lbl_slope_bw_z, 2, 1)
+        z_grid.addWidget(self.lbl_std_bw_z, 2, 2)
+        z_grid.addWidget(_lbl("All Tests"), 3, 0)
+        self.lbl_slope_all_z = _lbl("—")
+        self.lbl_std_all_z = _lbl("—")
+        z_grid.addWidget(self.lbl_slope_all_z, 3, 1)
+        z_grid.addWidget(self.lbl_std_all_z, 3, 2)
+
+        # Load-adjusted (weight-scaled) slope model tables
+        tsl.addWidget(_lbl("Load-Adjusted Model (per-sensor avg; using |sum-z|/8.0)"))
+
+        def _make_weight_axis_table(title: str):
+            box = QtWidgets.QGroupBox(f"{title} Axis (Load-Adjusted)")
+            grid = QtWidgets.QGridLayout(box)
+            grid.setContentsMargins(6, 6, 6, 6)
+            grid.setHorizontalSpacing(10)
+            grid.setVerticalSpacing(4)
+            grid.addWidget(_lbl("Test"), 0, 0)
+            grid.addWidget(_lbl("Adj Slope"), 0, 1)
+            return box, grid
+
+        # X axis load-adjusted table (45/BW only)
+        wx_box, wx_grid = _make_weight_axis_table("X")
+        wx_grid.addWidget(_lbl("45 lb"), 1, 0)
+        self.lbl_w_slope_db_x = _lbl("—")
+        wx_grid.addWidget(self.lbl_w_slope_db_x, 1, 1)
+        wx_grid.addWidget(_lbl("Bodyweight"), 2, 0)
+        self.lbl_w_slope_bw_x = _lbl("—")
+        wx_grid.addWidget(self.lbl_w_slope_bw_x, 2, 1)
+
+        # Y axis load-adjusted table (45/BW only)
+        wy_box, wy_grid = _make_weight_axis_table("Y")
+        wy_grid.addWidget(_lbl("45 lb"), 1, 0)
+        self.lbl_w_slope_db_y = _lbl("—")
+        wy_grid.addWidget(self.lbl_w_slope_db_y, 1, 1)
+        wy_grid.addWidget(_lbl("Bodyweight"), 2, 0)
+        self.lbl_w_slope_bw_y = _lbl("—")
+        wy_grid.addWidget(self.lbl_w_slope_bw_y, 2, 1)
+
+        # Z axis load-adjusted table (45/BW only)
+        wz_box, wz_grid = _make_weight_axis_table("Z")
+        wz_grid.addWidget(_lbl("45 lb"), 1, 0)
+        self.lbl_w_slope_db_z = _lbl("—")
+        wz_grid.addWidget(self.lbl_w_slope_db_z, 1, 1)
+        wz_grid.addWidget(_lbl("Bodyweight"), 2, 0)
+        self.lbl_w_slope_bw_z = _lbl("—")
+        wz_grid.addWidget(self.lbl_w_slope_bw_z, 2, 1)
+
+        # Arrange raw and load-adjusted tables side-by-side for each axis
+        row_x = QtWidgets.QWidget()
+        row_x_lay = QtWidgets.QHBoxLayout(row_x)
+        row_x_lay.setContentsMargins(0, 0, 0, 0)
+        row_x_lay.setSpacing(12)
+        row_x_lay.addWidget(x_box)
+        row_x_lay.addWidget(wx_box)
+        tsl.addWidget(row_x)
+
+        row_y = QtWidgets.QWidget()
+        row_y_lay = QtWidgets.QHBoxLayout(row_y)
+        row_y_lay.setContentsMargins(0, 0, 0, 0)
+        row_y_lay.setSpacing(12)
+        row_y_lay.addWidget(y_box)
+        row_y_lay.addWidget(wy_box)
+        tsl.addWidget(row_y)
+
+        row_z = QtWidgets.QWidget()
+        row_z_lay = QtWidgets.QHBoxLayout(row_z)
+        row_z_lay.setContentsMargins(0, 0, 0, 0)
+        row_z_lay.setSpacing(12)
+        row_z_lay.addWidget(z_box)
+        row_z_lay.addWidget(wz_box)
+        tsl.addWidget(row_z)
+
+        tsl.addStretch(1)
+        self.top_tabs_right.addTab(self.temp_slope_tab, "Temp Slopes")
         # Live Testing UI will live in bottom control panel
         self.top_tabs_right.setCurrentWidget(sensor_right)
 
@@ -115,6 +326,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.live_testing_panel.generate_heatmap_requested.connect(self._on_generate_heatmap)
             self.controls.live_testing_panel.heatmap_selected.connect(self._on_heatmap_selected)
             self.controls.live_testing_panel.heatmap_view_changed.connect(self._on_heatmap_view_changed)
+            # Discrete temp test selection for Temps-in-Test view
+            self.controls.live_testing_panel.discrete_test_selected.connect(self._on_discrete_test_selected)
+            # Plot Test from Temps in Test pane
+            self.controls.live_testing_panel.plot_test_requested.connect(self._on_plot_discrete_test)
         except Exception:
             pass
         self.canvas_left.mound_device_selected.connect(self._on_mound_device_selected)
@@ -139,6 +354,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bridge.moments_ready.connect(self._on_moments_ready)
         self.bridge.mound_force_vectors_ready.connect(self._on_mound_force_vectors)
         self.bridge.dynamo_config_ready.connect(self._on_dynamo_config)
+        # Raw payload stream for discrete temp data capture
+        self.bridge.raw_payload_ready.connect(self._on_live_raw_payload)
         # Model management updates
         self.bridge.model_metadata_ready.connect(self._on_model_metadata)
         self.bridge.model_package_status_ready.connect(self._on_model_package_status)
@@ -154,6 +371,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.live_testing_panel.package_model_requested.connect(self._on_package_model_clicked)
             self.controls.live_testing_panel.activate_model_requested.connect(self._on_activate_model)
             self.controls.live_testing_panel.deactivate_model_requested.connect(self._on_deactivate_model)
+            # Discrete temperature testing wiring
+            self.controls.live_testing_panel.discrete_new_requested.connect(self._on_discrete_new_test)
+            self.controls.live_testing_panel.discrete_add_requested.connect(self._on_discrete_add_existing)
             # Temperature Testing wiring
             self.controls.temperature_testing_panel.browse_requested.connect(self._on_temp_browse_folder)
             self.controls.temperature_testing_panel.run_requested.connect(self._on_temp_run_requested)
@@ -187,6 +407,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tare_active: bool = False
         self._tare_countdown_remaining_s: int = 0
         self._tare_last_tick_s: Optional[int] = None
+        # Discrete temp testing: track dedicated tare/flow state
+        self._discrete_tare_mode: bool = False
+        self._discrete_ready_for_data: bool = False
+        self._discrete_waiting_for_unload: bool = False
+        # Discrete Temp: currently selected test path for Temps-in-Test / Temp Plot
+        self._selected_discrete_test_path: str = ""
+        # Discrete Temp: cached per-sensor slopes and aggregated slope summaries
+        self._temp_slopes_by_sensor: Dict[str, Dict[str, Dict[str, float]]] = {}  # phase -> axis -> sensor_prefix -> slope
+        self._temp_slope_avgs: Dict[str, Dict[str, float]] = {}  # "bodyweight"/"45lb"/"all" -> axis -> slope
+        self._temp_slope_stds: Dict[str, Dict[str, float]] = {}  # "bodyweight"/"45lb"/"all" -> axis -> std
+        # Discrete Temp: load-adjusted (weight-scaled) slope model per axis
+        # axis -> {"base": float, "k45": float, "kBW": float, "F45": float, "FBW": float}
+        self._temp_weight_models: Dict[str, Dict[str, float]] = {}
+        # Sensor View temperature smoothing (15 s rolling average for selected device)
+        self._sensor_temp_buffer: list[Tuple[int, float]] = []  # (t_ms, tempF)
+        self._sensor_temp_smoothed_f: Optional[float] = None
 
         # Backend config/capture wiring (callbacks set by controller via main.py)
         self._on_update_dynamo_config_cb: Optional[Callable[[str, object], None]] = None
@@ -215,6 +451,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.ui_tick_hz_changed.connect(self._on_ui_tick_hz_changed)
             self.controls.autoscale_damp_toggled.connect(self._on_autoscale_damp_toggled)
             self.controls.autoscale_damp_n_changed.connect(self._on_autoscale_damp_n_changed)
+            # Backend Config quick actions (Config tab)
+            self.controls.backend_model_bypass_changed.connect(self._on_backend_model_bypass_changed)
+            self.controls.backend_capture_detail_changed.connect(self._on_backend_capture_detail_changed)
+            self.controls.backend_temperature_apply_requested.connect(self._on_backend_temperature_apply)
         except Exception:
             pass
 
@@ -322,6 +562,58 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
 
+    # Backend Config quick actions ------------------------------------------------
+    def _on_backend_model_bypass_changed(self, enabled: bool) -> None:
+        """Toggle model bypass via controller callback."""
+        try:
+            if callable(getattr(self, "_on_set_model_bypass_cb", None)):
+                self._on_set_model_bypass_cb(bool(enabled))
+        except Exception:
+            pass
+
+    def _on_backend_capture_detail_changed(self, value: str) -> None:
+        """Update captureDetail via updateDynamoConfig."""
+        try:
+            v = (value or "").strip()
+            if not v:
+                return
+            if callable(getattr(self, "_on_update_dynamo_config_cb", None)):
+                self._on_update_dynamo_config_cb("captureDetail", v)
+        except Exception:
+            pass
+
+    def _on_backend_temperature_apply(self, payload: object) -> None:
+        """Apply temperature correction settings (use flag, slopes, optional ambient)."""
+        try:
+            if not isinstance(payload, dict):
+                return
+            use_tc = bool(payload.get("use_temperature_correction", False))
+            slopes = payload.get("slopes") or {}
+            room_temp_f = payload.get("room_temperature_f", None)
+            # Normalize slopes
+            try:
+                sx = float(slopes.get("x", 0.0))
+                sy = float(slopes.get("y", 0.0))
+                sz = float(slopes.get("z", 0.0))
+            except Exception:
+                sx = sy = sz = 0.0
+            if callable(getattr(self, "_on_update_dynamo_config_cb", None)):
+                # Backend expects camelCase keys; server converts to snake internally
+                self._on_update_dynamo_config_cb("useTemperatureCorrection", use_tc)
+                self._on_update_dynamo_config_cb(
+                    "temperatureCorrection", {"x": sx, "y": sy, "z": sz}
+                )
+                if room_temp_f is not None:
+                    try:
+                        self._on_update_dynamo_config_cb("roomTemperatureF", float(room_temp_f))
+                    except Exception:
+                        pass
+            # Apply to running devices
+            if callable(getattr(self, "_on_apply_temp_corr_cb", None)):
+                self._on_apply_temp_corr_cb()
+        except Exception:
+            pass
+
     def on_connect_clicked(self, slot: Callable[[str, int], None]) -> None:
         self.controls.connect_requested.connect(lambda h, p: slot(h, p))
 
@@ -393,6 +685,13 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.sensor_plot_left.clear()
             self.sensor_plot_right.clear()
+            # Reset Sensor View temperature smoothing when config/device changes
+            self._sensor_temp_buffer.clear()
+            self._sensor_temp_smoothed_f = None
+            try:
+                self.sensor_plot_right.set_temperature_f(None)
+            except Exception:
+                pass
             # Show dual-series legend only in mound mode
             is_mound = getattr(self, "state", None) is not None and getattr(self.state, "display_mode", "") == "mound"
             self.sensor_plot_left.set_dual_series_enabled(bool(is_mound))
@@ -412,6 +711,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self.controls, "live_testing_panel"):
             try:
                 self.controls.live_testing_panel.btn_start.setEnabled(enabled)
+                # Refresh discrete temp testing picker for current device
+                self._refresh_discrete_tests_for_current_device()
                 self._log(f"update_live_start_enabled: single_mode={single_mode}, has_device={has_device}, enabled={enabled}")
             except Exception:
                 pass
@@ -427,6 +728,1325 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
+    # --- Discrete Temperature Testing helpers ---------------------------------
+
+    def _repo_root(self) -> str:
+        """Return project root (two levels up from this file)."""
+        import os
+        try:
+            return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        except Exception:
+            return os.getcwd()
+
+    def _normalize_device_folder(self, device_id: str) -> str:
+        """Normalize device id for use as a folder name."""
+        s = (device_id or "").strip()
+        if not s:
+            return ""
+        # Keep alphanumerics and common separators for readability
+        return "".join(ch for ch in s if ch.isalnum() or ch in (".", "-", "_"))
+
+    def _short_device_label(self, device_id: str) -> str:
+        """Derive a short label from full device id as: first two chars + '-' + last two chars."""
+        s = (device_id or "").strip()
+        if len(s) >= 4:
+            return f"{s[:2]}-{s[-2:]}"
+        return s or "Device"
+
+    def _discrete_tests_root_for_device(self, device_id: str) -> str:
+        """Return path to discrete_temp_testing/<device> for given device id."""
+        import os
+        root = os.path.join(self._repo_root(), "discrete_temp_testing")
+        dev_norm = self._normalize_device_folder(device_id)
+        return os.path.join(root, dev_norm or "unknown")
+
+    def _refresh_discrete_tests_for_current_device(self) -> None:
+        """Scan filesystem and populate discrete tests picker with all discrete-temp tests."""
+        if not hasattr(self.controls, "live_testing_panel"):
+            return
+        import os, json, datetime
+        tests: list[tuple[str, str, str]] = []
+        try:
+            root = os.path.join(self._repo_root(), "discrete_temp_testing")
+            if os.path.isdir(root):
+                # Iterate over all device folders underneath root
+                for dev_folder in sorted(os.listdir(root)):
+                    plate_dir = os.path.join(root, dev_folder)
+                    if not os.path.isdir(plate_dir):
+                        continue
+                    dev_id = str(dev_folder)
+                    short_label = self._short_device_label(dev_id)
+                    for name in sorted(os.listdir(plate_dir)):
+                        day_path = os.path.join(plate_dir, name)
+                        if not os.path.isdir(day_path):
+                            continue
+                        meta_path = os.path.join(day_path, "test_meta.json")
+                        meta = {}
+                        if os.path.isfile(meta_path):
+                            try:
+                                with open(meta_path, "r", encoding="utf-8") as f:
+                                    meta = json.load(f) or {}
+                            except Exception:
+                                meta = {}
+                        tester = str(meta.get("tester_name") or meta.get("tester") or "").strip()
+                        left = short_label
+                        if tester:
+                            left = f"{short_label}_{tester}"
+                        # Date for display: folder name MM-DD-YYYY -> MM/DD/YYYY
+                        date_str = name
+                        try:
+                            # Validate format; fall back if parse fails
+                            dt = datetime.datetime.strptime(name, "%m-%d-%Y")
+                            date_str = dt.strftime("%m/%d/%Y")
+                        except Exception:
+                            # Try to pretty-print any other form
+                            date_str = name.replace("-", "/").replace("_", "/")
+                        label = f"{left}"  # visual formatting handled by delegate
+                        tests.append((label, date_str, day_path))
+        except Exception:
+            tests = []
+        try:
+            self.controls.live_testing_panel.set_discrete_tests(tests)
+        except Exception:
+            pass
+
+    def _on_discrete_new_test(self) -> None:
+        """Create a new discrete temp test folder for the current plate and today, then start a session."""
+        # Only one live session at a time
+        if self._live_session is not None:
+            try:
+                QtWidgets.QMessageBox.information(self, "Discrete Temp Testing", "End the current session before starting a new discrete temp test.")
+            except Exception:
+                pass
+            return
+        dev_id = (self.state.selected_device_id or "").strip()
+        if not dev_id or self.state.display_mode != "single":
+            try:
+                QtWidgets.QMessageBox.warning(self, "Discrete Temp Testing", "Select a single plate in Config before starting a discrete temp test.")
+            except Exception:
+                pass
+            return
+        import os, json, time, datetime
+        plate_dir = self._discrete_tests_root_for_device(dev_id)
+        try:
+            os.makedirs(plate_dir, exist_ok=True)
+        except Exception:
+            pass
+        today_str = datetime.datetime.now().strftime("%m-%d-%Y")
+        test_dir = os.path.join(plate_dir, today_str)
+        try:
+            os.makedirs(test_dir, exist_ok=True)
+        except Exception:
+            pass
+        meta_path = os.path.join(test_dir, "test_meta.json")
+        if not os.path.isfile(meta_path):
+            meta = {
+                "device_id": dev_id,
+                "short_label": self._short_device_label(dev_id),
+                "tester_name": "",
+                "date": today_str,
+                "created_at_ms": int(time.time() * 1000),
+            }
+            try:
+                with open(meta_path, "w", encoding="utf-8") as f:
+                    json.dump(meta, f, indent=2)
+            except Exception:
+                pass
+        # Remember active test path and refresh picker
+        try:
+            self._active_discrete_test_path = str(test_dir)
+        except Exception:
+            self._active_discrete_test_path = test_dir
+        self._refresh_discrete_tests_for_current_device()
+        # When starting a new discrete session, focus on Plate/Sensor views
+        try:
+            self.top_tabs_left.setCurrentWidget(self.canvas_left)
+        except Exception:
+            pass
+        try:
+            self.top_tabs_right.setCurrentWidget(self._sensor_tab_right)
+        except Exception:
+            pass
+        # Start discrete temp live session for this test
+        self._start_discrete_temp_session(test_dir)
+
+    def _on_discrete_test_selected(self, test_path: str) -> None:
+        """Update Temps-in-Test tab when a discrete test is selected."""
+        # No selection: clear the UI and return
+        if not test_path:
+            try:
+                self._selected_discrete_test_path = ""
+                self.controls.live_testing_panel.set_temps_in_test(None, [])
+                # Clear slope summaries as well
+                self._temp_slopes_by_sensor = {}
+                self._temp_slope_avgs = {}
+                self._update_temp_slope_panel()
+            except Exception:
+                pass
+            return
+
+        try:
+            self._selected_discrete_test_path = str(test_path or "")
+        except Exception:
+            self._selected_discrete_test_path = ""
+
+        includes_baseline = False
+        temps_f: list[float] = []
+        try:
+            import os, csv
+            csv_path = os.path.join(test_path, "discrete_temp_session.csv")
+            if not os.path.isfile(csv_path) or os.path.getsize(csv_path) <= 0:
+                raise FileNotFoundError
+            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                sessions: dict[str, list[float]] = {}
+                for row in reader:
+                    if not row:
+                        continue
+                    key = str(row.get("time") or "")
+                    if not key:
+                        continue
+                    try:
+                        temp_val = float(row.get("sum-t") or 0.0)
+                    except Exception:
+                        continue
+                    sessions.setdefault(key, []).append(temp_val)
+            if not sessions:
+                raise ValueError("no sessions")
+            session_temps: list[float] = []
+            for vals in sessions.values():
+                if not vals:
+                    continue
+                avg = sum(vals) / float(len(vals))
+                session_temps.append(avg)
+            if not session_temps:
+                raise ValueError("no temps")
+            baseline_low = 74.0
+            baseline_high = 78.0
+            non_baseline: list[float] = []
+            for t in session_temps:
+                if baseline_low <= t <= baseline_high:
+                    includes_baseline = True
+                else:
+                    non_baseline.append(t)
+            temps_f = sorted(non_baseline, reverse=True)
+        except Exception:
+            includes_baseline = False
+            temps_f = []
+        try:
+            self.controls.live_testing_panel.set_temps_in_test(includes_baseline, temps_f)
+        except Exception:
+            pass
+        # Recompute slope summaries for this test and update the right-hand pane
+        try:
+            self._compute_discrete_temp_slopes(csv_path)
+            self._update_temp_slope_panel()
+        except Exception:
+            # Best-effort; leave previous slopes if computation fails
+            pass
+        # If Temp Plot is available, refresh it for the newly selected test and show Temp Slopes
+        try:
+            self._on_plot_discrete_test()
+        except Exception:
+            pass
+        try:
+            self.top_tabs_right.setCurrentWidget(self.temp_slope_tab)
+        except Exception:
+            pass
+
+    def _compute_discrete_temp_slopes(self, csv_path: str) -> None:
+        """Compute per-sensor temperature slopes for x/y/z and aggregate them."""
+        import csv, math
+        # Initialize containers: phase -> axis -> sensor_prefix -> list[(T, value)]
+        phases = ("45lb", "bodyweight")
+        axes = ("x", "y", "z")
+        # Only individual sensors; exclude Sum
+        sensor_prefixes = [
+            "rear-right-outer",
+            "rear-right-inner",
+            "rear-left-outer",
+            "rear-left-inner",
+            "front-left-outer",
+            "front-left-inner",
+            "front-right-outer",
+            "front-right-inner",
+        ]
+        data: Dict[str, Dict[str, Dict[str, List[Tuple[float, float]]]]] = {
+            ph: {ax: {sp: [] for sp in sensor_prefixes} for ax in axes} for ph in phases
+        }
+        # Track average per-sensor load for each phase using |sum-z|/8.0
+        phase_loads: Dict[str, List[float]] = {ph: [] for ph in phases}
+        try:
+            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if not row:
+                        continue
+                    try:
+                        phase_raw = str(row.get("phase_name") or row.get("phase") or "").strip().lower()
+                    except Exception:
+                        continue
+                    if phase_raw not in ("45lb", "bodyweight"):
+                        continue
+                    phase = phase_raw
+                    try:
+                        temp_f = float(row.get("sum-t") or 0.0)
+                    except Exception:
+                        continue
+                    # Average per-sensor load from sum-z
+                    try:
+                        sum_z = float(row.get("sum-z") or 0.0)
+                        if sum_z != 0.0:
+                            phase_loads[phase].append(abs(sum_z) / 8.0)
+                    except Exception:
+                        pass
+                    for sp in sensor_prefixes:
+                        for ax in axes:
+                            col = f"{sp}-{ax}"
+                            try:
+                                val = float(row.get(col) or 0.0)
+                            except Exception:
+                                continue
+                            data[phase][ax][sp].append((temp_f, val))
+        except Exception:
+            # On any I/O failure, clear slopes
+            self._temp_slopes_by_sensor = {}
+            self._temp_slope_avgs = {}
+            self._temp_weight_models = {}
+            return
+        slopes_by_sensor: Dict[str, Dict[str, Dict[str, float]]] = {ph: {ax: {} for ax in axes} for ph in phases}
+        slope_lists_phase: Dict[str, Dict[str, List[float]]] = {ph: {ax: [] for ax in axes} for ph in phases}
+        slope_lists_all: Dict[str, List[float]] = {ax: [] for ax in axes}
+
+        def _fit_slope(points: List[Tuple[float, float]]) -> float:
+            """Fit slope with baseline constraint when baseline exists; otherwise ordinary least squares."""
+            if len(points) < 2:
+                return 0.0
+            # Baseline range around 76°F
+            baseline_low = 74.0
+            baseline_high = 78.0
+            baseline = [(t, y) for (t, y) in points if baseline_low <= t <= baseline_high]
+            if baseline:
+                try:
+                    T0 = sum(t for t, _ in baseline) / float(len(baseline))
+                    Y0 = sum(y for _, y in baseline) / float(len(baseline))
+                except Exception:
+                    T0, Y0 = baseline[0]
+                num = 0.0
+                den = 0.0
+                for (t, y) in points:
+                    dt = t - T0
+                    dy = y - Y0
+                    num += dt * dy
+                    den += dt * dt
+                if den <= 0.0:
+                    return 0.0
+                return num / den
+            # Ordinary least squares
+            try:
+                mean_t = sum(t for t, _ in points) / float(len(points))
+                mean_y = sum(y for _, y in points) / float(len(points))
+            except Exception:
+                return 0.0
+            num = 0.0
+            den = 0.0
+            for (t, y) in points:
+                dt = t - mean_t
+                dy = y - mean_y
+                num += dt * dy
+                den += dt * dt
+            if den <= 0.0:
+                return 0.0
+            return num / den
+
+        for ph in phases:
+            for ax in axes:
+                for sp, pts in data.get(ph, {}).get(ax, {}).items():
+                    if not pts or len(pts) < 2:
+                        continue
+                    try:
+                        m = _fit_slope(pts)
+                    except Exception:
+                        m = 0.0
+                    slopes_by_sensor[ph][ax][sp] = m
+                    slope_lists_phase[ph][ax].append(m)
+                    slope_lists_all[ax].append(m)
+
+        avgs: Dict[str, Dict[str, float]] = {"bodyweight": {}, "45lb": {}, "all": {}}
+        stds: Dict[str, Dict[str, float]] = {"bodyweight": {}, "45lb": {}, "all": {}}
+        weight_models: Dict[str, Dict[str, float]] = {}
+        for ax in axes:
+            for ph in phases:
+                vals = slope_lists_phase[ph][ax]
+                if vals:
+                    mu = sum(vals) / float(len(vals))
+                    var = sum((v - mu) ** 2 for v in vals) / float(len(vals))
+                    avgs[ph][ax] = mu
+                    stds[ph][ax] = var ** 0.5
+                else:
+                    avgs[ph][ax] = 0.0
+                    stds[ph][ax] = 0.0
+            vals_all = slope_lists_all[ax]
+            if vals_all:
+                mu_all = sum(vals_all) / float(len(vals_all))
+                var_all = sum((v - mu_all) ** 2 for v in vals_all) / float(len(vals_all))
+                avgs["all"][ax] = mu_all
+                stds["all"][ax] = var_all ** 0.5
+            else:
+                avgs["all"][ax] = 0.0
+                stds["all"][ax] = 0.0
+
+            # Build simple linear "multiplier vs load" model for this axis using phase-averaged loads.
+            # We treat the all-tests slope as a base value and learn k(F) such that:
+            #   s_eff(F) = base * k(F), with s_eff(F45) ~= s45 and s_eff(FBW) ~= sBW.
+            try:
+                base = float(avgs.get("all", {}).get(ax, 0.0))
+            except Exception:
+                base = 0.0
+            try:
+                s45 = float(avgs.get("45lb", {}).get(ax, 0.0))
+            except Exception:
+                s45 = 0.0
+            try:
+                sBW = float(avgs.get("bodyweight", {}).get(ax, 0.0))
+            except Exception:
+                sBW = 0.0
+            loads_45 = phase_loads.get("45lb") or []
+            loads_bw = phase_loads.get("bodyweight") or []
+            F45 = sum(loads_45) / float(len(loads_45)) if loads_45 else 0.0
+            FBW = sum(loads_bw) / float(len(loads_bw)) if loads_bw else 0.0
+            if base != 0.0:
+                k45 = s45 / base
+                kBW = sBW / base
+            else:
+                k45 = 1.0
+                kBW = 1.0
+            weight_models[ax] = {
+                "base": base,
+                "k45": k45,
+                "kBW": kBW,
+                "F45": F45,
+                "FBW": FBW,
+            }
+
+        self._temp_slopes_by_sensor = slopes_by_sensor
+        self._temp_slope_avgs = avgs
+        self._temp_slope_stds = stds
+        self._temp_weight_models = weight_models
+
+    def _update_temp_slope_panel(self) -> None:
+        """Refresh the Temp Slopes tab on the right with current averages/stds."""
+        try:
+            avgs = self._temp_slope_avgs or {}
+            stds = getattr(self, "_temp_slope_stds", {}) or {}
+            models = getattr(self, "_temp_weight_models", {}) or {}
+            def _get(ph: str, ax: str) -> float:
+                try:
+                    return float(avgs.get(ph, {}).get(ax, 0.0))
+                except Exception:
+                    return 0.0
+            def _get_std(ph: str, ax: str) -> float:
+                try:
+                    return float(stds.get(ph, {}).get(ax, 0.0))
+                except Exception:
+                    return 0.0
+            def _get_weighted(ph: str, ax: str) -> float:
+                """Return load-adjusted effective slope for this phase using multiplier model."""
+                try:
+                    model = models.get(ax, {}) or {}
+                    base = float(model.get("base", avgs.get("all", {}).get(ax, 0.0)))
+                    k45 = float(model.get("k45", 1.0))
+                    kBW = float(model.get("kBW", 1.0))
+                    F45 = float(model.get("F45", 0.0))
+                    FBW = float(model.get("FBW", 0.0))
+                except Exception:
+                    base = float(avgs.get("all", {}).get(ax, 0.0))
+                    k45, kBW, F45, FBW = 1.0, 1.0, 0.0, 0.0
+                if base == 0.0:
+                    return 0.0
+                if ph == "45lb":
+                    return base * k45
+                if ph == "bodyweight":
+                    return base * kBW
+                return base
+            # X axis
+            try:
+                self.lbl_slope_db_x.setText(f"{_get('45lb', 'x'):.6f}")
+                self.lbl_std_db_x.setText(f"{_get_std('45lb', 'x'):.6f}")
+                self.lbl_slope_bw_x.setText(f"{_get('bodyweight', 'x'):.6f}")
+                self.lbl_std_bw_x.setText(f"{_get_std('bodyweight', 'x'):.6f}")
+                self.lbl_slope_all_x.setText(f"{_get('all', 'x'):.6f}")
+                self.lbl_std_all_x.setText(f"{_get_std('all', 'x'):.6f}")
+                # Load-adjusted table: average of corrected slopes for 45/BW using multiplier model
+                self.lbl_w_slope_db_x.setText(f"{_get_weighted('45lb', 'x'):.6f}")
+                self.lbl_w_slope_bw_x.setText(f"{_get_weighted('bodyweight', 'x'):.6f}")
+            except Exception:
+                pass
+            # Y axis
+            try:
+                self.lbl_slope_db_y.setText(f"{_get('45lb', 'y'):.6f}")
+                self.lbl_std_db_y.setText(f"{_get_std('45lb', 'y'):.6f}")
+                self.lbl_slope_bw_y.setText(f"{_get('bodyweight', 'y'):.6f}")
+                self.lbl_std_bw_y.setText(f"{_get_std('bodyweight', 'y'):.6f}")
+                self.lbl_slope_all_y.setText(f"{_get('all', 'y'):.6f}")
+                self.lbl_std_all_y.setText(f"{_get_std('all', 'y'):.6f}")
+                self.lbl_w_slope_db_y.setText(f"{_get_weighted('45lb', 'y'):.6f}")
+                self.lbl_w_slope_bw_y.setText(f"{_get_weighted('bodyweight', 'y'):.6f}")
+            except Exception:
+                pass
+            # Z axis
+            try:
+                self.lbl_slope_db_z.setText(f"{_get('45lb', 'z'):.6f}")
+                self.lbl_std_db_z.setText(f"{_get_std('45lb', 'z'):.6f}")
+                self.lbl_slope_bw_z.setText(f"{_get('bodyweight', 'z'):.6f}")
+                self.lbl_std_bw_z.setText(f"{_get_std('bodyweight', 'z'):.6f}")
+                self.lbl_slope_all_z.setText(f"{_get('all', 'z'):.6f}")
+                self.lbl_std_all_z.setText(f"{_get_std('all', 'z'):.6f}")
+                self.lbl_w_slope_db_z.setText(f"{_get_weighted('45lb', 'z'):.6f}")
+                self.lbl_w_slope_bw_z.setText(f"{_get_weighted('bodyweight', 'z'):.6f}")
+            except Exception:
+                pass
+        except Exception:
+            # On failure, leave existing labels as-is
+            pass
+
+    def _on_plot_discrete_test(self) -> None:
+        """Plot temperature vs force for the currently selected discrete test."""
+        # Require a selected test path and a plot widget backend
+        try:
+            test_path = str(getattr(self, "_selected_discrete_test_path", "") or "")
+        except Exception:
+            test_path = ""
+        if not test_path or self._temp_plot_widget is None or self._temp_plot_pg is None:
+            return
+        import os, csv
+        csv_path = os.path.join(test_path, "discrete_temp_session.csv")
+        if not os.path.isfile(csv_path) or os.path.getsize(csv_path) <= 0:
+            return
+        phase_label = str(self.temp_plot_phase_combo.currentText() or "Bodyweight").strip().lower()
+        # Map UI label to phase_name in CSV
+        if phase_label.startswith("45"):
+            phase_name = "45lb"
+        else:
+            phase_name = "bodyweight"
+        sensor_label = str(self.temp_plot_sensor_combo.currentText() or "Sum").strip()
+        axis_label = str(self.temp_plot_axis_combo.currentText() or "z").strip().lower()
+        if axis_label not in ("x", "y", "z"):
+            axis_label = "z"
+        # Sensor prefix mapping (must match CSV headers)
+        name_map = {
+            "Sum": "sum",
+            "Rear Right Outer": "rear-right-outer",
+            "Rear Right Inner": "rear-right-inner",
+            "Rear Left Outer": "rear-left-outer",
+            "Rear Left Inner": "rear-left-inner",
+            "Front Left Outer": "front-left-outer",
+            "Front Left Inner": "front-left-inner",
+            "Front Right Outer": "front-right-outer",
+            "Front Right Inner": "front-right-inner",
+        }
+        prefix = name_map.get(sensor_label, "sum")
+        col_name = f"{prefix}-{axis_label}"
+        xs: list[float] = []
+        ys: list[float] = []
+        loads_per_sensor: list[float] = []
+        try:
+            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if not row:
+                        continue
+                    try:
+                        ph = str(row.get("phase_name") or row.get("phase") or "").strip().lower()
+                    except Exception:
+                        ph = ""
+                    if ph != phase_name:
+                        continue
+                    try:
+                        temp_f = float(row.get("sum-t") or 0.0)
+                        y_val = float(row.get(col_name) or 0.0)
+                    except Exception:
+                        continue
+                    xs.append(temp_f)
+                    ys.append(y_val)
+                    # Track average per-sensor load for this row using |sum-z|/8.0
+                    try:
+                        sum_z = float(row.get("sum-z") or 0.0)
+                        if sum_z != 0.0:
+                            loads_per_sensor.append(abs(sum_z) / 8.0)
+                    except Exception:
+                        pass
+        except Exception:
+            xs, ys = [], []
+        if not xs or not ys or len(xs) != len(ys):
+            return
+        # Sort by temperature ascending for readability
+        pts = sorted(zip(xs, ys), key=lambda p: p[0])
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+
+        # Use precomputed "all tests" slope for this axis; scale by 8 for Sum plots
+        try:
+            avgs = getattr(self, "_temp_slope_avgs", {}) or {}
+        except Exception:
+            avgs = {}
+        try:
+            m_all = float(avgs.get("all", {}).get(axis_label, 0.0))
+        except Exception:
+            m_all = 0.0
+        m_solid = m_all
+        if sensor_label.lower().startswith("sum"):
+            m_solid = m_all * 8.0
+
+        # Weight-adjusted slope using simple linear "multiplier vs load" model based on per-sensor load.
+        # We start from the all-tests slope for this axis and scale it by k(F_ref).
+        try:
+            models = getattr(self, "_temp_weight_models", {}) or {}
+            m_model = models.get(axis_label, {}) or {}
+        except Exception:
+            m_model = {}
+        try:
+            base = float(m_model.get("base", m_all))
+        except Exception:
+            base = m_all
+        try:
+            k45 = float(m_model.get("k45", 1.0))
+        except Exception:
+            k45 = 1.0
+        try:
+            kBW = float(m_model.get("kBW", 1.0))
+        except Exception:
+            kBW = 1.0
+        try:
+            F45 = float(m_model.get("F45", 0.0))
+            FBW = float(m_model.get("FBW", 0.0))
+        except Exception:
+            F45, FBW = 0.0, 0.0
+        F_ref = sum(loads_per_sensor) / float(len(loads_per_sensor)) if loads_per_sensor else 0.0
+        if F45 > 0.0 and FBW > F45 and F_ref > 0.0:
+            try:
+                # Linear interpolation of multiplier between k45 and kBW
+                k_ref = k45 + (kBW - k45) * (F_ref - F45) / (FBW - F45)
+            except Exception:
+                k_ref = k45
+        else:
+            k_ref = k45
+        # Effective per-sensor slope at this reference load
+        m_eff_single = base * k_ref
+        # For Sum plots, approximate slope as 8x per-sensor slope
+        if sensor_label.lower().startswith("sum"):
+            m_dashed = m_eff_single * 8.0
+        else:
+            m_dashed = m_eff_single
+
+        # Compute intercepts that best fit this sensor's data given each fixed slope
+        if len(xs) >= 1:
+            try:
+                mean_t = sum(xs) / float(len(xs))
+                mean_y = sum(ys) / float(len(ys))
+                b_solid = mean_y - m_solid * mean_t
+                b_dashed = mean_y - m_dashed * mean_t
+            except Exception:
+                b_solid = ys[0]
+                b_dashed = ys[0]
+        else:
+            b_solid = 0.0
+            b_dashed = 0.0
+        try:
+            self._temp_plot_widget.clear()  # type: ignore[union-attr]
+            # Re-label axes to reflect the chosen axis
+            try:
+                axis_label_full = axis_label.upper()
+                self._temp_plot_widget.setLabel("bottom", "Temperature (°F)")  # type: ignore[attr-defined]
+                self._temp_plot_widget.setLabel("left", f"{sensor_label} {axis_label_full}")  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            # Draw best-fit lines (solid = global slope, dashed = load-adjusted) and data connected with a line
+            try:
+                solid_ys = [b_solid + m_solid * t for t in xs]
+            except Exception:
+                solid_ys = ys
+            try:
+                dashed_ys = [b_dashed + m_dashed * t for t in xs]
+            except Exception:
+                dashed_ys = ys
+            base_color = (180, 180, 255)
+            solid_pen = self._temp_plot_pg.mkPen(color=base_color, width=2)  # type: ignore[attr-defined]
+            dashed_pen = self._temp_plot_pg.mkPen(color=base_color, width=2, style=QtCore.Qt.DashLine)  # type: ignore[attr-defined]
+            # Global all-tests line (solid)
+            self._temp_plot_widget.plot(xs, solid_ys, pen=solid_pen)  # type: ignore[attr-defined]
+            # Load-adjusted line (dashed)
+            self._temp_plot_widget.plot(xs, dashed_ys, pen=dashed_pen)  # type: ignore[attr-defined]
+            # Data connected with a lighter line plus markers
+            self._temp_plot_widget.plot(
+                xs,
+                ys,
+                pen=self._temp_plot_pg.mkPen(color=(120, 220, 120), width=1),  # type: ignore[attr-defined]
+                symbol="o",
+                symbolBrush=(200, 250, 200),
+                symbolSize=8,
+            )
+        except Exception:
+            pass
+        # Bring Temp Plot tab to front on the left
+        try:
+            self.top_tabs_left.setCurrentWidget(self.temp_plot_tab)
+        except Exception:
+            pass
+
+    def _on_discrete_add_existing(self, test_path: str) -> None:
+        """Handle Add to Existing Test button selection."""
+        if self._live_session is not None:
+            try:
+                QtWidgets.QMessageBox.information(self, "Discrete Temp Testing", "End the current session before adding to an existing discrete temp test.")
+            except Exception:
+                pass
+            return
+        if not test_path:
+            return
+        try:
+            self._log(f"discrete_temp_add_existing: test_path='{test_path}'")
+        except Exception:
+            pass
+        try:
+            self._active_discrete_test_path = str(test_path or "")
+        except Exception:
+            self._active_discrete_test_path = ""
+
+        # Try to load tester/body weight from this test's meta; if available, skip the setup dialog
+        tester_override: Optional[str] = None
+        bw_override: Optional[float] = None
+        try:
+            import os, json
+            meta_path = os.path.join(test_path, "test_meta.json")
+            if os.path.isfile(meta_path):
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f) or {}
+                tester_override = str(meta.get("tester_name") or "").strip() or None
+                try:
+                    bw_val = meta.get("body_weight_n")
+                    if bw_val is not None:
+                        bw_override = float(bw_val)
+                except Exception:
+                    bw_override = None
+        except Exception:
+            tester_override = None
+            bw_override = None
+
+        # Start discrete temp live session targeting this existing test folder
+        # When adding to an existing discrete session, focus on Plate/Sensor views
+        try:
+            self.top_tabs_left.setCurrentWidget(self.canvas_left)
+        except Exception:
+            pass
+        try:
+            self.top_tabs_right.setCurrentWidget(self._sensor_tab_right)
+        except Exception:
+            pass
+
+        if tester_override is not None and bw_override is not None:
+            self._start_discrete_temp_session(test_path, tester_override, bw_override, skip_dialog=True)
+        else:
+            # Fallback: ask for session info if meta incomplete
+            self._start_discrete_temp_session(test_path)
+
+    def _update_discrete_test_meta(self, test_path: str, tester: str, body_weight_n: float) -> None:
+        """Update test_meta.json for a discrete test with tester and body weight."""
+        import os, json, time
+        try:
+            meta_path = os.path.join(test_path, "test_meta.json")
+        except Exception:
+            return
+        meta: dict = {}
+        try:
+            if os.path.isfile(meta_path):
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f) or {}
+        except Exception:
+            meta = {}
+        # Merge new fields
+        try:
+            meta["tester_name"] = str(tester or "").strip()
+        except Exception:
+            meta["tester_name"] = str(tester or "")
+        try:
+            meta["body_weight_n"] = float(body_weight_n)
+        except Exception:
+            pass
+        if "device_id" not in meta:
+            meta["device_id"] = self.state.selected_device_id or ""
+        if "short_label" not in meta:
+            meta["short_label"] = self._short_device_label(self.state.selected_device_id or "")
+        if "date" not in meta:
+            try:
+                import datetime as _dt
+                meta["date"] = _dt.datetime.now().strftime("%m-%d-%Y")
+            except Exception:
+                pass
+        if "created_at_ms" not in meta:
+            try:
+                meta["created_at_ms"] = int(time.time() * 1000)
+            except Exception:
+                pass
+        try:
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2)
+        except Exception:
+            pass
+
+    def _start_discrete_tare_sequence(self) -> None:
+        """Kick off a 15-second settle-and-tare sequence using existing guidance logic."""
+        # Use same dialog/countdown as normal, but without periodic scheduling
+        try:
+            self._tare_active = True
+            # Let guidance logic seed countdown and last_tick on first sample
+            self._tare_countdown_remaining_s = 0
+            self._tare_last_tick_s = None
+            self._next_tare_due_ms = None
+            self._open_tare_dialog()
+        except Exception:
+            pass
+
+    def _on_discrete_tare_completed(self) -> None:
+        """Advance discrete temp flow after a tare completes."""
+        if self._live_session is None or not bool(getattr(self._live_session, "is_discrete_temp", False)):
+            return
+        # First tare after warmup: mark ready and show circle; do not advance stage
+        if not bool(getattr(self, "_discrete_ready_for_data", False)):
+            try:
+                self._discrete_ready_for_data = True
+            except Exception:
+                self._discrete_ready_for_data = True
+            # Turn model bypass ON for discrete data gathering
+            try:
+                if callable(getattr(self, "_on_set_model_bypass_cb", None)):
+                    self._on_set_model_bypass_cb(True)
+                    self._should_revert_bypass = True
+                    self._log("discrete_temp: setModelBypass(true) for data gathering")
+            except Exception:
+                pass
+            try:
+                self.canvas_left.show_live_center_circle()
+                self.canvas_right.show_live_center_circle()
+            except Exception:
+                pass
+            return
+        # Subsequent tares: advance to the next stage (if available)
+        if self._live_stage_idx + 1 < len(self._live_session.stages):
+            self._live_stage_idx += 1
+            try:
+                self._apply_stage_context()
+            except Exception:
+                pass
+
+    def _on_discrete_stage_completed(self) -> None:
+        """Handle stage completion in discrete temp mode (auto-advance and scheduled tares)."""
+        if self._live_session is None or not bool(getattr(self._live_session, "is_discrete_temp", False)):
+            return
+        idx = int(self._live_stage_idx)
+        total_stages = len(self._live_session.stages)
+        # After DB stages (0, 2): wait for unload (Fz < 100 N) before advancing
+        if idx in (0, 2):
+            try:
+                self._discrete_waiting_for_unload = True
+                self.controls.live_testing_panel.set_debug_status("Remove the load from the plate to continue (Fz < 100 N)…")
+            except Exception:
+                self._discrete_waiting_for_unload = True
+            return
+        # After BW stage 1: run tare sequence before continuing
+        if idx == 1:
+            self._start_discrete_tare_sequence()
+            return
+        # After final BW stage 3: finish the session
+        if idx == 3:
+            try:
+                # Before generic summary/cleanup, write discrete session CSV rows
+                rows = self._write_discrete_session_csv()
+                try:
+                    self._discrete_session_success = bool(rows >= 2)
+                except Exception:
+                    self._discrete_session_success = bool(rows > 0)
+                self._submit_results_and_end()
+            except Exception:
+                self._on_live_end()
+
+    def _accumulate_discrete_measurement(self, phase_kind: str, window_start_ms: int, window_end_ms: int) -> None:
+        """Aggregate detailed sensor data over a stability window for discrete temp sessions."""
+        try:
+            if self._live_session is None or not bool(getattr(self._live_session, "is_discrete_temp", False)):
+                return
+            test_path = str(getattr(self, "_active_discrete_test_path", "") or "")
+            if not test_path:
+                return
+            buf = getattr(self, "_discrete_raw_buffer", None)
+            if not isinstance(buf, list) or not buf:
+                return
+            dev_id = str(self._live_session.device_id or "").strip()
+            if not dev_id:
+                return
+            # Filter payloads in window and for current device
+            samples: list[dict] = []
+            for p in buf:
+                try:
+                    if not isinstance(p, dict):
+                        continue
+                    did = str(p.get("deviceId") or p.get("device_id") or "").strip()
+                    if did != dev_id:
+                        continue
+                    t_ms = int(p.get("time") or 0)
+                    if t_ms < window_start_ms or t_ms > window_end_ms:
+                        continue
+                    samples.append(p)
+                except Exception:
+                    continue
+            if not samples:
+                try:
+                    self._log(f"discrete_accum: no samples in window [{window_start_ms},{window_end_ms}] phase={phase_kind}")
+                except Exception:
+                    pass
+                return
+            n = len(samples)
+            # Column layout for CSV
+            cols = [
+                "time", "phase", "device_id", "phase_name", "phase_id", "record_id",
+                "rear-right-outer-x", "rear-right-outer-y", "rear-right-outer-z", "rear-right-outer-t",
+                "rear-right-inner-x", "rear-right-inner-y", "rear-right-inner-z", "rear-right-inner-t",
+                "rear-left-outer-x", "rear-left-outer-y", "rear-left-outer-z", "rear-left-outer-t",
+                "rear-left-inner-x", "rear-left-inner-y", "rear-left-inner-z", "rear-left-inner-t",
+                "front-left-outer-x", "front-left-outer-y", "front-left-outer-z", "front-left-outer-t",
+                "front-left-inner-x", "front-left-inner-y", "front-left-inner-z", "front-left-inner-t",
+                "front-right-outer-x", "front-right-outer-y", "front-right-outer-z", "front-right-outer-t",
+                "front-right-inner-x", "front-right-inner-y", "front-right-inner-z", "front-right-inner-t",
+                "sum-x", "sum-y", "sum-z", "sum-t",
+                "moments-x", "moments-y", "moments-z",
+                "COPx", "COPy",
+                "bx", "by", "bz", "mx", "my", "mz",
+            ]
+            # Sensor name -> CSV prefix
+            name_map = {
+                "Rear Right Outer": "rear-right-outer",
+                "Rear Right Inner": "rear-right-inner",
+                "Rear Left Outer": "rear-left-outer",
+                "Rear Left Inner": "rear-left-inner",
+                "Front Left Outer": "front-left-outer",
+                "Front Left Inner": "front-left-inner",
+                "Front Right Outer": "front-right-outer",
+                "Front Right Inner": "front-right-inner",
+                "Sum": "sum",
+            }
+            # Accumulators
+            sums: dict[str, float] = {c: 0.0 for c in cols}
+            last_record_id: int = 0
+            for p in samples:
+                try:
+                    rec_id = int(p.get("recordId") or p.get("record_id") or 0)
+                    if rec_id:
+                        last_record_id = rec_id
+                except Exception:
+                    pass
+                try:
+                    avg_temp = float(p.get("avgTemperatureF") or 0.0)
+                except Exception:
+                    avg_temp = 0.0
+                sensors = p.get("sensors") or []
+                # Map sensors by name
+                by_name: dict[str, dict] = {}
+                for s in sensors:
+                    try:
+                        nm = str((s or {}).get("name") or "").strip()
+                    except Exception:
+                        nm = ""
+                    if nm:
+                        by_name[nm] = s
+                for nm, prefix in name_map.items():
+                    s = by_name.get(nm)
+                    if not isinstance(s, dict):
+                        continue
+                    try:
+                        x = float(s.get("x") or 0.0)
+                        y = float(s.get("y") or 0.0)
+                        z = float(s.get("z") or 0.0)
+                    except Exception:
+                        x = y = z = 0.0
+                    # Vector used as per-sensor temperature proxy
+                    t = avg_temp
+                    sums[f"{prefix}-x"] = sums.get(f"{prefix}-x", 0.0) + x
+                    sums[f"{prefix}-y"] = sums.get(f"{prefix}-y", 0.0) + y
+                    sums[f"{prefix}-z"] = sums.get(f"{prefix}-z", 0.0) + z
+                    sums[f"{prefix}-t"] = sums.get(f"{prefix}-t", 0.0) + t
+                # Moments
+                m = p.get("moments") or {}
+                try:
+                    sums["moments-x"] += float(m.get("x") or 0.0)
+                    sums["moments-y"] += float(m.get("y") or 0.0)
+                    sums["moments-z"] += float(m.get("z") or 0.0)
+                except Exception:
+                    pass
+                # COP
+                cop = p.get("cop") or {}
+                try:
+                    sums["COPx"] += float(cop.get("x") or 0.0)
+                    sums["COPy"] += float(cop.get("y") or 0.0)
+                except Exception:
+                    pass
+            # Build single-measurement row (averages)
+            row: dict[str, object] = {}
+            # Time: consistent per session (use session start)
+            try:
+                row["time"] = int(getattr(self, "_discrete_session_start_ms", window_start_ms))
+            except Exception:
+                row["time"] = int(window_start_ms)
+            phase_name = "45lb" if phase_kind == "45lb" else "bodyweight"
+            row["phase"] = phase_name
+            row["phase_name"] = phase_name
+            row["phase_id"] = phase_name
+            row["device_id"] = dev_id
+            row["record_id"] = int(last_record_id)
+            # Averages
+            for key, total in sums.items():
+                if key in ("time", "phase", "phase_name", "phase_id", "device_id", "record_id"):
+                    continue
+                if n > 0:
+                    row[key] = float(total) / float(n)
+            # Initialize missing numeric fields to 0 for consistency
+            for key in cols:
+                if key not in row:
+                    if key in ("time", "phase", "phase_name", "phase_id", "device_id"):
+                        continue
+                    row.setdefault(key, 0.0)
+            # Fold into per-session stats (running average over up to 3 measurements)
+            stats = getattr(self, "_discrete_session_stats", None)
+            if not isinstance(stats, dict):
+                return
+            bucket = stats.get(phase_kind)
+            if not isinstance(bucket, dict):
+                return
+            cnt = int(bucket.get("count") or 0)
+            if cnt <= 0:
+                bucket["row"] = row
+                bucket["count"] = 1
+                try:
+                    self._log(f"discrete_accum: init phase={phase_kind} window=[{window_start_ms},{window_end_ms}] n={n}")
+                except Exception:
+                    pass
+            else:
+                prev = bucket.get("row") or {}
+                merged: dict[str, object] = dict(prev)
+                for key in cols:
+                    if key in ("time", "phase", "phase_name", "phase_id", "device_id"):
+                        merged[key] = prev.get(key, row.get(key))
+                        continue
+                    try:
+                        v_prev = float(prev.get(key, 0.0))
+                        v_new = float(row.get(key, 0.0))
+                        merged[key] = (v_prev * cnt + v_new) / float(cnt + 1)
+                    except Exception:
+                        merged[key] = prev.get(key, row.get(key))
+                bucket["row"] = merged
+                bucket["count"] = cnt + 1
+                try:
+                    self._log(f"discrete_accum: update phase={phase_kind} count={cnt+1}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _write_discrete_session_csv(self) -> int:
+        """Write two rows (45lb/bodyweight) for the current discrete session into discrete_temp_session.csv."""
+        rows_written = 0
+        try:
+            if self._live_session is None or not bool(getattr(self._live_session, "is_discrete_temp", False)):
+                return 0
+            test_path = str(getattr(self, "_active_discrete_test_path", "") or "")
+            if not test_path:
+                return 0
+            import os, csv, time as _tmod
+            csv_path = os.path.join(test_path, "discrete_temp_session.csv")
+            cols = [
+                "time", "phase", "device_id", "phase_name", "phase_id", "record_id",
+                "rear-right-outer-x", "rear-right-outer-y", "rear-right-outer-z", "rear-right-outer-t",
+                "rear-right-inner-x", "rear-right-inner-y", "rear-right-inner-z", "rear-right-inner-t",
+                "rear-left-outer-x", "rear-left-outer-y", "rear-left-outer-z", "rear-left-outer-t",
+                "rear-left-inner-x", "rear-left-inner-y", "rear-left-inner-z", "rear-left-inner-t",
+                "front-left-outer-x", "front-left-outer-y", "front-left-outer-z", "front-left-outer-t",
+                "front-left-inner-x", "front-left-inner-y", "front-left-inner-z", "front-left-inner-t",
+                "front-right-outer-x", "front-right-outer-y", "front-right-outer-z", "front-right-outer-t",
+                "front-right-inner-x", "front-right-inner-y", "front-right-inner-z", "front-right-inner-t",
+                "sum-x", "sum-y", "sum-z", "sum-t",
+                "moments-x", "moments-y", "moments-z",
+                "COPx", "COPy",
+                "bx", "by", "bz", "mx", "my", "mz",
+            ]
+            stats = getattr(self, "_discrete_session_stats", None)
+            if not isinstance(stats, dict):
+                return 0
+            rows_to_append: list[list[object]] = []
+            for phase_kind in ("45lb", "bodyweight"):
+                bucket = stats.get(phase_kind)
+                if not isinstance(bucket, dict):
+                    continue
+                if int(bucket.get("count") or 0) <= 0:
+                    continue
+                row = bucket.get("row") or {}
+                # Ensure required meta fields
+                try:
+                    row["device_id"] = row.get("device_id") or (self._live_session.device_id or "")
+                except Exception:
+                    row["device_id"] = self._live_session.device_id or ""
+                phase_name = "45lb" if phase_kind == "45lb" else "bodyweight"
+                row["phase"] = phase_name
+                row["phase_name"] = phase_name
+                row["phase_id"] = phase_name
+                if "time" not in row:
+                    try:
+                        row["time"] = int(getattr(self, "_discrete_session_start_ms", int(_tmod.time() * 1000)))
+                    except Exception:
+                        row["time"] = int(_tmod.time() * 1000)
+                data_row: list[object] = []
+                for c in cols:
+                    v = row.get(c)
+                    data_row.append(v)
+                rows_to_append.append(data_row)
+            if not rows_to_append:
+                try:
+                    self._log("discrete_csv: no rows to append for this session (stats empty)")
+                except Exception:
+                    pass
+                return 0
+            # Write header if file is new/empty, then append rows
+            write_header = not os.path.isfile(csv_path) or os.path.getsize(csv_path) == 0
+            with open(csv_path, "a", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                if write_header:
+                    writer.writerow(cols)
+                for r in rows_to_append:
+                    writer.writerow(r)
+            rows_written = len(rows_to_append)
+            try:
+                self._log(f"discrete_csv: wrote {rows_written} rows to {csv_path}")
+            except Exception:
+                pass
+        except Exception:
+            rows_written = 0
+        return rows_written
+
+    def _discrete_xy_stable(self) -> bool:
+        """Check COP stability during the Fz stability window for discrete temp sessions.
+
+        Requirement: during the current stability window, the COP must stay within a
+        3 cm radius (30 mm) of its mean position.
+        """
+        try:
+            if self._live_session is None or not bool(getattr(self._live_session, "is_discrete_temp", False)):
+                return True
+            samples = getattr(self, "_recent_samples", None)
+            if not isinstance(samples, list) or not samples:
+                return True
+            xs = [float(s[1]) for s in samples]
+            ys = [float(s[2]) for s in samples]
+            if not xs or not ys:
+                return True
+            import math as _math
+            mean_x = sum(xs) / float(len(xs))
+            mean_y = sum(ys) / float(len(ys))
+            max_r_mm = 20.0  # 2 cm radius
+            max_seen = 0.0
+            for x, y in zip(xs, ys):
+                dx = x - mean_x
+                dy = y - mean_y
+                r = _math.sqrt(dx * dx + dy * dy)
+                if r > max_r_mm:
+                    max_seen = max(max_seen, r)
+                    try:
+                        self._log(
+                            f"discrete_xy_stab: COP unstable (r={r:.1f} mm > {max_r_mm:.1f} mm); max_seen={max_seen:.1f}"
+                        )
+                    except Exception:
+                        pass
+                    return False
+                max_seen = max(max_seen, r)
+            try:
+                self._log(
+                    f"discrete_xy_stab: COP stable; max_radius={max_seen:.1f} mm (limit={max_r_mm:.1f} mm)"
+                )
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return True
+
+    def _start_discrete_temp_session(self, test_path: str, tester_override: Optional[str] = None, body_weight_n_override: Optional[float] = None, skip_dialog: bool = False) -> None:
+        """Start a discrete temperature live session: single center location, 6 phases."""
+        # Guard: only allow in single-device mode with a selected device
+        if self.state.display_mode != "single" or not (self.state.selected_device_id or "").strip():
+            try:
+                QtWidgets.QMessageBox.warning(self, "Discrete Temp Testing", "Select a single plate in Config before starting a discrete temp session.")
+            except Exception:
+                pass
+            return
+        dev_id = self.state.selected_device_id or ""
+        model_id = self.state.selected_device_type or "06"
+        self._log(f"discrete_temp_start: device_id={dev_id}, model_id={model_id}, test_path='{test_path}'")
+
+        # Capture tester/body weight either from overrides or from the setup dialog
+        if skip_dialog and tester_override is not None and body_weight_n_override is not None:
+            tester = str(tester_override or "").strip()
+            bw_n = float(body_weight_n_override)
+            self._log(f"discrete_setup_values(meta): tester='{tester}', model_id={model_id}, device_id={dev_id}, bw_n={bw_n:.1f}")
+        else:
+            dlg = LiveTestSetupDialog(self, is_temp_test=True)
+            dlg.set_device_info(dev_id, model_id)
+            dlg.set_defaults(tester=tester_override or "", body_weight_n=float(body_weight_n_override or 0.0))
+            result = dlg.exec()
+            self._log(f"discrete_setup_dialog_result: {result}")
+            if result != LiveTestSetupDialog.Accepted:
+                self._log("discrete_temp_start: dialog cancelled")
+                return
+            tester, bw_n, _is_temp, _do_capture, _save_dir = dlg.get_values()
+            self._log(f"discrete_setup_values: tester='{tester}', model_id={model_id}, device_id={dev_id}, bw_n={bw_n:.1f}")
+
+        # Persist tester metadata into this test's meta file
+        try:
+            self._update_discrete_test_meta(test_path, tester, float(bw_n))
+        except Exception:
+            pass
+
+        # Build thresholds similar to live testing
+        db_tol_n = float(config.THRESHOLDS_DB_N_BY_MODEL.get(model_id, 6.0))
+        try:
+            bw_pct = float(getattr(config, "THRESHOLDS_BW_PCT_BY_MODEL", {}).get(model_id, 0.01))
+        except Exception:
+            bw_pct = 0.01
+        bw_tol_n = round(float(bw_n) * float(bw_pct), 1)
+        thresholds = Thresholds(
+            dumbbell_tol_n=db_tol_n,
+            bodyweight_tol_n=bw_tol_n,
+        )
+
+        # Discrete temp grid: single logical cell at center
+        rows, cols = 1, 1
+        from ..live_testing_model import LiveTestSession, LiveTestStage, GridCellResult, Thresholds as _T  # noqa: F401
+
+        session = LiveTestSession(
+            tester_name=tester,
+            device_id=dev_id,
+            model_id=model_id,
+            body_weight_n=bw_n,
+            thresholds=thresholds,
+            grid_rows=rows,
+            grid_cols=cols,
+            is_temp_test=True,
+            is_discrete_temp=True,
+        )
+
+        # Build 4 phases: DB/BW repeated 2x at center
+        import math
+        lb_to_n = 4.44822
+        names = [
+            "45 lb DB (1/2)",
+            "Body Weight (1/2)",
+            "45 lb DB (2/2)",
+            "Body Weight (2/2)",
+        ]
+        targets = [
+            45 * lb_to_n,
+            bw_n,
+            45 * lb_to_n,
+            bw_n,
+        ]
+        stage_idx = 1
+        for name, tgt in zip(names, targets):
+            stage = LiveTestStage(
+                index=stage_idx,
+                name=name,
+                location="Center",
+                target_n=float(tgt),
+                total_cells=1,
+            )
+            # Single logical cell (0,0)
+            stage.results[(0, 0)] = GridCellResult(row=0, col=0)
+            session.stages.append(stage)
+            stage_idx += 1
+
+        self._live_session = session
+        self._live_stage_idx = 0
+        self._active_cell = None
+        self._recent_samples.clear()
+        # Reset arming state
+        self._arming_cell = None
+        self._arming_start_ms = None
+        # Discrete-specific flow flags
+        self._discrete_tare_mode = True
+        self._discrete_ready_for_data = False
+        self._discrete_waiting_for_unload = False
+        # Track per-session aggregation for CSV (one 45lb row, one bodyweight row)
+        import time as _tmod
+        try:
+            self._discrete_session_start_ms = int(_tmod.time() * 1000)
+        except Exception:
+            self._discrete_session_start_ms = 0
+        self._discrete_session_stats = {
+            "45lb": {"count": 0, "row": {}},
+            "bodyweight": {"count": 0, "row": {}},
+        }
+        self._discrete_session_success: bool = False
+        # Raw payload buffer for discrete averaging
+        self._discrete_raw_buffer: list[dict] = []
+        # Discrete-specific flow flags
+        self._discrete_tare_mode = True
+        self._discrete_ready_for_data = False
+        # Ensure model bypass is OFF during warmup/tare and set captureDetail for temp
+        try:
+            if callable(getattr(self, "_on_set_model_bypass_cb", None)):
+                self._on_set_model_bypass_cb(False)
+                self._should_revert_bypass = False
+                self._log("discrete_temp: setModelBypass(false) before warmup")
+        except Exception:
+            pass
+        try:
+            if callable(getattr(self, "_on_update_dynamo_config_cb", None)):
+                self._on_update_dynamo_config_cb("captureDetail", "allTemp")
+                self._log("discrete_temp: captureDetail set to 'allTemp'")
+        except Exception:
+            pass
+
+        # Clear any previous colors and show center-circle overlay
+        try:
+            self.canvas_left.clear_live_colors()
+            self.canvas_right.clear_live_colors()
+        except Exception:
+            pass
+        try:
+            self.controls.live_testing_panel.btn_start.setEnabled(False)
+            self.controls.live_testing_panel.btn_end.setEnabled(True)
+            try:
+                # Navigation buttons are not used in discrete mode
+                self.controls.live_testing_panel.btn_next.setEnabled(False)
+                self.controls.live_testing_panel.btn_prev.setEnabled(False)
+            except Exception:
+                pass
+            self.controls.live_testing_panel.set_next_stage_label("Next Stage")
+            self.controls.live_testing_panel.set_metadata(tester, dev_id, model_id, bw_n)
+            self.controls.live_testing_panel.set_thresholds(thresholds.dumbbell_tol_n, thresholds.bodyweight_tol_n)
+            # Do NOT show center-circle overlay until warmup+tare complete
+            # Initial stage progress
+            self.controls.live_testing_panel.set_stage_progress("Stage 1: 45 lb DB (1/3) @ Center", 0, 1)
+            self._log(f"discrete_session_initialized: rows={rows}, cols={cols}, stages={len(self._live_session.stages)} path='{test_path}'")
+        except Exception:
+            pass
+
+        # Warm-up sequence (20 s) before first tare
+        try:
+            warm = WarmupPromptDialog(self, duration_s=20)
+            res = warm.exec()
+        except Exception:
+            res = 0
+        if res != WarmupPromptDialog.Accepted:
+            self._log("discrete_temp_start: warmup cancelled")
+            return
+        # Immediately run first tare guidance (15 s settle) before Stage 1
+        self._start_discrete_tare_sequence()
+
     # Live Testing session handlers
     def _on_live_start(self) -> None:
         # Guard: only allow in single-device mode with a selected device
@@ -441,7 +2061,15 @@ class MainWindow(QtWidgets.QMainWindow):
         # Gather device and model
         dev_id = self.state.selected_device_id or ""
         model_id = self.state.selected_device_type or "06"
-        dlg = LiveTestSetupDialog(self)
+        # Session mode (Normal vs Temperature Test) comes from the Live Testing panel dropdown.
+        is_temp_test = False
+        try:
+            panel = self.controls.live_testing_panel
+            if hasattr(panel, "is_temperature_session"):
+                is_temp_test = bool(panel.is_temperature_session())
+        except Exception:
+            pass
+        dlg = LiveTestSetupDialog(self, is_temp_test=is_temp_test)
         dlg.set_device_info(dev_id, model_id)
         dlg.set_defaults(tester="", body_weight_n=0.0)
         result = dlg.exec()
@@ -893,6 +2521,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tare_countdown_remaining_s = 0
         self._tare_last_tick_s = None
         self._next_tare_due_ms = None
+        # Reset discrete temp flags
+        try:
+            if hasattr(self, "_discrete_tare_mode"):
+                self._discrete_tare_mode = False
+            if hasattr(self, "_discrete_ready_for_data"):
+                self._discrete_ready_for_data = False
+            if hasattr(self, "_discrete_waiting_for_unload"):
+                self._discrete_waiting_for_unload = False
+        except Exception:
+            self._discrete_tare_mode = False
+            self._discrete_ready_for_data = False
+            self._discrete_waiting_for_unload = False
         try:
             if self._tare_dialog is not None:
                 self._tare_dialog.reject()
@@ -1007,6 +2647,22 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
         finally:
             self._should_revert_bypass = False
+
+        # Discrete temp sessions: skip full summary dialog/export; just show simple status
+        try:
+            if self._live_session is not None and bool(getattr(self._live_session, "is_discrete_temp", False)):
+                ok = bool(getattr(self, "_discrete_session_success", False))
+                text = "Discrete temp session saved to CSV." if ok else "Discrete temp session completed, but no averaged data was written."
+                try:
+                    QtWidgets.QMessageBox.information(self, "Discrete Temp Testing", text)
+                except Exception:
+                    pass
+                self._on_live_end()
+                return
+        except Exception:
+            # Fall through to normal summary path if anything goes wrong
+            pass
+
         summary = self._compute_summary()
         if summary is None:
             self._on_live_end()
@@ -2629,6 +4285,98 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
+    def _on_live_raw_payload(self, payload: object) -> None:
+        """Handle raw backend payloads for Sensor View temperature and discrete temp averaging."""
+        # First: always update Sensor View temperature smoothing for selected device (right Sensor View)
+        try:
+            self._update_sensor_temperature_from_payload(payload)
+        except Exception:
+            # Never let temperature UI updates break discrete temp buffering
+            pass
+
+        # Then: buffer raw payloads for discrete temp averaging (when in discrete temp live session)
+        try:
+            if self._live_session is None or not bool(getattr(self._live_session, "is_discrete_temp", False)):
+                return
+            if not isinstance(payload, dict):
+                return
+            dev_id = str(payload.get("deviceId") or payload.get("device_id") or "").strip()
+            cur_dev = str(self.state.selected_device_id or "").strip()
+            if not dev_id or not cur_dev or dev_id != cur_dev:
+                return
+            t_ms = int(payload.get("time") or 0)
+            if t_ms <= 0:
+                return
+            buf = getattr(self, "_discrete_raw_buffer", None)
+            if not isinstance(buf, list):
+                buf = []
+                self._discrete_raw_buffer = buf
+            buf.append(payload)
+            # Trim buffer to recent window (e.g., last 10 seconds)
+            cutoff = t_ms - 10_000
+            try:
+                self._discrete_raw_buffer = [p for p in buf if int(p.get("time") or 0) >= cutoff]
+            except Exception:
+                # Best-effort trimming
+                self._discrete_raw_buffer = buf[-5000:]
+        except Exception:
+            pass
+
+    def _update_sensor_temperature_from_payload(self, payload: object) -> None:
+        """Maintain a 15-second rolling average of avgTemperatureF for the selected device."""
+        if not isinstance(payload, dict):
+            return
+        # Only track the currently selected device
+        dev_id = str(payload.get("deviceId") or payload.get("device_id") or "").strip()
+        cur_dev = str(self.state.selected_device_id or "").strip()
+        if not dev_id or not cur_dev or dev_id != cur_dev:
+            return
+        t_ms = int(payload.get("time") or 0)
+        if t_ms <= 0:
+            return
+        # Prefer explicit avgTemperatureF field; fall back to mean of per-sensor temperatureF if needed
+        temp_val = payload.get("avgTemperatureF", None)
+        try:
+            temp_f = float(temp_val) if temp_val is not None else None
+        except Exception:
+            temp_f = None
+        if temp_f is None:
+            try:
+                sensors = payload.get("sensors") or []
+                temps = []
+                for s in sensors:
+                    try:
+                        if "temperatureF" in s:
+                            temps.append(float(s.get("temperatureF")))
+                    except Exception:
+                        continue
+                if temps:
+                    temp_f = sum(temps) / float(len(temps))
+            except Exception:
+                temp_f = None
+        if temp_f is None:
+            return
+        # Append to rolling buffer and trim to last 15 seconds
+        buf = self._sensor_temp_buffer
+        buf.append((t_ms, float(temp_f)))
+        cutoff = t_ms - 15_000
+        while buf and buf[0][0] < cutoff:
+            buf.pop(0)
+        if not buf:
+            self._sensor_temp_smoothed_f = None
+            try:
+                self.sensor_plot_right.set_temperature_f(None)
+            except Exception:
+                pass
+            return
+        avg = sum(v for _, v in buf) / float(len(buf))
+        self._sensor_temp_smoothed_f = avg
+        # Update only the right Sensor View, as requested
+        try:
+            self.sensor_plot_right.set_temperature_f(avg)
+        except Exception:
+            pass
+
     def _on_live_single_snapshot(self, snap: Optional[Tuple[float, float, float, int, bool, float, float]]) -> None:
         if self._live_session is None or snap is None:
             return
@@ -2660,12 +4408,11 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         # (Live telemetry UI removed)
 
-        # Pause arming/stabilization while tare dialog active (telemetry was updated above)
-        if self._tare_active:
-            return
-
         # Do not process if not visible / below threshold
         if not is_visible:
+            return
+        # In discrete temp mode, ignore samples until warmup+tare have completed
+        if self._live_session is not None and bool(getattr(self._live_session, "is_discrete_temp", False)) and not bool(getattr(self, "_discrete_ready_for_data", False)):
             return
 
         # Append sample and trim by time window (stability 1.0 s)
@@ -2686,6 +4433,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
         rows = self._live_session.grid_rows
         cols = self._live_session.grid_cols
+        is_discrete = bool(getattr(self._live_session, "is_discrete_temp", False))
+        # In discrete mode, if we are waiting for unload after DB stage, gate on Fz < 100 N
+        if is_discrete and bool(getattr(self, "_discrete_waiting_for_unload", False)):
+            try:
+                if fz_abs < 100.0:
+                    # Weight removed: run a tare before the next stage; stage index will advance on tare completion
+                    self._discrete_waiting_for_unload = False
+                    self._start_discrete_tare_sequence()
+                # While waiting for unload (or tare), skip arming/stability
+                return
+            except Exception:
+                return
 
         # Map COP (x_mm, y_mm) to grid cell using canonical device space (no rotation).
         # Note:
@@ -2709,6 +4468,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 h_mm = config.TYPE08_H_MM
             half_w = w_mm / 2.0
             half_h = h_mm / 2.0
+            # For discrete temp testing, require CoP to be within a central 5 cm diameter circle (2.5 cm radius)
+            if is_discrete:
+                max_r = 25.0  # mm
+                r_val = (rx * rx + ry * ry) ** 0.5
+                if r_val > max_r:
+                    return None
             if dev_type in ("07", "11"):
                 # 07: width along X, height along Y
                 if abs(rx) > half_w or abs(ry) > half_h:
@@ -2775,7 +4540,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
         cell = to_cell_mm(x_mm, y_mm)
         if cell is None:
-            # Not over the plate: reset arming guidance
+            # In discrete mode, leaving the central circle should immediately disarm/reset
+            if bool(getattr(self._live_session, "is_discrete_temp", False)):
+                try:
+                    self._arming_cell = None
+                    self._arming_start_ms = None
+                    self._active_cell = None
+                    self._recent_samples.clear()
+                    self.canvas_left.set_live_active_cell(None, None)
+                    self.canvas_right.set_live_active_cell(None, None)
+                    self.controls.live_testing_panel.set_debug_status("Arming… (stay inside center circle with ≥50 N)")
+                except Exception:
+                    pass
+                return
+            # Normal mode: not over the plate; reset arming guidance
             try:
                 self.controls.live_testing_panel.set_debug_status("Move load onto plate area to arm…")
             except Exception:
@@ -2878,6 +4656,28 @@ class MainWindow(QtWidgets.QMainWindow):
                     rkey = (ar, ac)
                     cell = stage.results.get(rkey)
                     if cell is not None and cell.fz_mean_n is None:
+                        is_discrete = bool(getattr(self._live_session, "is_discrete_temp", False))
+                        # For discrete temp sessions, require COP stability (within 3 cm radius) in addition to Fz
+                        if is_discrete:
+                            try:
+                                if not self._discrete_xy_stable():
+                                    try:
+                                        self.controls.live_testing_panel.set_debug_status(
+                                            "Stability… COP not stable yet — keep load centered."
+                                        )
+                                    except Exception:
+                                        pass
+                                    # Do not record or color this window; keep arming/stability active
+                                    self._recent_samples.clear()
+                                    self._active_cell = None
+                                    self.canvas_left.set_live_active_cell(None, None)
+                                    self.canvas_right.set_live_active_cell(None, None)
+                                    return
+                            except Exception:
+                                # On any error in COP check, fall back to Fz-only behavior
+                                pass
+
+                        # At this point, stability criteria are satisfied (Fz, and COP for discrete)
                         cell.fz_mean_n = mean_fz
                         # Average COP in window
                         mean_x = sum(s[1] for s in self._recent_samples) / len(self._recent_samples)
@@ -2918,11 +4718,23 @@ class MainWindow(QtWidgets.QMainWindow):
                         total = stage.total_cells
                         stage_text = f"Stage {stage.index}: {stage.name} @ {stage.location}"
                         self.controls.live_testing_panel.set_stage_progress(stage_text, completed, total)
-                        # Enable Next Stage button when all cells are done
-                        try:
-                            self.controls.live_testing_panel.btn_next.setEnabled(True)
-                        except Exception:
-                            pass
+                        # Enable Next Stage button when all cells are done (normal mode only)
+                        if not is_discrete:
+                            try:
+                                self.controls.live_testing_panel.btn_next.setEnabled(True)
+                            except Exception:
+                                pass
+
+                        # Handle stable-window aggregation for discrete temp BEFORE clearing window
+                        if is_discrete:
+                            try:
+                                if self._recent_samples:
+                                    window_start = int(self._recent_samples[0][0])
+                                    window_end = int(self._recent_samples[-1][0])
+                                    phase_kind = "45lb" if stage.name.lower().find("db") >= 0 else "bodyweight"
+                                    self._accumulate_discrete_measurement(phase_kind, window_start, window_end)
+                            except Exception:
+                                pass
 
                         # Reset window and active cell to allow next capture
                         self._recent_samples.clear()
@@ -2931,15 +4743,19 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.canvas_right.set_live_active_cell(None, None)
                         self.controls.live_testing_panel.set_debug_status("Captured. Move to next cell…")
 
-                        # If stage completed, enable manual advance (do NOT auto-advance)
+                        # Handle stage completion
                         if completed >= total:
-                            try:
-                                self.controls.live_testing_panel.btn_next.setEnabled(True)
-                                # Change button label to Finish on the last stage
-                                if self._live_stage_idx + 1 >= len(self._live_session.stages):
-                                    self.controls.live_testing_panel.set_next_stage_label("Finish")
-                            except Exception:
-                                pass
+                            if is_discrete:
+                                self._on_discrete_stage_completed()
+                            else:
+                                # Normal mode: enable manual advance and adjust label
+                                try:
+                                    self.controls.live_testing_panel.btn_next.setEnabled(True)
+                                    # Change button label to Finish on the last stage
+                                    if self._live_stage_idx + 1 >= len(self._live_session.stages):
+                                        self.controls.live_testing_panel.set_next_stage_label("Finish")
+                                except Exception:
+                                    pass
                 except Exception:
                     pass
 
@@ -2984,6 +4800,42 @@ class MainWindow(QtWidgets.QMainWindow):
                 gid = self.controls.group_edit.text().strip()
             except Exception:
                 gid = ""
+            # Discrete temp: special handling for initial tare (enable bypass, wait 2s, then tare)
+            if self._live_session is not None and bool(getattr(self._live_session, "is_discrete_temp", False)):
+                # Initial discrete tare: discrete_ready_for_data is still False
+                if not bool(getattr(self, "_discrete_ready_for_data", False)):
+                    try:
+                        if callable(getattr(self, "_on_set_model_bypass_cb", None)):
+                            self._on_set_model_bypass_cb(True)
+                            self._should_revert_bypass = True
+                            self._log("discrete_temp: setModelBypass(true) 2s before initial tare")
+                    except Exception:
+                        pass
+                    # Delay actual tare by 2 seconds to let bypass settle
+                    def _do_delayed_tare() -> None:
+                        try:
+                            self.controls.tare_requested.emit(gid)
+                            self._log("auto_tare(discrete, delayed): tare_requested emitted")
+                            self._on_discrete_tare_completed()
+                        except Exception:
+                            pass
+                    try:
+                        QtCore.QTimer.singleShot(2000, _do_delayed_tare)
+                    except Exception:
+                        # Fallback: tare immediately if timer fails
+                        self.controls.tare_requested.emit(gid)
+                        self._log("auto_tare(discrete, fallback): tare_requested emitted")
+                        self._on_discrete_tare_completed()
+                    return
+                # Subsequent discrete tares: immediate tare + flow continuation
+                self.controls.tare_requested.emit(gid)
+                self._log("auto_tare(discrete): tare_requested emitted")
+                try:
+                    self._on_discrete_tare_completed()
+                except Exception:
+                    pass
+                return
+            # Normal (non-discrete) tare
             self.controls.tare_requested.emit(gid)
             self._log("auto_tare: tare_requested emitted")
         except Exception:
@@ -2994,8 +4846,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._live_session is None:
             return
         try:
-            # Initialize schedule if needed
-            if self._next_tare_due_ms is None:
+            is_discrete = bool(getattr(self._live_session, "is_discrete_temp", False))
+            # Initialize schedule if needed (normal mode only)
+            if not is_discrete and self._next_tare_due_ms is None:
                 self._next_tare_due_ms = int(t_ms) + int(getattr(config, "TARE_INTERVAL_S", 90)) * 1000
 
             # Update dialog if active
@@ -3047,7 +4900,11 @@ class MainWindow(QtWidgets.QMainWindow):
                         pass
                 return
 
-            # Not active: check if due and safe to show (not mid-stabilization)
+            # Not active: in discrete mode we do not schedule periodic tares here
+            if is_discrete:
+                return
+
+            # Normal mode: check if due and safe to show (not mid-stabilization)
             if self._next_tare_due_ms is not None and int(t_ms) >= int(self._next_tare_due_ms):
                 # Only when no active cell (avoid interrupting stabilization window)
                 if self._active_cell is None:
