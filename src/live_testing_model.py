@@ -52,5 +52,7 @@ class LiveTestSession:
     started_at_ms: Optional[int] = None
     ended_at_ms: Optional[int] = None
     is_temp_test: bool = False
+    # Discrete temperature testing: single-center location, multi-phase
+    is_discrete_temp: bool = False
 
 

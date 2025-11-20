@@ -35,13 +35,17 @@ class ForcePlotWidget(QtWidgets.QWidget):
         _ll.addWidget(self._legend_launch)
         _ll.addWidget(self._legend_landing)
         self._legend_container.setVisible(False)
-        # Place toggles in a top bar, right-aligned
+        # Place toggles and temperature label in a top bar, right-aligned
         header_bar = QtWidgets.QHBoxLayout()
         header_bar.setContentsMargins(0, 0, 0, 0)
-        header_bar.setSpacing(0)
+        header_bar.setSpacing(6)
         header_spacer = QtWidgets.QSpacerItem(0, 0, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
         header_bar.addItem(header_spacer)
         header_bar.addWidget(self._legend_container)
+        # Smoothed temperature label (used by Sensor View in right pane)
+        self._temp_label = QtWidgets.QLabel("Temp: -- °F")
+        self._temp_label.setStyleSheet("color: rgb(220,220,230); font-size: 13px;")
+        header_bar.addWidget(self._temp_label)
         root.addLayout(header_bar)
         # Backend selection (pyqtgraph when enabled; fallback to painter)
         self._use_pg: bool = False
@@ -302,6 +306,17 @@ class ForcePlotWidget(QtWidgets.QWidget):
                 pass
         # Update y-range with minimum height constraint after visibility change
         self._pg_update_y_range_min(10.0, 1.15)
+
+    def set_temperature_f(self, value_f: Optional[float]) -> None:
+        """Update the smoothed temperature label (°F) shown in the Sensor View header."""
+        try:
+            if value_f is None:
+                self._temp_label.setText("Temp: -- °F")
+            else:
+                self._temp_label.setText(f"Temp: {float(value_f):.1f} °F")
+        except Exception:
+            # Best-effort; never crash the UI on bad input
+            pass
 
     def _recompute_autoscale(self) -> None:
         if self._use_pg:

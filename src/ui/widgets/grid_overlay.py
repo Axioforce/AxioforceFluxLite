@@ -15,6 +15,9 @@ class GridOverlay(QtWidgets.QWidget):
         self.cell_colors: dict[Tuple[int, int], QtGui.QColor] = {}
         self._plate_rect_px: Optional[QtCore.QRect] = None
         self._status_text: Optional[str] = None
+        # Optional mode: draw a single central circle instead of a full grid
+        self._center_circle_mode: bool = False
+        self._center_circle_radius_px: Optional[int] = None
 
     def set_grid(self, rows: int, cols: int) -> None:
         self.rows = max(1, int(rows))
@@ -23,6 +26,20 @@ class GridOverlay(QtWidgets.QWidget):
 
     def set_plate_rect_px(self, rect: QtCore.QRect) -> None:
         self._plate_rect_px = QtCore.QRect(rect)
+        self.update()
+
+    def set_center_circle_mode(self, enabled: bool) -> None:
+        """Enable/disable single central circle rendering (used for discrete temp testing)."""
+        self._center_circle_mode = bool(enabled)
+        self.update()
+
+    def set_center_circle_radius_px(self, radius_px: Optional[int]) -> None:
+        """Set desired center-circle radius in pixels (approx 5 cm on plate)."""
+        try:
+            r = int(radius_px) if radius_px is not None else 0
+        except Exception:
+            r = 0
+        self._center_circle_radius_px = r if r > 0 else None
         self.update()
 
     def set_active_cell(self, row: Optional[int], col: Optional[int]) -> None:
@@ -62,41 +79,74 @@ class GridOverlay(QtWidgets.QWidget):
         cell_w = rect.width() / max(1, self.cols)
         cell_h = rect.height() / max(1, self.rows)
 
-        # Fill cells with colors if any
-        for r in range(self.rows):
-            for c in range(self.cols):
-                color = self.cell_colors.get((r, c))
-                if color is not None:
-                    cell_rect = QtCore.QRect(
-                        int(rect.left() + c * cell_w),
-                        int(rect.top() + r * cell_h),
-                        int(cell_w),
-                        int(cell_h),
-                    )
-                    p.fillRect(cell_rect, color)
+        if self._center_circle_mode and self.rows == 1 and self.cols == 1:
+            # Single-center-circle mode: draw one circular target instead of a grid
+            cx = rect.left() + rect.width() // 2
+            cy = rect.top() + rect.height() // 2
+            # Base radius from physical sizing (passed in as px), clamped to plate size
+            if self._center_circle_radius_px is not None:
+                radius = int(self._center_circle_radius_px)
+            else:
+                radius = int(min(cell_w, cell_h) * 0.2)
+            max_radius = int(min(cell_w, cell_h) * 0.45)
+            if radius > max_radius:
+                radius = max_radius
+            # Fill if a color has been set for the single "cell"
+            color = self.cell_colors.get((0, 0))
+            if color is not None:
+                p.setBrush(color)
+            else:
+                p.setBrush(QtCore.Qt.NoBrush)
+            # Outline for target
+            outline = QtGui.QColor(200, 200, 220, 220)
+            p.setPen(QtGui.QPen(outline, 2))
+            p.drawEllipse(QtCore.QPoint(cx, cy), radius, radius)
+            # Active highlight: slightly thicker ring
+            if self.active_cell is not None:
+                try:
+                    ar, ac = self.active_cell
+                    if int(ar) == 0 and int(ac) == 0:
+                        p.setBrush(QtCore.Qt.NoBrush)
+                        p.setPen(QtGui.QPen(QtGui.QColor(0, 200, 255, 180), 3))
+                        p.drawEllipse(QtCore.QPoint(cx, cy), radius + 4, radius + 4)
+                except Exception:
+                    pass
+        else:
+            # Fill cells with colors if any
+            for r in range(self.rows):
+                for c in range(self.cols):
+                    color = self.cell_colors.get((r, c))
+                    if color is not None:
+                        cell_rect = QtCore.QRect(
+                            int(rect.left() + c * cell_w),
+                            int(rect.top() + r * cell_h),
+                            int(cell_w),
+                            int(cell_h),
+                        )
+                        p.fillRect(cell_rect, color)
 
-        # Draw grid lines
-        p.setPen(QtGui.QPen(QtGui.QColor(180, 180, 180, 180), 1))
-        for i in range(1, self.cols):
-            x = rect.left() + int(i * cell_w)
-            p.drawLine(x, rect.top(), x, rect.bottom())
-        for j in range(1, self.rows):
-            y = rect.top() + int(j * cell_h)
-            p.drawLine(rect.left(), y, rect.right(), y)
+            # Draw grid lines
+            p.setPen(QtGui.QPen(QtGui.QColor(180, 180, 180, 180), 1))
+            for i in range(1, self.cols):
+                x = rect.left() + int(i * cell_w)
+                p.drawLine(x, rect.top(), x, rect.bottom())
+            for j in range(1, self.rows):
+                y = rect.top() + int(j * cell_h)
+                p.drawLine(rect.left(), y, rect.right(), y)
 
-        # Active cell highlight
-        if self.active_cell is not None:
-            r, c = self.active_cell
-            highlight = QtGui.QColor(0, 200, 255, 90)
-            p.setBrush(highlight)
-            p.setPen(QtGui.QPen(QtGui.QColor(0, 180, 240), 2))
-            active_rect = QtCore.QRect(
-                int(rect.left() + c * cell_w),
-                int(rect.top() + r * cell_h),
-                int(cell_w),
-                int(cell_h),
-            )
-            p.drawRect(active_rect)
+            # Active cell highlight
+            if self.active_cell is not None:
+                r, c = self.active_cell
+                highlight = QtGui.QColor(0, 200, 255, 90)
+                p.setBrush(highlight)
+                p.setPen(QtGui.QPen(QtGui.QColor(0, 180, 240), 2))
+                active_rect = QtCore.QRect(
+                    int(rect.left() + c * cell_w),
+                    int(rect.top() + r * cell_h),
+                    int(cell_w),
+                    int(cell_h),
+                )
+                p.drawRect(active_rect)
 
         # Status box overlay
         if self._status_text:

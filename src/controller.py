@@ -250,6 +250,13 @@ class Controller:
         except Exception:
             pass
 
+        # Forward raw payload to UI for discrete temp detailed capture
+        try:
+            if hasattr(self.view, "bridge"):
+                self.view.bridge.raw_payload_ready.emit(data)
+        except Exception:
+            pass
+
         # Defer snapshots/active devices to throttled tick loop
 
     def connect(self, host: str, port: int) -> None:
