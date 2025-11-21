@@ -1,2 +1,5 @@
 *.db
 *.aflite
+*.csv
+__pycache__/
+*.pyc
