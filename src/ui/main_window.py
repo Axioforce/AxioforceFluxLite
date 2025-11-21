@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Callable, Dict, Optional, Tuple, List
+import os
 
 from PySide6 import QtCore, QtWidgets
 
@@ -404,6 +405,29 @@ class MainWindow(QtWidgets.QMainWindow):
         # Temperature Test: track warmup state so tare dialog does not appear early
         self._temp_warmup_active: bool = False
         self._sensor_temp_smoothed_f: Optional[float] = None
+
+        # Cell-capture sound effect (plays after each successful cell reading in live testing)
+        self._capture_sound_player = None
+        try:
+            from PySide6 import QtMultimedia as _QtMM  # type: ignore[import]
+        except Exception:
+            _QtMM = None
+        if _QtMM is not None:
+            try:
+                sound_path = os.path.join(self._repo_root(), "assets", "sound", "cell_capture_success.mp3")
+            except Exception:
+                sound_path = ""
+            if sound_path and os.path.isfile(sound_path):
+                try:
+                    audio_out = _QtMM.QAudioOutput(self)
+                    audio_out.setVolume(0.8)
+                    player = _QtMM.QMediaPlayer(self)
+                    player.setAudioOutput(audio_out)
+                    player.setSource(QtCore.QUrl.fromLocalFile(sound_path))
+                    self._capture_sound_player = player
+                    self._capture_sound_output = audio_out
+                except Exception:
+                    self._capture_sound_player = None
 
         # Backend config/capture wiring (callbacks set by controller via main.py)
         self._on_update_dynamo_config_cb: Optional[Callable[[str, object], None]] = None
@@ -1022,19 +1046,45 @@ class MainWindow(QtWidgets.QMainWindow):
         slope_lists_all: Dict[str, List[float]] = {ax: [] for ax in axes}
 
         def _fit_slope(points: List[Tuple[float, float]]) -> float:
-            """Fit slope with baseline constraint when baseline exists; otherwise ordinary least squares."""
+            """Fit slope with baseline constraint when baseline exists; otherwise ordinary least squares.
+
+            Baseline handling:
+            - Use all points with 74°F <= T <= 78°F as potential baselines.
+            - Compute a weighted baseline anchor (T0, Y0) where weights bias toward 76°F:
+                  w_i = 1 / (1 + |T_i - 76|)
+              so that temperatures closest to 76°F dominate when multiple baseline
+              measurements exist for a given sensor.
+            """
             if len(points) < 2:
                 return 0.0
             # Baseline range around 76°F
             baseline_low = 74.0
             baseline_high = 78.0
+            target_T = 76.0
             baseline = [(t, y) for (t, y) in points if baseline_low <= t <= baseline_high]
             if baseline:
+                # Weighted baseline anchor biased toward 76°F
                 try:
-                    T0 = sum(t for t, _ in baseline) / float(len(baseline))
-                    Y0 = sum(y for _, y in baseline) / float(len(baseline))
+                    weights: List[float] = []
+                    for t, _y in baseline:
+                        try:
+                            dt = abs(float(t) - target_T)
+                        except Exception:
+                            dt = 0.0
+                        w = 1.0 / (1.0 + dt)
+                        weights.append(w)
+                    w_sum = sum(weights)
+                    if w_sum <= 0.0:
+                        raise ValueError("baseline_weight_sum_zero")
+                    T0 = sum(w * t for (w, (t, _)) in zip(weights, baseline)) / w_sum
+                    Y0 = sum(w * y for (w, (_, y)) in zip(weights, baseline)) / w_sum
                 except Exception:
-                    T0, Y0 = baseline[0]
+                    # Fallback: simple mean if weighting fails for any reason
+                    try:
+                        T0 = sum(t for t, _ in baseline) / float(len(baseline))
+                        Y0 = sum(y for _, y in baseline) / float(len(baseline))
+                    except Exception:
+                        T0, Y0 = baseline[0]
                 num = 0.0
                 den = 0.0
                 for (t, y) in points:
@@ -1291,23 +1341,37 @@ class MainWindow(QtWidgets.QMainWindow):
         xs: list[float] = []
         ys: list[float] = []
         loads_per_sensor: list[float] = []
+        # Baseline points to show as faint markers for the CURRENT phase only
+        baseline_pts_for_plot: List[Tuple[float, float]] = []
+        baseline_low = 74.0
+        baseline_high = 78.0
+        target_T = 76.0
         try:
             with open(csv_path, "r", encoding="utf-8", newline="") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     if not row:
                         continue
+                    # Phase for phase-specific regression
                     try:
                         ph = str(row.get("phase_name") or row.get("phase") or "").strip().lower()
                     except Exception:
                         ph = ""
-                    if ph != phase_name:
-                        continue
+                    # Temperature and value for this sensor/axis
                     try:
                         temp_f = float(row.get("sum-t") or 0.0)
                         y_val = float(row.get(col_name) or 0.0)
                     except Exception:
                         continue
+                    # Only use rows matching the selected phase for regression/lines and baseline markers
+                    if ph != phase_name:
+                        continue
+                    # Collect baseline runs for this phase for plotting as faint dots
+                    try:
+                        if baseline_low <= float(temp_f) <= baseline_high:
+                            baseline_pts_for_plot.append((float(temp_f), float(y_val)))
+                    except Exception:
+                        pass
                     xs.append(temp_f)
                     ys.append(y_val)
                     # Track average per-sensor load for this row.
@@ -1329,6 +1393,41 @@ class MainWindow(QtWidgets.QMainWindow):
             xs, ys = [], []
         if not xs or not ys or len(xs) != len(ys):
             return
+
+        # Collapse multiple baseline measurements (74–78°F) for this phase into a single
+        # weighted-average point for the regression/green series, while keeping all the
+        # original baseline runs (any phase) in baseline_pts_for_plot for faint markers.
+        try:
+            pts_all = list(zip(xs, ys))
+            baseline_idx: List[int] = [
+                i for i, (t, _y) in enumerate(pts_all) if baseline_low <= float(t) <= baseline_high
+            ]
+            if len(baseline_idx) > 1:
+                # Compute weighted-average baseline point biased toward 76°F
+                weights: List[float] = []
+                baseline_vals: List[Tuple[float, float]] = []
+                for i in baseline_idx:
+                    t, yv = pts_all[i]
+                    try:
+                        dt = abs(float(t) - target_T)
+                    except Exception:
+                        dt = 0.0
+                    w = 1.0 / (1.0 + dt)
+                    weights.append(w)
+                    baseline_vals.append((float(t), float(yv)))
+                w_sum = sum(weights)
+                if w_sum > 0.0 and baseline_vals:
+                    T0 = sum(w * t for w, (t, _y) in zip(weights, baseline_vals)) / w_sum
+                    Y0 = sum(w * y for w, (_t, y) in zip(weights, baseline_vals)) / w_sum
+                    # Remove all original baseline points for this phase from the regression set,
+                    # then append the single weighted-average baseline point.
+                    keep_pts = [p for i, p in enumerate(pts_all) if i not in baseline_idx]
+                    keep_pts.append((T0, Y0))
+                    xs = [p[0] for p in keep_pts]
+                    ys = [p[1] for p in keep_pts]
+        except Exception:
+            # On any failure, fall back to original points
+            pass
         # Sort by temperature ascending for readability
         pts = sorted(zip(xs, ys), key=lambda p: p[0])
         xs = [p[0] for p in pts]
@@ -1425,7 +1524,25 @@ class MainWindow(QtWidgets.QMainWindow):
             self._temp_plot_widget.plot(xs, solid_ys, pen=solid_pen)  # type: ignore[attr-defined]
             # Load-adjusted line (dashed)
             self._temp_plot_widget.plot(xs, dashed_ys, pen=dashed_pen)  # type: ignore[attr-defined]
-            # Data connected with a lighter line plus markers
+
+            # Plot all baseline runs as semi-transparent, slightly smaller dots (no line)
+            try:
+                if baseline_pts_for_plot:
+                    bx = [float(p[0]) for p in baseline_pts_for_plot]
+                    by = [float(p[1]) for p in baseline_pts_for_plot]
+                    self._temp_plot_widget.plot(  # type: ignore[attr-defined]
+                        bx,
+                        by,
+                        pen=None,
+                        symbol="o",
+                        symbolSize=6,
+                        symbolBrush=self._temp_plot_pg.mkBrush(180, 180, 255, 90),
+                        symbolPen=self._temp_plot_pg.mkPen(color=(180, 180, 255, 60), width=1),
+                    )
+            except Exception:
+                pass
+
+            # Data connected with a lighter line plus markers (including the weighted baseline point)
             self._temp_plot_widget.plot(
                 xs,
                 ys,
@@ -1935,20 +2052,25 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception:
                 self._on_live_end()
 
-    def _accumulate_discrete_measurement(self, phase_kind: str, window_start_ms: int, window_end_ms: int) -> None:
-        """Aggregate detailed sensor data over a stability window for discrete temp sessions."""
+    def _accumulate_discrete_measurement(self, phase_kind: str, window_start_ms: int, window_end_ms: int) -> bool:
+        """Aggregate detailed sensor data over a stability window for discrete temp sessions.
+
+        Returns True if this window contributed to the per-session stats for the given phase,
+        and False if no data was added (e.g., empty window, missing raw samples). This lets
+        the caller detect failed captures and keep the user on the current stage.
+        """
         try:
             if self._live_session is None or not bool(getattr(self._live_session, "is_discrete_temp", False)):
-                return
+                return False
             test_path = str(getattr(self, "_active_discrete_test_path", "") or "")
             if not test_path:
-                return
+                return False
             buf = getattr(self, "_discrete_raw_buffer", None)
             if not isinstance(buf, list) or not buf:
-                return
+                return False
             dev_id = str(self._live_session.device_id or "").strip()
             if not dev_id:
-                return
+                return False
             # Filter payloads in window and for current device
             samples: list[dict] = []
             for p in buf:
@@ -1969,7 +2091,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     self._log(f"discrete_accum: no samples in window [{window_start_ms},{window_end_ms}] phase={phase_kind}")
                 except Exception:
                     pass
-                return
+                return False
             n = len(samples)
             # Column layout for CSV
             cols = [
@@ -2082,10 +2204,10 @@ class MainWindow(QtWidgets.QMainWindow):
             # Fold into per-session stats (running average over up to 3 measurements)
             stats = getattr(self, "_discrete_session_stats", None)
             if not isinstance(stats, dict):
-                return
+                return False
             bucket = stats.get(phase_kind)
             if not isinstance(bucket, dict):
-                return
+                return False
             cnt = int(bucket.get("count") or 0)
             if cnt <= 0:
                 bucket["row"] = row
@@ -2113,8 +2235,9 @@ class MainWindow(QtWidgets.QMainWindow):
                     self._log(f"discrete_accum: update phase={phase_kind} count={cnt+1}")
                 except Exception:
                     pass
+            return True
         except Exception:
-            pass
+            return False
 
     def _write_discrete_session_csv(self) -> int:
         """Write two rows (45lb/bodyweight) for the current discrete session into discrete_temp_session.csv."""
@@ -2379,7 +2502,7 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
-        # Clear any previous colors and show center-circle overlay
+        # Clear any previous colors and wire up controls; use real stage context for labels.
         try:
             self.canvas_left.clear_live_colors()
             self.canvas_right.clear_live_colors()
@@ -2397,10 +2520,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.live_testing_panel.set_next_stage_label("Next Stage")
             self.controls.live_testing_panel.set_metadata(tester, dev_id, model_id, bw_n)
             self.controls.live_testing_panel.set_thresholds(thresholds.dumbbell_tol_n, thresholds.bodyweight_tol_n)
-            # Do NOT show center-circle overlay until warmup+tare complete
-            # Initial stage progress
-            self.controls.live_testing_panel.set_stage_progress("Stage 1: 45 lb DB (1/3) @ Center", 0, 1)
-            self._log(f"discrete_session_initialized: rows={rows}, cols={cols}, stages={len(self._live_session.stages)} path='{test_path}'")
+            # Use the current stage object so the helper label always matches the actual stage
+            self._apply_stage_context()
+            self._log(
+                f"discrete_session_initialized: rows={rows}, cols={cols}, stages={len(self._live_session.stages)} path='{test_path}'"
+            )
         except Exception:
             pass
 
@@ -2911,6 +3035,24 @@ class MainWindow(QtWidgets.QMainWindow):
             return getattr(obj, name, default)  # type: ignore[no-any-return]
         except Exception:
             return default
+
+    def _play_capture_sound(self) -> None:
+        """Play short sound after a successful cell capture, if configured."""
+        try:
+            player = getattr(self, "_capture_sound_player", None)
+        except Exception:
+            player = None
+        if player is None:
+            return
+        try:
+            # Restart from beginning if already playing
+            try:
+                player.stop()
+            except Exception:
+                pass
+            player.play()
+        except Exception:
+            pass
 
     def _on_live_cell_clicked(self, row: int, col: int) -> None:
         # Only in an active session
@@ -5190,6 +5332,70 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.canvas_left.set_live_cell_color(ar, ac, color)
                         self.canvas_right.set_live_cell_color(ar, ac, color)
 
+                        # Handle stable-window aggregation for discrete temp BEFORE clearing window
+                        discrete_ok = True
+                        if is_discrete:
+                            try:
+                                if self._recent_samples:
+                                    window_start = int(self._recent_samples[0][0])
+                                    window_end = int(self._recent_samples[-1][0])
+                                    phase_kind = "45lb" if stage.name.lower().find("db") >= 0 else "bodyweight"
+                                    discrete_ok = bool(
+                                        self._accumulate_discrete_measurement(phase_kind, window_start, window_end)
+                                    )
+                            except Exception:
+                                discrete_ok = False
+
+                        # If discrete aggregation failed (e.g., no raw samples), do NOT advance or mark
+                        # the stage as done. Revert this cell and ask the user to redo it.
+                        if is_discrete and not discrete_ok:
+                            try:
+                                from PySide6 import QtWidgets as _QtW
+                            except Exception:
+                                _QtW = None
+                            # Clear this cell's stored result so it does not count as completed
+                            try:
+                                cell.fz_mean_n = None
+                                cell.cop_x_mm = None
+                                cell.cop_y_mm = None
+                                cell.error_n = None
+                            except Exception:
+                                pass
+                            # Clear recent samples and active cell, then repaint stage context
+                            try:
+                                self._recent_samples.clear()
+                            except Exception:
+                                pass
+                            try:
+                                self._active_cell = None
+                                self.canvas_left.set_live_active_cell(None, None)
+                                self.canvas_right.set_live_active_cell(None, None)
+                            except Exception:
+                                pass
+                            try:
+                                self._apply_stage_context()
+                            except Exception:
+                                pass
+                            # Inform the user that this capture failed
+                            try:
+                                if _QtW is not None:
+                                    _QtW.QMessageBox.warning(
+                                        self,
+                                        "Discrete Temp Capture Failed",
+                                        "No stable data window was captured for this stage.\n\n"
+                                        "Please redo this measurement before continuing.",
+                                    )
+                            except Exception:
+                                pass
+                            # Do not treat this as a completed capture; stay in this stage
+                            return
+
+                        # Play capture sound (if configured)
+                        try:
+                            self._play_capture_sound()
+                        except Exception:
+                            pass
+
                         # Progress update
                         completed = sum(1 for g in stage.results.values() if g.fz_mean_n is not None)
                         total = stage.total_cells
@@ -5223,17 +5429,6 @@ class MainWindow(QtWidgets.QMainWindow):
                         if not is_discrete and not bool(getattr(self._live_session, "is_temp_test", False)):
                             try:
                                 self.controls.live_testing_panel.btn_next.setEnabled(True)
-                            except Exception:
-                                pass
-
-                        # Handle stable-window aggregation for discrete temp BEFORE clearing window
-                        if is_discrete:
-                            try:
-                                if self._recent_samples:
-                                    window_start = int(self._recent_samples[0][0])
-                                    window_end = int(self._recent_samples[-1][0])
-                                    phase_kind = "45lb" if stage.name.lower().find("db") >= 0 else "bodyweight"
-                                    self._accumulate_discrete_measurement(phase_kind, window_start, window_end)
                             except Exception:
                                 pass
 
