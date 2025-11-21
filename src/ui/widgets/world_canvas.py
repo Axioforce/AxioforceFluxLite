@@ -151,11 +151,30 @@ class WorldCanvas(QtWidgets.QWidget):
 
     def _compute_world_bounds(self) -> None:
         if self.state.display_mode == "single":
+            # Auto-zoom the view around the selected plate so that all plate types
+            # (06/07/08/11) render with a consistent on-screen margin, regardless
+            # of their physical dimensions.
             dev_type = (self.state.selected_device_type or "").strip()
-            is_07_or_11 = dev_type in ("07", "11")
-            half_w = (config.TYPE07_W_MM if is_07_or_11 else config.TYPE08_W_MM) / 2.0
-            half_h = (config.TYPE07_H_MM if is_07_or_11 else config.TYPE08_H_MM) / 2.0
-            margin_mm = 200.0
+            if dev_type == "06":
+                w_mm = float(config.TYPE06_W_MM)
+                h_mm = float(config.TYPE06_H_MM)
+            elif dev_type == "07":
+                w_mm = float(config.TYPE07_W_MM)
+                h_mm = float(config.TYPE07_H_MM)
+            elif dev_type == "11":
+                w_mm = float(config.TYPE11_W_MM)
+                h_mm = float(config.TYPE11_H_MM)
+            else:
+                # Default to XL plate geometry when device type is unknown/08.
+                w_mm = float(config.TYPE08_W_MM)
+                h_mm = float(config.TYPE08_H_MM)
+
+            half_w = 0.5 * w_mm
+            half_h = 0.5 * h_mm
+            longest = max(w_mm, h_mm)
+            # Margin is a fixed fraction of plate size so smaller plates are auto-zoomed.
+            margin_ratio = float(getattr(config, "PLATE_MARGIN_RATIO", 0.35))
+            margin_mm = max(50.0, margin_ratio * longest)
             self.WORLD_X_MIN, self.WORLD_X_MAX = -half_h - margin_mm, half_h + margin_mm
             self.WORLD_Y_MIN, self.WORLD_Y_MAX = -half_w - margin_mm, half_w + margin_mm
             return
@@ -562,7 +581,18 @@ class WorldCanvas(QtWidgets.QWidget):
         if not is_visible:
             return
         cx, cy = self._to_screen(x_mm, y_mm)
-        r_px = max(config.COP_R_MIN_PX, min(config.COP_R_MAX_PX, self.state.cop_scale_k * abs(fz_n)))
+        # In discrete temp testing, when the single-center-circle overlay is active,
+        # keep the COP indicator at a fixed pixel size so zoom level and Fz scaling
+        # do not change its apparent size on screen.
+        try:
+            is_discrete_center = bool(self._grid_overlay.is_center_circle_mode())
+        except Exception:
+            is_discrete_center = False
+        if is_discrete_center:
+            base_r = float(getattr(config, "COP_DISCRETE_R_PX", 14.0))
+            r_px = max(4.0, base_r)
+        else:
+            r_px = max(config.COP_R_MIN_PX, min(config.COP_R_MAX_PX, self.state.cop_scale_k * abs(fz_n)))
         p.setBrush(QtGui.QColor(*config.COLOR_COP_LAUNCH))
         p.setPen(QtGui.QPen(QtCore.Qt.black, 1))
         p.drawEllipse(QtCore.QPoint(cx, cy), int(r_px), int(r_px))

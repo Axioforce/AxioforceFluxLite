@@ -33,6 +33,10 @@ class GridOverlay(QtWidgets.QWidget):
         self._center_circle_mode = bool(enabled)
         self.update()
 
+    def is_center_circle_mode(self) -> bool:
+        """Return True when the overlay is in single-center-circle (discrete temp) mode."""
+        return bool(self._center_circle_mode)
+
     def set_center_circle_radius_px(self, radius_px: Optional[int]) -> None:
         """Set desired center-circle radius in pixels (approx 5 cm on plate)."""
         try:
