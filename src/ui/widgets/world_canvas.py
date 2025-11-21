@@ -26,8 +26,15 @@ class WorldCanvas(QtWidgets.QWidget):
         self.state = state
         self._snapshots: Dict[str, Tuple[float, float, float, int, bool, float, float]] = {}
         self._single_snapshot: Optional[Tuple[float, float, float, int, bool, float, float]] = None
-        self.setMinimumSize(800, 600)
+        # Prefer a roomy default, but allow the canvas to shrink on smaller screens.
+        try:
+            self.setMinimumSize(400, 300)
+            self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        except Exception:
+            # In headless/tests, size hints may not be available; ignore failures here.
+            pass
         self.setAutoFillBackground(True)
+        # World-coordinate bounds (mm). Pixel margins are adapted per-resize in _compute_fit.
         self.WORLD_X_MIN, self.WORLD_X_MAX = -1.0, 1.0
         self.WORLD_Y_MIN, self.WORLD_Y_MAX = -1.0, 1.0
         self.MARGIN_PX = 20
@@ -171,11 +178,22 @@ class WorldCanvas(QtWidgets.QWidget):
 
     def _compute_fit(self) -> None:
         w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return
         self._compute_world_bounds()
-        world_w = self.WORLD_Y_MAX - self.WORLD_Y_MIN
-        world_h = self.WORLD_X_MAX - self.WORLD_X_MIN
-        s = min((w - 2 * self.MARGIN_PX) / world_w, (h - 2 * self.MARGIN_PX) / world_h)
-        self.state.px_per_mm = max(0.01, s)
+        world_w = max(1e-3, float(self.WORLD_Y_MAX - self.WORLD_Y_MIN))
+        world_h = max(1e-3, float(self.WORLD_X_MAX - self.WORLD_X_MIN))
+        # Adapt the pixel margin so very small windows still keep the full plate in view.
+        base_margin = float(self.MARGIN_PX)
+        # Never let the effective margin exceed 15% of the smaller dimension.
+        max_margin = 0.15 * float(min(w, h))
+        margin = min(base_margin, max_margin)
+        margin = max(2.0, margin)
+        usable_w = max(1.0, float(w) - 2.0 * margin)
+        usable_h = max(1.0, float(h) - 2.0 * margin)
+        s = min(usable_w / world_w, usable_h / world_h)
+        # Clamp to a small but positive value so axes/plates always render within the canvas.
+        self.state.px_per_mm = max(0.01, float(s))
         self._y_mid = (self.WORLD_Y_MIN + self.WORLD_Y_MAX) / 2.0
         self._x_mid = (self.WORLD_X_MIN + self.WORLD_X_MAX) / 2.0
         self._fit_done = True
