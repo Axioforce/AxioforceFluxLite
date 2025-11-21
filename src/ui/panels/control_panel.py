@@ -4,7 +4,7 @@ from typing import List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ... import config
+from ... import config, data_sync
 from ..state import ViewState
 from .live_testing_panel import LiveTestingPanel
 from .temperature_testing_panel import TemperatureTestingPanel
@@ -31,6 +31,8 @@ class ControlPanel(QtWidgets.QWidget):
     backend_model_bypass_changed = QtCore.Signal(bool)
     backend_capture_detail_changed = QtCore.Signal(str)
     backend_temperature_apply_requested = QtCore.Signal(object)  # dict: { use_temperature_correction, slopes, room_temperature_f }
+    # Data sync (OneDrive) actions
+    data_sync_requested = QtCore.Signal(str)
 
     def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -387,6 +389,33 @@ class ControlPanel(QtWidgets.QWidget):
         backend_layout.addWidget(sampling_row, row, 0, 1, 2)
         row += 1
 
+        # OneDrive data sync controls
+        onedrive_group = QtWidgets.QGroupBox("OneDrive Data Sync")
+        od_layout = QtWidgets.QGridLayout(onedrive_group)
+        od_layout.setVerticalSpacing(4)
+        r = 0
+        od_layout.addWidget(QtWidgets.QLabel("OneDrive data root:"), r, 0)
+        self.onedrive_path_edit = QtWidgets.QLineEdit()
+        try:
+            self.onedrive_path_edit.setText(data_sync.get_onedrive_data_root())
+        except Exception:
+            pass
+        self.onedrive_path_edit.setPlaceholderText("e.g. C:/Users/You/OneDrive/AxioforceData")
+        od_layout.addWidget(self.onedrive_path_edit, r, 1)
+        r += 1
+        btn_row = QtWidgets.QHBoxLayout()
+        self.btn_onedrive_browse = QtWidgets.QPushButton("Browse...")
+        self.btn_onedrive_sync = QtWidgets.QPushButton("Sync Data")
+        _fix_btn(self.btn_onedrive_browse, 90)
+        _fix_btn(self.btn_onedrive_sync, 100)
+        btn_row.addWidget(self.btn_onedrive_browse)
+        btn_row.addWidget(self.btn_onedrive_sync)
+        btn_row.addStretch(1)
+        od_layout.addLayout(btn_row, r, 0, 1, 2)
+
+        backend_layout.addWidget(onedrive_group, row, 0, 1, 2)
+        row += 1
+
         backend_layout.setRowStretch(row, 1)
         cfg_layout.addWidget(backend_box, 0, 1, 1, 1)
 
@@ -441,6 +470,8 @@ class ControlPanel(QtWidgets.QWidget):
         self.device_list.currentItemChanged.connect(self._on_device_selected)
         self.btn_refresh_devices.clicked.connect(lambda: self.refresh_devices_requested.emit())
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.btn_onedrive_browse.clicked.connect(self._on_browse_onedrive)
+        self.btn_onedrive_sync.clicked.connect(self._emit_data_sync)
         # Gate backend updates behind Apply or Enter
         def _emit_sampling():
             try:
@@ -605,6 +636,30 @@ class ControlPanel(QtWidgets.QWidget):
             # No-op for Temperature Testing tab select for now
         except Exception:
             pass
+
+    def _on_browse_onedrive(self) -> None:
+        """Open a folder picker to select the OneDrive data root."""
+        try:
+            dlg = QtWidgets.QFileDialog(self)
+            dlg.setFileMode(QtWidgets.QFileDialog.Directory)
+            dlg.setOption(QtWidgets.QFileDialog.ShowDirsOnly, True)
+            if dlg.exec():
+                dirs = dlg.selectedFiles()
+                if dirs:
+                    path = dirs[0]
+                    self.onedrive_path_edit.setText(path)
+        except Exception:
+            pass
+
+    def _emit_data_sync(self) -> None:
+        """Emit a data sync request with the configured OneDrive path."""
+        try:
+            path = self.onedrive_path_edit.text().strip()
+        except Exception:
+            path = ""
+        if not path:
+            return
+        self.data_sync_requested.emit(path)
 
     def _emit_start(self) -> None:
         payload = {

@@ -5,7 +5,7 @@ import os
 
 from PySide6 import QtCore, QtWidgets
 
-from .. import config
+from .. import config, data_sync
 from .bridge import UiBridge
 from .state import ViewState
 from .widgets.world_canvas import WorldCanvas
@@ -283,6 +283,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.controls.config_changed.connect(self._on_config_changed)
         self.controls.refresh_devices_requested.connect(self._on_refresh_devices)
+        self.controls.data_sync_requested.connect(self._on_data_sync_requested)
         self.controls.live_testing_tab_selected.connect(self._on_live_tab_selected)
         try:
             self.controls.live_testing_panel.load_45v_requested.connect(self._on_load_45v)
@@ -731,6 +732,40 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
+    def _on_data_sync_requested(self, onedrive_root: str) -> None:
+        """Handle OneDrive data sync requests from the Config tab."""
+        try:
+            onedrive_root = str(onedrive_root or "").strip()
+        except Exception:
+            onedrive_root = ""
+        if not onedrive_root:
+            try:
+                QtWidgets.QMessageBox.warning(self, "Data Sync", "Please select a OneDrive data root before syncing.")
+            except Exception:
+                pass
+            return
+        # Persist the path for this machine and normalize discrete-temp folder layout before sync
+        try:
+            data_sync.set_onedrive_data_root(onedrive_root)
+        except Exception:
+            pass
+        # Best-effort: ensure discrete_temp_testing uses date/tester folder structure locally
+        try:
+            self._normalize_discrete_temp_structure()
+        except Exception:
+            pass
+        try:
+            data_sync.sync_all_data(onedrive_root)
+            try:
+                QtWidgets.QMessageBox.information(self, "Data Sync", "CSV data synchronized with OneDrive.")
+            except Exception:
+                pass
+        except Exception:
+            try:
+                QtWidgets.QMessageBox.warning(self, "Data Sync", "An error occurred while syncing data. See console for details.")
+            except Exception:
+                pass
+
     def _update_live_start_enabled(self) -> None:
         single_mode = (self.state.display_mode == "single")
         has_device = bool((self.state.selected_device_id or "").strip())
@@ -787,6 +822,59 @@ class MainWindow(QtWidgets.QMainWindow):
         dev_norm = self._normalize_device_folder(device_id)
         return os.path.join(root, dev_norm or "unknown")
 
+    def _normalize_tester_folder(self, tester_name: str) -> str:
+        """Normalize tester name for use as a folder: lowercase, spaces->'_', alnum/-/_ only."""
+        s = (tester_name or "").strip().lower()
+        s = s.replace(" ", "_")
+        if not s:
+            s = "unknown"
+        return "".join(ch for ch in s if ch.isalnum() or ch in ("-", "_")) or "unknown"
+
+    def _normalize_discrete_temp_structure(self) -> None:
+        """Ensure discrete_temp_testing uses <device>/<date>/<tester>/... layout based on test_meta.json."""
+        import os, json, shutil, datetime
+        root = os.path.join(self._repo_root(), "discrete_temp_testing")
+        if not os.path.isdir(root):
+            return
+        for dev_folder in os.listdir(root):
+            plate_dir = os.path.join(root, dev_folder)
+            if not os.path.isdir(plate_dir):
+                continue
+            for date_name in os.listdir(plate_dir):
+                date_dir = os.path.join(plate_dir, date_name)
+                if not os.path.isdir(date_dir):
+                    continue
+                # Skip if date_dir already has per-tester subfolders
+                has_subdirs = any(os.path.isdir(os.path.join(date_dir, d)) for d in os.listdir(date_dir))
+                if has_subdirs:
+                    continue
+                meta_path = os.path.join(date_dir, "test_meta.json")
+                if not os.path.isfile(meta_path):
+                    continue
+                tester = ""
+                try:
+                    with open(meta_path, "r", encoding="utf-8") as f:
+                        meta = json.load(f) or {}
+                    tester = str(meta.get("tester_name") or meta.get("tester") or "").strip()
+                except Exception:
+                    tester = ""
+                tester_norm = self._normalize_tester_folder(tester)
+                target_dir = os.path.join(date_dir, tester_norm)
+                if os.path.abspath(target_dir) == os.path.abspath(date_dir):
+                    continue
+                os.makedirs(target_dir, exist_ok=True)
+                for name in os.listdir(date_dir):
+                    src = os.path.join(date_dir, name)
+                    if os.path.isdir(src) and os.path.abspath(src) == os.path.abspath(target_dir):
+                        continue
+                    if os.path.isdir(src):
+                        continue
+                    dst = os.path.join(target_dir, name)
+                    try:
+                        shutil.move(src, dst)
+                    except Exception:
+                        pass
+
     def _refresh_discrete_tests_for_current_device(self) -> None:
         """Scan filesystem and populate discrete tests picker with all discrete-temp tests."""
         if not hasattr(self.controls, "live_testing_panel"):
@@ -803,33 +891,63 @@ class MainWindow(QtWidgets.QMainWindow):
                         continue
                     dev_id = str(dev_folder)
                     short_label = self._short_device_label(dev_id)
-                    for name in sorted(os.listdir(plate_dir)):
-                        day_path = os.path.join(plate_dir, name)
+                    for date_name in sorted(os.listdir(plate_dir)):
+                        day_path = os.path.join(plate_dir, date_name)
                         if not os.path.isdir(day_path):
                             continue
-                        meta_path = os.path.join(day_path, "test_meta.json")
-                        meta = {}
-                        if os.path.isfile(meta_path):
-                            try:
-                                with open(meta_path, "r", encoding="utf-8") as f:
-                                    meta = json.load(f) or {}
-                            except Exception:
-                                meta = {}
-                        tester = str(meta.get("tester_name") or meta.get("tester") or "").strip()
-                        left = short_label
-                        if tester:
-                            left = f"{short_label}_{tester}"
-                        # Date for display: folder name MM-DD-YYYY -> MM/DD/YYYY
-                        date_str = name
+                        # First, handle new structure: per-tester subfolders under date
+                        has_subdirs = False
                         try:
-                            # Validate format; fall back if parse fails
-                            dt = datetime.datetime.strptime(name, "%m-%d-%Y")
-                            date_str = dt.strftime("%m/%d/%Y")
+                            for tester_folder in sorted(os.listdir(day_path)):
+                                tester_dir = os.path.join(day_path, tester_folder)
+                                if not os.path.isdir(tester_dir):
+                                    continue
+                                has_subdirs = True
+                                meta_path = os.path.join(tester_dir, "test_meta.json")
+                                meta = {}
+                                if os.path.isfile(meta_path):
+                                    try:
+                                        with open(meta_path, "r", encoding="utf-8") as f:
+                                            meta = json.load(f) or {}
+                                    except Exception:
+                                        meta = {}
+                                tester = str(meta.get("tester_name") or meta.get("tester") or "").strip() or str(tester_folder)
+                                left = short_label
+                                if tester:
+                                    left = f"{short_label}_{tester}"
+                                # Date for display: folder name MM-DD-YYYY -> MM/DD/YYYY
+                                date_str = date_name
+                                try:
+                                    dt = datetime.datetime.strptime(date_name, "%m-%d-%Y")
+                                    date_str = dt.strftime("%m/%d/%Y")
+                                except Exception:
+                                    date_str = date_name.replace("-", "/").replace("_", "/")
+                                label = f"{left}"
+                                tests.append((label, date_str, tester_dir))
                         except Exception:
-                            # Try to pretty-print any other form
-                            date_str = name.replace("-", "/").replace("_", "/")
-                        label = f"{left}"  # visual formatting handled by delegate
-                        tests.append((label, date_str, day_path))
+                            has_subdirs = False
+                        # Back-compat: legacy layout with files directly under date folder
+                        if not has_subdirs:
+                            meta_path = os.path.join(day_path, "test_meta.json")
+                            meta = {}
+                            if os.path.isfile(meta_path):
+                                try:
+                                    with open(meta_path, "r", encoding="utf-8") as f:
+                                        meta = json.load(f) or {}
+                                except Exception:
+                                    meta = {}
+                            tester = str(meta.get("tester_name") or meta.get("tester") or "").strip()
+                            left = short_label
+                            if tester:
+                                left = f"{short_label}_{tester}"
+                            date_str = date_name
+                            try:
+                                dt = datetime.datetime.strptime(date_name, "%m-%d-%Y")
+                                date_str = dt.strftime("%m/%d/%Y")
+                            except Exception:
+                                date_str = date_name.replace("-", "/").replace("_", "/")
+                            label = f"{left}"
+                            tests.append((label, date_str, day_path))
         except Exception:
             tests = []
         try:
@@ -860,12 +978,13 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         today_str = datetime.datetime.now().strftime("%m-%d-%Y")
-        test_dir = os.path.join(plate_dir, today_str)
+        # For new tests, start with a date folder; once tester is known, we may move into a per-tester subfolder.
+        date_dir = os.path.join(plate_dir, today_str)
         try:
-            os.makedirs(test_dir, exist_ok=True)
+            os.makedirs(date_dir, exist_ok=True)
         except Exception:
             pass
-        meta_path = os.path.join(test_dir, "test_meta.json")
+        meta_path = os.path.join(date_dir, "test_meta.json")
         if not os.path.isfile(meta_path):
             meta = {
                 "device_id": dev_id,
@@ -881,9 +1000,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
         # Remember active test path and refresh picker
         try:
-            self._active_discrete_test_path = str(test_dir)
+            self._active_discrete_test_path = str(date_dir)
         except Exception:
-            self._active_discrete_test_path = test_dir
+            self._active_discrete_test_path = date_dir
         self._refresh_discrete_tests_for_current_device()
         # When starting a new discrete session, focus on Plate/Sensor views
         try:
@@ -894,8 +1013,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.top_tabs_right.setCurrentWidget(self._sensor_tab_right)
         except Exception:
             pass
-        # Start discrete temp live session for this test
-        self._start_discrete_temp_session(test_dir)
+        # Start discrete temp live session for this test (date folder; may be moved into tester subfolder)
+        self._start_discrete_temp_session(date_dir)
 
     def _on_discrete_test_selected(self, test_path: str) -> None:
         """Update Temps-in-Test tab when a discrete test is selected."""
@@ -2392,6 +2511,39 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
             tester, bw_n, _is_temp, _do_capture, _save_dir = dlg.get_values()
             self._log(f"discrete_setup_values: tester='{tester}', model_id={model_id}, device_id={dev_id}, bw_n={bw_n:.1f}")
+
+        # If this test folder is a legacy date-only folder, move contents into a per-tester subfolder
+        try:
+            import os, shutil
+            tester_norm = self._normalize_tester_folder(tester)
+            # Detect if test_path already has a tester subfolder structure
+            has_meta_here = os.path.isfile(os.path.join(test_path, "test_meta.json"))
+            has_subdirs = any(os.path.isdir(os.path.join(test_path, d)) for d in os.listdir(test_path))
+            if has_meta_here and not has_subdirs:
+                # Legacy layout: discrete_temp_testing/<plate>/<date> -> move into <date>/<tester_norm>
+                date_dir = test_path
+                target_dir = os.path.join(date_dir, tester_norm)
+                if os.path.abspath(target_dir) != os.path.abspath(date_dir):
+                    os.makedirs(target_dir, exist_ok=True)
+                    for name in os.listdir(date_dir):
+                        src = os.path.join(date_dir, name)
+                        # Skip existing subdirs (should not exist in legacy), move files only
+                        if os.path.isdir(src):
+                            continue
+                        dst = os.path.join(target_dir, name)
+                        try:
+                            shutil.move(src, dst)
+                        except Exception:
+                            pass
+                test_path = target_dir
+        except Exception:
+            pass
+
+        # Ensure active path tracks the canonical test folder (date/tester)
+        try:
+            self._active_discrete_test_path = str(test_path or "")
+        except Exception:
+            self._active_discrete_test_path = test_path
 
         # Persist tester metadata into this test's meta file
         try:

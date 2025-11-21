@@ -3,3 +3,6 @@
 *.csv
 __pycache__/
 *.pyc
+discrete_temp_testing/
+temp_testing/
+live_test_logs/
