@@ -831,8 +831,11 @@ class MainWindow(QtWidgets.QMainWindow):
         return "".join(ch for ch in s if ch.isalnum() or ch in ("-", "_")) or "unknown"
 
     def _normalize_discrete_temp_structure(self) -> None:
-        """Ensure discrete_temp_testing uses <device>/<date>/<tester>/... layout based on test_meta.json."""
-        import os, json, shutil, datetime
+        """Ensure discrete_temp_testing uses <device>/<date>/<tester>/... layout based on test_meta.json.
+        
+        Handles mixed content (files in date root alongside tester folders) by safely moving/merging files.
+        """
+        import os, json, shutil, datetime, csv
         root = os.path.join(self._repo_root(), "discrete_temp_testing")
         if not os.path.isdir(root):
             return
@@ -844,13 +847,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 date_dir = os.path.join(plate_dir, date_name)
                 if not os.path.isdir(date_dir):
                     continue
-                # Skip if date_dir already has per-tester subfolders
-                has_subdirs = any(os.path.isdir(os.path.join(date_dir, d)) for d in os.listdir(date_dir))
-                if has_subdirs:
-                    continue
+                
+                # Check for test_meta.json in the date root to identify the tester
                 meta_path = os.path.join(date_dir, "test_meta.json")
                 if not os.path.isfile(meta_path):
                     continue
+                
                 tester = ""
                 try:
                     with open(meta_path, "r", encoding="utf-8") as f:
@@ -858,22 +860,61 @@ class MainWindow(QtWidgets.QMainWindow):
                     tester = str(meta.get("tester_name") or meta.get("tester") or "").strip()
                 except Exception:
                     tester = ""
+                
                 tester_norm = self._normalize_tester_folder(tester)
                 target_dir = os.path.join(date_dir, tester_norm)
+                
+                # If target is same as source, skip
                 if os.path.abspath(target_dir) == os.path.abspath(date_dir):
                     continue
+                
                 os.makedirs(target_dir, exist_ok=True)
+                
+                # Move all files from date_dir to target_dir
                 for name in os.listdir(date_dir):
                     src = os.path.join(date_dir, name)
-                    if os.path.isdir(src) and os.path.abspath(src) == os.path.abspath(target_dir):
-                        continue
+                    
+                    # Skip directories (including the target_dir itself)
                     if os.path.isdir(src):
                         continue
+                        
                     dst = os.path.join(target_dir, name)
-                    try:
-                        shutil.move(src, dst)
-                    except Exception:
-                        pass
+                    
+                    # Safe move/merge
+                    if not os.path.exists(dst):
+                        try:
+                            shutil.move(src, dst)
+                        except Exception:
+                            pass
+                    else:
+                        # File exists. If it's a CSV, try to append rows.
+                        if name.lower().endswith(".csv"):
+                            try:
+                                src_rows = []
+                                with open(src, "r", encoding="utf-8", newline="") as f_src:
+                                    reader = csv.reader(f_src)
+                                    src_rows = list(reader)
+                                
+                                if src_rows:
+                                    with open(dst, "a", encoding="utf-8", newline="") as f_dst:
+                                        writer = csv.writer(f_dst)
+                                        for i, row in enumerate(src_rows):
+                                            # Skip header row if present (simple heuristic: contains 'time' and 'phase')
+                                            if i == 0 and len(row) > 1 and "time" in str(row[0]).lower():
+                                                continue
+                                            writer.writerow(row)
+                                
+                                # Delete source after successful append
+                                os.remove(src)
+                            except Exception:
+                                pass
+                        else:
+                            # For non-CSV (like json), if it exists in target, we assume target is authoritative.
+                            # We remove the source duplicate to clean up.
+                            try:
+                                os.remove(src)
+                            except Exception:
+                                pass
 
     def _refresh_discrete_tests_for_current_device(self) -> None:
         """Scan filesystem and populate discrete tests picker with all discrete-temp tests."""
@@ -1044,16 +1085,20 @@ class MainWindow(QtWidgets.QMainWindow):
             if not os.path.isfile(csv_path) or os.path.getsize(csv_path) <= 0:
                 raise FileNotFoundError
             with open(csv_path, "r", encoding="utf-8", newline="") as f:
-                reader = csv.DictReader(f)
+                # Use skipinitialspace to handle leading spaces
+                reader = csv.DictReader(f, skipinitialspace=True)
                 sessions: dict[str, list[float]] = {}
                 for row in reader:
                     if not row:
                         continue
-                    key = str(row.get("time") or "")
+                    # Robust key normalization: strip all keys in the row
+                    clean_row = {k.strip(): v for k, v in row.items() if k}
+                    
+                    key = str(clean_row.get("time") or "")
                     if not key:
                         continue
                     try:
-                        temp_val = float(row.get("sum-t") or 0.0)
+                        temp_val = float(clean_row.get("sum-t") or 0.0)
                     except Exception:
                         continue
                     sessions.setdefault(key, []).append(temp_val)
@@ -1124,24 +1169,28 @@ class MainWindow(QtWidgets.QMainWindow):
         phase_loads: Dict[str, List[float]] = {ph: [] for ph in phases}
         try:
             with open(csv_path, "r", encoding="utf-8", newline="") as f:
-                reader = csv.DictReader(f)
+                # Use skipinitialspace to handle leading spaces
+                reader = csv.DictReader(f, skipinitialspace=True)
                 for row in reader:
                     if not row:
                         continue
+                    # Robust key normalization: strip all keys in the row
+                    clean_row = {k.strip(): v for k, v in row.items() if k}
+                    
                     try:
-                        phase_raw = str(row.get("phase_name") or row.get("phase") or "").strip().lower()
+                        phase_raw = str(clean_row.get("phase_name") or clean_row.get("phase") or "").strip().lower()
                     except Exception:
                         continue
                     if phase_raw not in ("45lb", "bodyweight"):
                         continue
                     phase = phase_raw
                     try:
-                        temp_f = float(row.get("sum-t") or 0.0)
+                        temp_f = float(clean_row.get("sum-t") or 0.0)
                     except Exception:
                         continue
                     # Average per-sensor load from sum-z
                     try:
-                        sum_z = float(row.get("sum-z") or 0.0)
+                        sum_z = float(clean_row.get("sum-z") or 0.0)
                         if sum_z != 0.0:
                             phase_loads[phase].append(abs(sum_z) / 8.0)
                     except Exception:
@@ -1150,7 +1199,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         for ax in axes:
                             col = f"{sp}-{ax}"
                             try:
-                                val = float(row.get(col) or 0.0)
+                                val = float(clean_row.get(col) or 0.0)
                             except Exception:
                                 continue
                             data[phase][ax][sp].append((temp_f, val))

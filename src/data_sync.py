@@ -83,71 +83,74 @@ def _merge_csv_two_way(local_path: str, remote_path: str) -> None:
     """
     Merge two CSV files by 'time' column (if present), writing the merged result back to both.
 
-    - If only one file parses as CSV with a 'time' column, that file wins.
-    - If parsing fails for either, fall back to copying newest file over the other.
+    - Creates a backup (.bak) of the local file before overwriting.
+    - Fails safely: if merge produces empty/invalid result or throws exception,
+      logs error and DOES NOT overwrite existing files.
     """
 
     def _load(path: str) -> Tuple[List[str], List[Dict[str, str]]]:
-        with open(path, "r", encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            fieldnames = list(reader.fieldnames or [])
-            rows: List[Dict[str, str]] = []
-            for row in reader:
-                if not row:
-                    continue
-                rows.append({k: (v if v is not None else "") for k, v in row.items()})
-        return fieldnames, rows
+        try:
+            if not os.path.isfile(path) or os.path.getsize(path) == 0:
+                return [], []
+            with open(path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                fieldnames = list(reader.fieldnames or [])
+                rows: List[Dict[str, str]] = []
+                for row in reader:
+                    if not row:
+                        continue
+                    rows.append({k: (v if v is not None else "") for k, v in row.items()})
+            return fieldnames, rows
+        except Exception:
+            return [], []
 
     def _write(path: str, fieldnames: List[str], rows: List[Dict[str, str]]) -> None:
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in rows:
-                writer.writerow(row)
+        # Atomic write via temp file
+        temp_path = path + ".tmp"
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(temp_path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow(row)
+            # If write successful, rename over target
+            if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+                if os.path.exists(path):
+                    # Create a backup of the original before overwriting
+                    try:
+                        shutil.copy2(path, path + ".bak")
+                    except Exception:
+                        pass
+                shutil.move(temp_path, path)
+        except Exception:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+            raise
 
     try:
         lf, lrows = _load(local_path)
         rf, rrows = _load(remote_path)
-        # Prefer local header if both present; otherwise fall back
-        fieldnames = lf or rf
-        if not fieldnames:
-            # Nothing reasonable to merge; prefer newer mtime
+
+        # If one side is completely empty/missing but the other has data,
+        # treat as a simple copy (but verify the source is good).
+        if not lf and not lrows and rf and rrows:
+            _copy_newer(remote_path, local_path)
+            return
+        if not rf and not rrows and lf and lrows:
             _copy_newer(local_path, remote_path)
             return
 
-        # Use 'time' column where possible; otherwise first column as key
-        key_col = "time" if "time" in fieldnames else fieldnames[0]
-        seen = set()
-        merged: List[Dict[str, str]] = []
-
-        def _add_rows(rows: List[Dict[str, str]]) -> None:
-            for row in rows:
-                key = str(row.get(key_col) or "").strip()
-                if not key:
-                    # Keep rows without a key, but don't dedupe them
-                    merged.append(row)
-                    continue
-                if key in seen:
-                    continue
-                seen.add(key)
-                merged.append(row)
-
-        _add_rows(lrows)
-        _add_rows(rrows)
-
-        # Try to sort by numeric time if possible
-        try:
-            merged.sort(key=lambda r: float(str(r.get(key_col) or "0").strip()))
-        except Exception:
-            pass
-
         _write(local_path, fieldnames, merged)
         _write(remote_path, fieldnames, merged)
-    except Exception:
-        # Best-effort fallback: copy the newer file over the older one
-        _copy_newer(local_path, remote_path)
+
+    except Exception as e:
+        print(f"[sync] Merge failed for {local_path}: {e}")
+        # Do NOT fall back to overwriting with _copy_newer on error
+        return
 
 
 def _copy_newer(path_a: str, path_b: str) -> None:
