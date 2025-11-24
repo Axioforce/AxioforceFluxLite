@@ -7,7 +7,9 @@ from PySide6 import QtCore, QtWidgets
 
 class TemperatureTestingPanel(QtWidgets.QWidget):
     run_requested = QtCore.Signal(dict)
-    browse_requested = QtCore.Signal()
+    run_requested = QtCore.Signal(dict)
+    device_selected = QtCore.Signal(str)
+    refresh_requested = QtCore.Signal()
     test_changed = QtCore.Signal(str)
     processed_selected = QtCore.Signal(object)
     view_mode_changed = QtCore.Signal(str)
@@ -27,18 +29,17 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         settings_box = QtWidgets.QGroupBox("Temperature Testing")
         settings_layout = QtWidgets.QGridLayout(settings_box)
 
-        # Folder selection
-        self._folder_path: str = ""
-        self.edit_folder = QtWidgets.QLineEdit()
-        self.btn_browse = QtWidgets.QPushButton("Browse…")
-        folder_row_widget = QtWidgets.QWidget()
-        folder_row_layout = QtWidgets.QHBoxLayout(folder_row_widget)
-        folder_row_layout.setContentsMargins(0, 0, 0, 0)
-        folder_row_layout.setSpacing(6)
-        folder_row_layout.addWidget(self.edit_folder, 1)
-        folder_row_layout.addWidget(self.btn_browse, 0)
-        settings_layout.addWidget(QtWidgets.QLabel("Device Folder:"), 0, 0)
-        settings_layout.addWidget(folder_row_widget, 0, 1)
+        # Device selection
+        self.device_combo = QtWidgets.QComboBox()
+        self.btn_refresh = QtWidgets.QPushButton("Refresh")
+        device_row_widget = QtWidgets.QWidget()
+        device_row_layout = QtWidgets.QHBoxLayout(device_row_widget)
+        device_row_layout.setContentsMargins(0, 0, 0, 0)
+        device_row_layout.setSpacing(6)
+        device_row_layout.addWidget(self.device_combo, 1)
+        device_row_layout.addWidget(self.btn_refresh, 0)
+        settings_layout.addWidget(QtWidgets.QLabel("Device:"), 0, 0)
+        settings_layout.addWidget(device_row_widget, 0, 1)
 
         # Device and model info
         self.lbl_device_id = QtWidgets.QLabel("—")
@@ -148,7 +149,8 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         except Exception:
             pass
 
-        self.btn_browse.clicked.connect(lambda: self.browse_requested.emit())
+        self.device_combo.currentTextChanged.connect(lambda s: self.device_selected.emit(str(s)))
+        self.btn_refresh.clicked.connect(lambda: self.refresh_requested.emit())
         self.btn_run.clicked.connect(self._emit_run)
         self.view_combo.currentTextChanged.connect(lambda s: self.view_mode_changed.emit(str(s)))
         self.test_list.currentItemChanged.connect(self._emit_test_changed)
@@ -158,13 +160,11 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         self.test_list.currentItemChanged.connect(self._emit_test_changed)
         self.processed_list.currentItemChanged.connect(self._emit_processed_changed)
 
-    def set_folder(self, path: str) -> None:
-        import os
-        self._folder_path = path
-        try:
-            self.edit_folder.setText(os.path.basename(path.rstrip("\\/")) or path)
-        except Exception:
-            self.edit_folder.setText(path)
+    def set_devices(self, devices: list[str]) -> None:
+        self.device_combo.blockSignals(True)
+        self.device_combo.clear()
+        self.device_combo.addItems(devices)
+        self.device_combo.blockSignals(False)
 
     def set_device_id(self, device_id: str) -> None:
         self.lbl_device_id.setText(device_id or "—")
@@ -182,12 +182,19 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             self.lbl_bw.setText("—")
 
     def set_tests(self, files: list[str]) -> None:
-        self.test_list.clear()
+        # Backward compatibility
+        items = []
         import os
         for f in files:
             label = os.path.basename(f.rstrip("\\/")) if f else f
+            items.append((label, f))
+        self.set_tests_with_labels(items)
+
+    def set_tests_with_labels(self, items: list[tuple[str, str]]) -> None:
+        self.test_list.clear()
+        for label, path in items:
             item = QtWidgets.QListWidgetItem(label)
-            item.setData(QtCore.Qt.UserRole, f)  # store full path
+            item.setData(QtCore.Qt.UserRole, path)  # store full path
             self.test_list.addItem(item)
         if self.test_list.count() > 0:
             self.test_list.setCurrentRow(0)
@@ -220,8 +227,7 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
 
     def _emit_run(self) -> None:
         payload = {
-            "folder": (self._folder_path or self.edit_folder.text().strip()),
-            "device_id": self.lbl_device_id.text().strip(),
+            "device_id": self.device_combo.currentText().strip(),
             "csv_path": self.selected_test(),
             "slopes": {"x": float(self.spin_x.value()), "y": float(self.spin_y.value()), "z": float(self.spin_z.value())},
         }

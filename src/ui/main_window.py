@@ -339,7 +339,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.live_testing_panel.discrete_new_requested.connect(self._on_discrete_new_test)
             self.controls.live_testing_panel.discrete_add_requested.connect(self._on_discrete_add_existing)
             # Temperature Testing wiring
-            self.controls.temperature_testing_panel.browse_requested.connect(self._on_temp_browse_folder)
+            self.controls.temperature_testing_panel.device_selected.connect(self._on_temp_device_selected)
+            self.controls.temperature_testing_panel.refresh_requested.connect(self._on_temp_refresh_devices)
             self.controls.temperature_testing_panel.run_requested.connect(self._on_temp_run_requested)
             self.controls.temperature_testing_panel.test_changed.connect(self._on_temp_test_changed)
             self.controls.temperature_testing_panel.processed_selected.connect(self._on_temp_processed_selected)
@@ -347,6 +348,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.temperature_testing_panel.stage_changed.connect(self._on_temp_stage_changed)
         except Exception:
             pass
+        
+        # Initial device scan for temp testing
+        QtCore.QTimer.singleShot(1000, lambda: self._on_temp_refresh_devices())
 
         self._live_session: Optional[LiveTestSession] = None
         self._live_stage_idx: int = 0
@@ -1169,8 +1173,17 @@ class MainWindow(QtWidgets.QMainWindow):
         phase_loads: Dict[str, List[float]] = {ph: [] for ph in phases}
         try:
             with open(csv_path, "r", encoding="utf-8", newline="") as f:
-                # Use skipinitialspace to handle leading spaces
-                reader = csv.DictReader(f, skipinitialspace=True)
+                # Read header line manually to strip whitespace
+                header_line = f.readline()
+                if not header_line:
+                    return
+                import io
+                header_reader = csv.reader(io.StringIO(header_line))
+                headers = next(header_reader, [])
+                headers = [h.strip() for h in headers]
+                # Use skipinitialspace to handle leading spaces in data, though headers are now manual
+                reader = csv.DictReader(f, fieldnames=headers, skipinitialspace=True)
+
                 for row in reader:
                     if not row:
                         continue
@@ -1516,10 +1529,25 @@ class MainWindow(QtWidgets.QMainWindow):
         target_T = 76.0
         try:
             with open(csv_path, "r", encoding="utf-8", newline="") as f:
-                reader = csv.DictReader(f)
+                # Read header line manually to strip whitespace
+                header_line = f.readline()
+                if not header_line:
+                    self._log("plot_test: empty header line")
+                    return
+                import io
+                header_reader = csv.reader(io.StringIO(header_line))
+                headers = next(header_reader, [])
+                headers = [h.strip() for h in headers]
+                # Use skipinitialspace=True to mimic _compute logic and handle value whitespace
+                reader = csv.DictReader(f, fieldnames=headers, skipinitialspace=True)
+
+                self._log(f"plot_test: reading {csv_path} phase_name='{phase_name}' col='{col_name}' headers={headers[:5]}...")
+                row_count = 0
+                match_count = 0
                 for row in reader:
                     if not row:
                         continue
+                    row_count += 1
                     # Phase for phase-specific regression
                     try:
                         ph = str(row.get("phase_name") or row.get("phase") or "").strip().lower()
@@ -1534,6 +1562,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     # Only use rows matching the selected phase for regression/lines and baseline markers
                     if ph != phase_name:
                         continue
+                    match_count += 1
                     # Collect baseline runs for this phase for plotting as faint dots
                     try:
                         if baseline_low <= float(temp_f) <= baseline_high:
@@ -1557,9 +1586,12 @@ class MainWindow(QtWidgets.QMainWindow):
                                 loads_per_sensor.append(abs(fz_sensor))
                     except Exception:
                         pass
-        except Exception:
+            self._log(f"plot_test: rows={row_count} matches={match_count} points={len(xs)}")
+        except Exception as e:
+            self._log(f"plot_test error: {e}")
             xs, ys = [], []
         if not xs or not ys or len(xs) != len(ys):
+            self._log("plot_test: no points to plot")
             return
 
         # Collapse multiple baseline measurements (74–78°F) for this phase into a single
@@ -3632,73 +3664,216 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
 
     # --- Temperature Testing handlers ---
-    def _on_temp_browse_folder(self) -> None:
-        # Choose a device folder under repo_root/temp_testing
-        import os
+    def _scan_temp_devices(self) -> List[str]:
+        """Scan local and OneDrive temp_testing folders for device directories."""
+        devices = set()
+        
+        # 1. Scan local repo temp_testing
         try:
-            # Project root: two levels up from this file (src/ui -> src -> root)
-            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-            start = os.path.join(repo_root, "temp_testing")
-        except Exception:
-            start = ""
-        try:
-            options = QtWidgets.QFileDialog.Options()
-            directory = QtWidgets.QFileDialog.getExistingDirectory(self, "Choose Temperature Testing Device Folder", start, options=options)
-        except Exception:
-            directory = ""
-        if not directory:
-            return
-        try:
-            # Normalize directory path
-            import os as _os
-            directory = _os.path.normpath(directory.strip())
-            self.controls.temperature_testing_panel.set_folder(directory)
-            # Device id = last folder name
-            dev = os.path.basename(directory.rstrip("\\/"))
-            self.controls.temperature_testing_panel.set_device_id(dev)
-            # Populate tests in folder (*.csv)
-            files = self._collect_csvs(directory)
-            try:
-                self._log(f"temp_browse: dir='{directory}' files_found={len(files)}")
-                for f in files[:10]:
-                    self._log(f"temp_browse_file: {f}")
-            except Exception:
-                pass
-            self.controls.temperature_testing_panel.set_tests(sorted(files))
-            # Load last known body weight for device
-            try:
-                bw_last = meta_store.get_latest_body_weight(dev)
-            except Exception:
-                bw_last = None
-            try:
-                self.controls.temperature_testing_panel.set_body_weight_n(bw_last)
-            except Exception:
-                pass
-            # Request latest model metadata for this device (without requiring it be plugged in)
-            if self._request_model_metadata_cb and dev.strip():
-                self._temp_meta_device_id = dev.strip()
-                try:
-                    self._request_model_metadata_cb(dev.strip())
-                except Exception:
-                    pass
+            local_root = os.path.join(self._repo_root(), "temp_testing")
+            if os.path.isdir(local_root):
+                with os.scandir(local_root) as it:
+                    for entry in it:
+                        if entry.is_dir() and not entry.name.startswith("."):
+                            devices.add(entry.name)
         except Exception:
             pass
 
-    def _on_temp_run_requested(self, payload: dict) -> None:
-        # Expect payload: { folder, device_id, csv_path, slopes:{x,y,z} }
+        # 2. Scan OneDrive temp_testing
         try:
-            folder = str(payload.get("folder") or "").strip()
+            onedrive_root = data_sync.get_onedrive_data_root()
+            if onedrive_root and os.path.isdir(onedrive_root):
+                remote_root = os.path.join(onedrive_root, "temp_testing")
+                if os.path.isdir(remote_root):
+                    with os.scandir(remote_root) as it:
+                        for entry in it:
+                            if entry.is_dir() and not entry.name.startswith("."):
+                                devices.add(entry.name)
+        except Exception:
+            pass
+            
+        return sorted(list(devices))
+
+    def _resolve_temp_device_path(self, device_id: str) -> str:
+        """Find the path for a device, preferring local, then OneDrive."""
+        if not device_id:
+            return ""
+            
+        # Check local first
+        local_path = os.path.join(self._repo_root(), "temp_testing", device_id)
+        if os.path.isdir(local_path):
+            return local_path
+            
+        # Check OneDrive
+        onedrive_root = data_sync.get_onedrive_data_root()
+        if onedrive_root:
+            remote_path = os.path.join(onedrive_root, "temp_testing", device_id)
+            if os.path.isdir(remote_path):
+                return remote_path
+                
+        return ""
+
+    def _on_temp_refresh_devices(self) -> None:
+        devices = self._scan_temp_devices()
+        self.controls.temperature_testing_panel.set_devices(devices)
+        # If devices exist, select the first one (or keep current if valid)
+        current = self.controls.temperature_testing_panel.device_combo.currentText()
+        if current in devices:
+            self.controls.temperature_testing_panel.device_combo.setCurrentText(current)
+        elif devices:
+            self.controls.temperature_testing_panel.device_combo.setCurrentIndex(0)
+
+    def _on_temp_device_selected(self, device_id: str) -> None:
+        device_id = device_id.strip()
+        if not device_id:
+            self.controls.temperature_testing_panel.set_tests([])
+            self.controls.temperature_testing_panel.set_device_id("—")
+            self.controls.temperature_testing_panel.set_model_label("—")
+            self.controls.temperature_testing_panel.set_body_weight_n(None)
+            return
+
+        self.controls.temperature_testing_panel.set_device_id(device_id)
+        
+        self.controls.temperature_testing_panel.set_device_id(device_id)
+        
+        # Collect tests from both local and OneDrive
+        unique_tests = {}  # filename -> full_path
+        
+        # 1. Local
+        local_path = os.path.join(self._repo_root(), "temp_testing", device_id)
+        if os.path.isdir(local_path):
+            for f in self._collect_csvs(local_path):
+                unique_tests[os.path.basename(f)] = f
+                
+        # 2. OneDrive
+        onedrive_root = data_sync.get_onedrive_data_root()
+        if onedrive_root:
+            remote_path = os.path.join(onedrive_root, "temp_testing", device_id)
+            if os.path.isdir(remote_path):
+                for f in self._collect_csvs(remote_path):
+                    # Overwrite local with remote if duplicate (or preserve local? usually identical)
+                    # Let's prefer the one we found last (remote) or keep local. 
+                    # Actually, if they are identical, it doesn't matter. 
+                    # If we want to support editing metadata, local might be safer, but user asked to see all.
+                    unique_tests[os.path.basename(f)] = f
+
+        if not unique_tests:
+            self.controls.temperature_testing_panel.set_tests([])
+            return
+
+        # Populate tests with formatted names
+        test_items = []
+        import json
+        
+        for fname in sorted(unique_tests.keys()):
+            f = unique_tests[fname]
+            try:
+                # Check for .meta.json
+                meta_path = f.replace(".csv", ".meta.json")
+                display_name = fname
+                
+                if os.path.isfile(meta_path):
+                    try:
+                        with open(meta_path, "r", encoding="utf-8") as mf:
+                            meta = json.load(mf)
+                            
+                        tester = meta.get("tester_name", "Unknown")
+                        date_str = meta.get("date", "Unknown")
+                        
+                        # Check cached temp
+                        avg_temp = meta.get("avg_temp")
+                        if avg_temp is None:
+                            # Calculate and cache
+                            avg_temp = self._calculate_avg_temp(f)
+                            meta["avg_temp"] = avg_temp
+                            # Try to write back
+                            try:
+                                with open(meta_path, "w", encoding="utf-8") as mf:
+                                    json.dump(meta, mf, indent=2)
+                            except Exception:
+                                pass
+                        
+                        display_name = f"(raw) {tester}_{date_str}_{float(avg_temp):.1f}F"
+                    except Exception:
+                        pass
+                
+                test_items.append((display_name, f))
+            except Exception:
+                pass
+                
+        # Update panel with (label, path) tuples
+        self.controls.temperature_testing_panel.set_tests_with_labels(test_items)
+        
+        # Load last known body weight
+        try:
+            bw_last = meta_store.get_latest_body_weight(device_id)
+        except Exception:
+            bw_last = None
+        self.controls.temperature_testing_panel.set_body_weight_n(bw_last)
+        
+        # Request metadata
+        if self._request_model_metadata_cb:
+            self._temp_meta_device_id = device_id
+            try:
+                self._request_model_metadata_cb(device_id)
+            except Exception:
+                pass
+
+    def _calculate_avg_temp(self, csv_path: str) -> float:
+        """Calculate average temperature from 'sum-t' column, sampling every 1000 rows."""
+        try:
+            import csv
+            total_temp = 0.0
+            count = 0
+            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                for i, row in enumerate(reader):
+                    if i % 1000 == 0:
+                        try:
+                            # 'sum-t' or 'sum_t' or 'temp'
+                            val = row.get("sum-t") or row.get("sum_t") or row.get("temp")
+                            if val:
+                                total_temp += float(val)
+                                count += 1
+                        except ValueError:
+                            pass
+            return (total_temp / count) if count > 0 else 0.0
+        except Exception:
+            return 0.0
+
+    def _on_temp_run_requested(self, payload: dict) -> None:
+        # Expect payload: { device_id, csv_path, slopes:{x,y,z} }
+        try:
             device_id = str(payload.get("device_id") or "").strip()
             csv_path = str(payload.get("csv_path") or "").strip()
             slopes = payload.get("slopes") or {"x": 3.0, "y": 3.0, "z": 3.0}
+            
+            # Resolve folder from device_id
+            folder = self._resolve_temp_device_path(device_id)
         except Exception:
             return
+            
         if not (folder and device_id and csv_path):
             try:
-                QtWidgets.QMessageBox.information(self, "Temperature Testing", "Please select a device folder and a CSV test file.")
+                QtWidgets.QMessageBox.information(self, "Temperature Testing", "Please select a device and a CSV test file.")
             except Exception:
                 pass
             return
+        
+        # Ensure view state is configured for single-device discrete testing so heatmaps render
+        try:
+            self.state.display_mode = "single"
+            self.state.selected_device_id = device_id
+            # Infer device type from ID (e.g. "07.xxxx" -> "07")
+            if device_id:
+                parts = device_id.split(".")
+                if len(parts) > 1:
+                    self.state.selected_device_type = parts[0]
+                elif "-" in device_id:
+                    self.state.selected_device_type = device_id.split("-")[0]
+        except Exception:
+            pass
+
         try:
             self._log(f"temp_run: folder='{folder}' device='{device_id}' csv='{csv_path}' slopes={slopes}")
         except Exception:
@@ -3760,7 +3935,16 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
         try:
             with open(csv_path, "r", newline="", encoding="utf-8") as f:
-                reader = _csv.DictReader(f)
+                # Read header line manually to strip whitespace
+                header_line = f.readline()
+                if not header_line:
+                    return
+                import io
+                header_reader = _csv.reader(io.StringIO(header_line))
+                headers = next(header_reader, [])
+                headers = [h.strip() for h in headers]
+                reader = _csv.DictReader(f, fieldnames=headers)
+
                 for row in reader:
                     try:
                         # Optional time window filter
@@ -3933,6 +4117,20 @@ class MainWindow(QtWidgets.QMainWindow):
         if not path:
             return
         self._temp_selected_raw = path
+        
+        # Ensure view state is single mode (robustness)
+        try:
+            self.state.display_mode = "single"
+            did = self.controls.temperature_testing_panel.lbl_device_id.text().strip()
+            if did and did != "—":
+                self.state.selected_device_id = did
+                if "." in did:
+                    self.state.selected_device_type = did.split(".")[0]
+                elif "-" in did:
+                    self.state.selected_device_type = did.split("-")[0]
+        except Exception:
+            pass
+
         # Re-apply views to reflect new selection
         self._apply_temp_views()
 
@@ -4028,7 +4226,16 @@ class MainWindow(QtWidgets.QMainWindow):
                     try:
                         import csv as _csv
                         with open(csv_path, "r", newline="", encoding="utf-8") as f:
-                            r = _csv.DictReader(f)
+                            # Read header line manually to strip whitespace
+                            header_line = f.readline()
+                            if not header_line:
+                                return results
+                            import io
+                            header_reader = _csv.reader(io.StringIO(header_line))
+                            headers = next(header_reader, [])
+                            headers = [h.strip() for h in headers]
+                            r = _csv.DictReader(f, fieldnames=headers)
+
                             active_cell: tuple[int, int] | None = None
                             window: deque[tuple[int, float, float, float]] = deque()
                             arming_cell: tuple[int, int] | None = None

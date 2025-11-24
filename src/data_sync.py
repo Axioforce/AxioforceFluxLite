@@ -93,8 +93,16 @@ def _merge_csv_two_way(local_path: str, remote_path: str) -> None:
             if not os.path.isfile(path) or os.path.getsize(path) == 0:
                 return [], []
             with open(path, "r", encoding="utf-8", newline="") as f:
-                reader = csv.DictReader(f)
-                fieldnames = list(reader.fieldnames or [])
+                # Read header manually to strip whitespace
+                header_line = f.readline()
+                if not header_line:
+                    return [], []
+                import io
+                header_reader = csv.reader(io.StringIO(header_line))
+                fieldnames = next(header_reader, [])
+                fieldnames = [h.strip() for h in fieldnames]
+
+                reader = csv.DictReader(f, fieldnames=fieldnames)
                 rows: List[Dict[str, str]] = []
                 for row in reader:
                     if not row:
