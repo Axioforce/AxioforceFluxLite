@@ -45,12 +45,13 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         self.lbl_device_id = QtWidgets.QLabel("—")
         self.lbl_model = QtWidgets.QLabel("—")
         self.lbl_bw = QtWidgets.QLabel("—")
-        settings_layout.addWidget(QtWidgets.QLabel("Device ID:"), 1, 0)
-        settings_layout.addWidget(self.lbl_device_id, 1, 1)
-        settings_layout.addWidget(QtWidgets.QLabel("Latest Model:"), 2, 0)
-        settings_layout.addWidget(self.lbl_model, 2, 1)
-        settings_layout.addWidget(QtWidgets.QLabel("Body Weight (N):"), 3, 0)
-        settings_layout.addWidget(self.lbl_bw, 3, 1)
+        # Removed from layout per request
+        # settings_layout.addWidget(QtWidgets.QLabel("Device ID:"), 1, 0)
+        # settings_layout.addWidget(self.lbl_device_id, 1, 1)
+        # settings_layout.addWidget(QtWidgets.QLabel("Latest Model:"), 2, 0)
+        # settings_layout.addWidget(self.lbl_model, 2, 1)
+        # settings_layout.addWidget(QtWidgets.QLabel("Body Weight (N):"), 3, 0)
+        # settings_layout.addWidget(self.lbl_bw, 3, 1)
 
         # Stage selector (moved to Display pane; placeholder init only)
         self.stage_combo = QtWidgets.QComboBox()
@@ -58,11 +59,11 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
 
         # Test files list
         self.test_list = QtWidgets.QListWidget()
-        settings_layout.addWidget(QtWidgets.QLabel("Tests in Device:"), 5, 0, QtCore.Qt.AlignTop)
-        settings_layout.addWidget(self.test_list, 5, 1)
+        settings_layout.addWidget(QtWidgets.QLabel("Tests in Device:"), 1, 0, QtCore.Qt.AlignTop)
+        settings_layout.addWidget(self.test_list, 1, 1)
 
         # Slopes
-        slopes_row = 6
+        slopes_row = 2
         self.spin_x = QtWidgets.QDoubleSpinBox()
         self.spin_y = QtWidgets.QDoubleSpinBox()
         self.spin_z = QtWidgets.QDoubleSpinBox()
