@@ -61,9 +61,12 @@ class LiveTestingPanel(QtWidgets.QWidget):
     discrete_test_selected = QtCore.Signal(str)
     plot_test_requested = QtCore.Signal()
 
-    def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
+    plot_test_requested = QtCore.Signal()
+
+    def __init__(self, state: ViewState, controller: object = None, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self.state = state
+        self.controller = controller
 
         root = QtWidgets.QHBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
@@ -337,17 +340,36 @@ class LiveTestingPanel(QtWidgets.QWidget):
                 pass
             root.addWidget(w, 1)
 
-        self.btn_start.clicked.connect(lambda: self.start_session_requested.emit())
-        self.btn_end.clicked.connect(lambda: self.end_session_requested.emit())
-        self.btn_next.clicked.connect(lambda: self.next_stage_requested.emit())
+        if self.controller:
+            self.btn_start.clicked.connect(lambda: self.start_session_requested.emit()) # Still emit for now, or call controller directly?
+            # Let's keep the signal for now if ControlPanel uses it, but ControlPanel doesn't seem to use it.
+            # ControlPanel just instantiates it.
+            # So we should call controller directly.
+            
+            # We need to gather config for start_session.
+            # This logic was previously in MainWindow.
+            # We'll need a helper to gather config.
+            pass
+        
+        self.btn_start.clicked.connect(self._on_start_clicked)
+        self.btn_end.clicked.connect(self._on_end_clicked)
+        self.btn_next.clicked.connect(self._on_next_clicked)
+        self.btn_prev.clicked.connect(self._on_prev_clicked)
+        
         self.btn_package_model.clicked.connect(lambda: self.package_model_requested.emit())
         self.btn_activate.clicked.connect(self._emit_activate)
         self.btn_deactivate.clicked.connect(self._emit_deactivate)
-        self.btn_prev.clicked.connect(lambda: self.previous_stage_requested.emit())
         self.btn_load_45v.clicked.connect(lambda: self.load_45v_requested.emit())
         self.btn_generate_heatmap.clicked.connect(lambda: self.generate_heatmap_requested.emit())
         self.heatmap_list.currentItemChanged.connect(self._on_heatmap_item_changed)
         self.heatmap_view_combo.currentTextChanged.connect(lambda s: self.heatmap_view_changed.emit(str(s)))
+        
+        # Connect Controller Signals
+        if self.controller:
+            self.controller.view_session_started.connect(self._on_session_started)
+            self.controller.view_session_ended.connect(self._on_session_ended)
+            self.controller.view_stage_changed.connect(self._on_stage_changed)
+            self.controller.view_grid_configured.connect(self.configure_grid)
 
         # Discrete temp testing hooks
         try:
@@ -751,3 +773,62 @@ class LiveTestingPanel(QtWidgets.QWidget):
         except Exception:
             return "Heatmap"
 
+    def _on_start_clicked(self):
+        if self.controller:
+            # Gather config
+            # For now, we use placeholders or get from UI if available
+            # In the original app, MainWindow gathered this from state/config.
+            # We might need to access state here.
+            config = {
+                'tester': "Tester", # Placeholder
+                'device_id': self.lbl_device.text(),
+                'model_id': self.lbl_model.text(),
+                'body_weight_n': 0.0, # Placeholder
+                'thresholds': None, # Placeholder
+                'is_temp_test': self.is_temperature_session(),
+                'is_discrete_temp': self._is_discrete_temp_session()
+            }
+            self.controller.start_session(config)
+        else:
+            self.start_session_requested.emit()
+
+    def _on_end_clicked(self):
+        if self.controller:
+            self.controller.end_session()
+        else:
+            self.end_session_requested.emit()
+
+    def _on_next_clicked(self):
+        if self.controller:
+            self.controller.next_stage()
+        else:
+            self.next_stage_requested.emit()
+
+    def _on_prev_clicked(self):
+        if self.controller:
+            self.controller.prev_stage()
+        else:
+            self.previous_stage_requested.emit()
+
+    def _on_session_started(self, session):
+        self.btn_start.setEnabled(False)
+        self.btn_end.setEnabled(True)
+        self.btn_next.setEnabled(True)
+        self.btn_prev.setEnabled(True)
+        # Update other UI elements from session if needed
+
+    def _on_session_ended(self):
+        self.btn_start.setEnabled(True)
+        self.btn_end.setEnabled(False)
+        self.btn_next.setEnabled(False)
+        self.btn_prev.setEnabled(False)
+        self.stage_label.setText("—")
+        self.progress_label.setText("0 / 0 cells")
+
+    def _on_stage_changed(self, index, stage):
+        self.stage_label.setText(stage.name)
+        # Update progress label if stage has info
+        total = stage.total_cells
+        self.progress_label.setText(f"0 / {total} cells")
+        # Update guide
+        self.set_stage_progress(stage.name, 0, total)

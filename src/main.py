@@ -82,7 +82,6 @@ def _discover_socket_port(host: str, http_port: int, timeout_s: float = 0.7) -> 
 def run_qt() -> int:
     from PySide6 import QtWidgets  # type: ignore
     from .ui.main_window import MainWindow
-    from .controller import Controller
     from . import meta_store
 
     app = QtWidgets.QApplication(sys.argv)
@@ -91,58 +90,14 @@ def run_qt() -> int:
         meta_store.init_db()
     except Exception:
         pass
+    
     win = MainWindow()
-    ctrl = Controller(win)
     win.showMaximized()
-    app.aboutToQuit.connect(ctrl.stop)
+    
+    # Connect application quit to controller shutdown
+    app.aboutToQuit.connect(win.controller.shutdown)
 
-    # Auto-connect on startup using discovery with env overrides and sensible fallbacks
-    host = os.environ.get("SOCKET_HOST", config.SOCKET_HOST)
-    env_port = os.environ.get("SOCKET_PORT")
-    if env_port is not None:
-        try:
-            port = int(env_port)
-        except Exception:
-            port = int(config.SOCKET_PORT)
-    else:
-        http_port = int(os.environ.get("HTTP_PORT", str(config.HTTP_PORT)))
-        discovered = _discover_socket_port(host, http_port)
-        port = int(discovered) if discovered is not None else int(config.SOCKET_PORT)
-    ctrl.connect(host, port)
-    # Wire rate change callbacks after connect
-    try:
-        win.on_sampling_rate_changed(ctrl.request_sampling_rate)
-        win.on_emission_rate_changed(ctrl.request_emission_rate)
-        # Interface: UI tick Hz dynamic update
-        def _on_ui_tick(hz: int) -> None:
-            try:
-                setattr(config, 'UI_TICK_HZ', int(hz))
-            except Exception:
-                pass
-            try:
-                if hasattr(ctrl, '_ui_tick_hz'):
-                    ctrl._ui_tick_hz = int(hz)
-            except Exception:
-                pass
-        win.on_ui_tick_hz_changed(_on_ui_tick)
-        # Model management callbacks
-        win.on_request_model_metadata(ctrl.request_model_metadata)
-        win.on_package_model(ctrl.package_model)
-        win.on_activate_model(ctrl.activate_model)
-        win.on_deactivate_model(ctrl.deactivate_model)
-        # Resolve group ID for captures
-        win.on_resolve_group_id(ctrl.resolve_group_id_for_device)
-        # Temperature testing processing callback
-        win.on_temp_process(ctrl.run_temperature_processing)
-        # Apply temperature correction wiring
-        try:
-            win.on_apply_temperature_correction(ctrl.apply_temperature_correction)
-        except Exception:
-            pass
-    except Exception:
-        pass
     rc = app.exec()
-    ctrl.stop()
     return int(rc)
 
 

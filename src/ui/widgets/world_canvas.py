@@ -9,6 +9,7 @@ import json
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ... import config
+from ...services.geometry import GeometryService
 from ...model import LAUNCH_NAME, LANDING_NAME
 from ..state import ViewState
 from .grid_overlay import GridOverlay
@@ -150,98 +151,32 @@ class WorldCanvas(QtWidgets.QWidget):
         return super().mousePressEvent(event)
 
     def _compute_world_bounds(self) -> None:
-        if self.state.display_mode == "single":
-            # Auto-zoom the view around the selected plate so that all plate types
-            # (06/07/08/11) render with a consistent on-screen margin, regardless
-            # of their physical dimensions.
-            dev_type = (self.state.selected_device_type or "").strip()
-            if dev_type == "06":
-                w_mm = float(config.TYPE06_W_MM)
-                h_mm = float(config.TYPE06_H_MM)
-            elif dev_type == "07":
-                w_mm = float(config.TYPE07_W_MM)
-                h_mm = float(config.TYPE07_H_MM)
-            elif dev_type == "11":
-                w_mm = float(config.TYPE11_W_MM)
-                h_mm = float(config.TYPE11_H_MM)
-            else:
-                # Default to XL plate geometry when device type is unknown/08.
-                w_mm = float(config.TYPE08_W_MM)
-                h_mm = float(config.TYPE08_H_MM)
-
-            half_w = 0.5 * w_mm
-            half_h = 0.5 * h_mm
-            longest = max(w_mm, h_mm)
-            # Margin is a fixed fraction of plate size so smaller plates are auto-zoomed.
-            margin_ratio = float(getattr(config, "PLATE_MARGIN_RATIO", 0.35))
-            margin_mm = max(50.0, margin_ratio * longest)
-            self.WORLD_X_MIN, self.WORLD_X_MAX = -half_h - margin_mm, half_h + margin_mm
-            self.WORLD_Y_MIN, self.WORLD_Y_MAX = -half_w - margin_mm, half_w + margin_mm
-            return
-        s07_w = config.TYPE07_W_MM / 2.0
-        s07_h = config.TYPE07_H_MM / 2.0
-        s08_w = config.TYPE08_W_MM / 2.0
-        s08_h = config.TYPE08_H_MM / 2.0
-        x_min = -max(s07_h, s08_h)
-        x_max = max(s07_h, s08_h)
-        y_edges = [
-            -s07_w, s07_w,
-            config.LANDING_LOWER_CENTER_MM[1] - s08_w, config.LANDING_LOWER_CENTER_MM[1] + s08_w,
-            config.LANDING_UPPER_CENTER_MM[1] - s08_w, config.LANDING_UPPER_CENTER_MM[1] + s08_w,
-        ]
-        y_min = min(y_edges)
-        y_max = max(y_edges)
-        margin_mm = 150.0
-        self.WORLD_X_MIN, self.WORLD_X_MAX = x_min - margin_mm, x_max + margin_mm
-        self.WORLD_Y_MIN, self.WORLD_Y_MAX = y_min - margin_mm, y_max + margin_mm
+        self.WORLD_X_MIN, self.WORLD_X_MAX, self.WORLD_Y_MIN, self.WORLD_Y_MAX = \
+            GeometryService.compute_world_bounds(self.state.display_mode, self.state.selected_device_type)
 
     def _compute_fit(self) -> None:
         w, h = self.width(), self.height()
         if w <= 0 or h <= 0:
             return
         self._compute_world_bounds()
-        world_w = max(1e-3, float(self.WORLD_Y_MAX - self.WORLD_Y_MIN))
-        world_h = max(1e-3, float(self.WORLD_X_MAX - self.WORLD_X_MIN))
-        # Adapt the pixel margin so very small windows still keep the full plate in view.
-        base_margin = float(self.MARGIN_PX)
-        # Never let the effective margin exceed 15% of the smaller dimension.
-        max_margin = 0.15 * float(min(w, h))
-        margin = min(base_margin, max_margin)
-        margin = max(2.0, margin)
-        usable_w = max(1.0, float(w) - 2.0 * margin)
-        usable_h = max(1.0, float(h) - 2.0 * margin)
-        s = min(usable_w / world_w, usable_h / world_h)
-        # Clamp to a small but positive value so axes/plates always render within the canvas.
-        self.state.px_per_mm = max(0.01, float(s))
-        self._y_mid = (self.WORLD_Y_MIN + self.WORLD_Y_MAX) / 2.0
-        self._x_mid = (self.WORLD_X_MIN + self.WORLD_X_MAX) / 2.0
+        
+        bounds = (self.WORLD_X_MIN, self.WORLD_X_MAX, self.WORLD_Y_MIN, self.WORLD_Y_MAX)
+        px_per_mm, x_mid, y_mid = GeometryService.compute_fit(w, h, bounds, self.MARGIN_PX)
+        
+        self.state.px_per_mm = px_per_mm
+        self._x_mid = x_mid
+        self._y_mid = y_mid
         self._fit_done = True
 
-    def _apply_rotation_single(self, x_mm: float, y_mm: float) -> Tuple[float, float]:
-        k = int(self._rotation_quadrants) % 4
-        if k == 0:
-            return x_mm, y_mm
-        if k == 1:  # 90° cw
-            return y_mm, -x_mm
-        if k == 2:  # 180°
-            return -x_mm, -y_mm
-        # k == 3: 270° cw
-        return -y_mm, x_mm
-
     def _to_screen(self, x_mm: float, y_mm: float) -> Tuple[int, int]:
-        w, h = self.width(), self.height()
-        s = self.state.px_per_mm
-        assert s > 0
-        cx, cy = w * 0.5, h * 0.5
-        if self.state.display_mode == "single":
-            rx, ry = self._apply_rotation_single(x_mm, y_mm)
-            sx = int(cx + (rx - self._x_mid) * s)
-            sy = int(cy - (ry - self._y_mid) * s)
-        else:
-            sx = int(cx + (y_mm - self._y_mid) * s)
-            # Flip vertical mapping so X+ renders downward (screen Y increases)
-            sy = int(cy + (x_mm - self._x_mid) * s)
-        return sx, sy
+        return GeometryService.world_to_screen(
+            x_mm, y_mm, 
+            self.width(), self.height(), 
+            self.state.px_per_mm, 
+            self._x_mid, self._y_mid, 
+            self.state.display_mode, 
+            self._rotation_quadrants
+        )
 
     def _draw_grid(self, p: QtGui.QPainter) -> None:
         w = self.width()
@@ -698,46 +633,24 @@ class WorldCanvas(QtWidgets.QWidget):
         self._grid_overlay.show()
         self.update()
 
-    def _map_cell_for_rotation(self, row: int, col: int) -> Tuple[int, int]:
-        try:
-            rows = int(self._grid_overlay.rows)
-            cols = int(self._grid_overlay.cols)
-        except Exception:
-            return int(row), int(col)
-        r = int(row)
-        c = int(col)
-        k = int(self._rotation_quadrants) % 4
-        if k == 0:
-            return r, c
-        if k == 1:  # 90° cw
-            return c, (cols - 1 - r)
-        if k == 2:  # 180°
-            return (rows - 1 - r), (cols - 1 - c)
-        # k == 3: 270° cw
-        return (rows - 1 - c), r
-
-    def _map_cell_for_device(self, row: int, col: int) -> Tuple[int, int]:
-        """Apply device-specific overlay mapping. For 06 and 08, mirror across the
-        bottom-left to top-right axis (anti-diagonal). Others: identity.
-        """
-        try:
-            rows = int(self._grid_overlay.rows)
-            cols = int(self._grid_overlay.cols)
-        except Exception:
-            return int(row), int(col)
-        dev_type = (self.state.selected_device_type or "").strip()
-        if dev_type in ("06", "08"):
-            # Anti-diagonal mirror: (r, c) -> (rows-1-c, cols-1-r)
-            return (rows - 1 - int(col), cols - 1 - int(row))
-        return int(row), int(col)
-
     def set_live_active_cell(self, row: Optional[int], col: Optional[int]) -> None:
         if row is None or col is None:
             self._grid_overlay.set_active_cell(None, None)
             return
-        # Apply device-specific mirror first (e.g., 06/08), then rotation mapping
-        dr, dc = self._map_cell_for_device(int(row), int(col))
-        rr, cc = self._map_cell_for_rotation(dr, dc)
+        
+        try:
+            rows = int(self._grid_overlay.rows)
+            cols = int(self._grid_overlay.cols)
+        except Exception:
+            rows, cols = 0, 0
+            
+        rr, cc = GeometryService.map_cell(
+            int(row), int(col), 
+            rows, cols, 
+            self._rotation_quadrants, 
+            self.state.selected_device_type
+        )
+        self._grid_overlay.set_active_cell(rr, cc)
         self._grid_overlay.set_active_cell(rr, cc)
 
     def set_live_cell_color(self, row: int, col: int, color: QtGui.QColor) -> None:

@@ -19,8 +19,9 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
     view_mode_changed = QtCore.Signal(str)
     target_changed = QtCore.Signal(str)
 
-    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+    def __init__(self, controller: object = None, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
+        self.controller = controller
 
         root = QtWidgets.QHBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
@@ -158,16 +159,17 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             pass
 
         self.device_combo.currentTextChanged.connect(lambda s: self.device_selected.emit(str(s)))
-        self.btn_refresh.clicked.connect(lambda: self.refresh_requested.emit())
-        self.btn_run.clicked.connect(self._emit_run)
+        self.btn_refresh.clicked.connect(self._on_refresh_clicked)
+        self.btn_run.clicked.connect(self._on_run_clicked)
         self.view_combo.currentTextChanged.connect(lambda s: self.view_mode_changed.emit(str(s)))
         self.test_list.currentItemChanged.connect(self._emit_test_changed)
         self.processed_list.currentItemChanged.connect(self._emit_processed_changed)
         self.stage_combo.currentTextChanged.connect(lambda s: self.stage_changed.emit(str(s)))
-        self.view_combo.currentTextChanged.connect(lambda s: self.view_mode_changed.emit(str(s)))
-        self.test_list.currentItemChanged.connect(self._emit_test_changed)
-        self.processed_list.currentItemChanged.connect(self._emit_processed_changed)
         self.target_combo.currentTextChanged.connect(lambda s: self.target_changed.emit(str(s)))
+        
+        if self.controller:
+            self.controller.tests_listed.connect(self.set_tests)
+            # self.controller.processing_status.connect(self._on_processing_status) # TODO: Implement status handler
 
     def set_devices(self, devices: list[str]) -> None:
         self.device_combo.blockSignals(True)
@@ -234,13 +236,23 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
     def slopes(self) -> tuple[float, float, float]:
         return float(self.spin_x.value()), float(self.spin_y.value()), float(self.spin_z.value())
 
-    def _emit_run(self) -> None:
+    def _on_run_clicked(self) -> None:
         payload = {
             "device_id": self.device_combo.currentText().strip(),
             "csv_path": self.selected_test(),
             "slopes": {"x": float(self.spin_x.value()), "y": float(self.spin_y.value()), "z": float(self.spin_z.value())},
         }
-        self.run_requested.emit(payload)
+        if self.controller:
+            self.controller.run_processing(payload)
+        else:
+            self.run_requested.emit(payload)
+
+    def _on_refresh_clicked(self) -> None:
+        if self.controller:
+            device_id = self.device_combo.currentText().strip()
+            self.controller.refresh_tests(device_id)
+        else:
+            self.refresh_requested.emit()
 
     def _emit_test_changed(self) -> None:
         it = self.test_list.currentItem()

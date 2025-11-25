@@ -34,9 +34,10 @@ class ControlPanel(QtWidgets.QWidget):
     # Data sync (OneDrive) actions
     data_sync_requested = QtCore.Signal(str)
 
-    def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
+    def __init__(self, state: ViewState, controller: object = None, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self.state = state
+        self.controller = controller
 
         def _fixh(w: QtWidgets.QWidget, h: int = 22) -> None:
             w.setFixedHeight(h)
@@ -426,10 +427,13 @@ class ControlPanel(QtWidgets.QWidget):
         tabs.addTab(demo_tab, "Demo")
 
         # Live Testing tab
-        self.live_testing_panel = LiveTestingPanel(self.state)
+        # Pass live test controller if available
+        live_ctrl = getattr(self.controller, "live_test", None) if self.controller else None
+        self.live_testing_panel = LiveTestingPanel(self.state, live_ctrl)
         self._live_tab_index = tabs.addTab(self.live_testing_panel, "Live Testing")
         # Temperature Testing tab (to the right of Live Testing)
-        self.temperature_testing_panel = TemperatureTestingPanel()
+        temp_ctrl = getattr(self.controller, "temp_test", None) if self.controller else None
+        self.temperature_testing_panel = TemperatureTestingPanel(temp_ctrl)
         self._temp_tab_index = tabs.addTab(self.temperature_testing_panel, "Temperature Testing")
         # Ensure tabs consume available vertical space (MainWindow controls overall 3:2 split)
         try:
