@@ -636,12 +636,17 @@ class Controller:
             print(f"[ctrl] TEMP OFF error: {e}")
         # TEMP ON: skip duplicates for same slopes
         self._update_temp_config(slopes, True)
-        on_name = os.path.splitext(os.path.basename(csv_path))[0] + "__temp_on"
+        sx = float(slopes.get("x", 0.0))
+        sy = float(slopes.get("y", 0.0))
+        sz = float(slopes.get("z", 0.0))
+        
+        # Construct name with slopes (e.g. __3_0-3_0-3_0)
+        # Replace dots with underscores for safety
+        slope_str = f"{sx:.1f}-{sy:.1f}-{sz:.1f}".replace(".", "_")
+        on_name = os.path.splitext(os.path.basename(csv_path))[0] + f"__{slope_str}"
+        
         on_path = None
         try:
-            sx = float(slopes.get("x", 0.0))
-            sy = float(slopes.get("y", 0.0))
-            sz = float(slopes.get("z", 0.0))
             if not meta_store.has_on_for_csv(csv_path, sx, sy, sz):
                 print(f"[ctrl] TEMP ON processing: csv='{csv_path}' device='{device_id}' out_dir='{out_dir}' name='{on_name}' slopes=({sx},{sy},{sz})")
                 on_path = self._process_csv(csv_path, device_id, out_dir, on_name)

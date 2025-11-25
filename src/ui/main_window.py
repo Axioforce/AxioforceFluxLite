@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable, Dict, Optional, Tuple, List
 import os
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtWidgets, QtGui
 
 from .. import config, data_sync
 from .bridge import UiBridge
@@ -346,6 +346,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.temperature_testing_panel.processed_selected.connect(self._on_temp_processed_selected)
             self.controls.temperature_testing_panel.view_mode_changed.connect(self._on_temp_view_mode_changed)
             self.controls.temperature_testing_panel.stage_changed.connect(self._on_temp_stage_changed)
+            self.controls.temperature_testing_panel.target_changed.connect(lambda _: self._apply_temp_views())
         except Exception:
             pass
         
@@ -3704,16 +3705,74 @@ class MainWindow(QtWidgets.QMainWindow):
         if os.path.isdir(local_path):
             return local_path
             
-        # Check OneDrive
-        onedrive_root = data_sync.get_onedrive_data_root()
-        if onedrive_root:
-            remote_path = os.path.join(onedrive_root, "temp_testing", device_id)
-            if os.path.isdir(remote_path):
-                return remote_path
+        # Removed OneDrive check from default resolution
+        # onedrive_root = data_sync.get_onedrive_data_root()
+        # if onedrive_root:
+        #     remote_path = os.path.join(onedrive_root, "temp_testing", device_id)
+        #     if os.path.isdir(remote_path):
+        #         return remote_path
                 
         return ""
 
     def _on_temp_refresh_devices(self) -> None:
+        self.controls.temperature_testing_panel.btn_refresh.setText("Syncing...")
+        self.controls.temperature_testing_panel.btn_refresh.setEnabled(False)
+        self.controls.temperature_testing_panel.btn_refresh.repaint()
+        QtWidgets.QApplication.processEvents()
+        
+        # 1. Sync from OneDrive if available
+        try:
+            import shutil
+            
+            onedrive_root = data_sync.get_onedrive_data_root()
+            if onedrive_root:
+                remote_root = os.path.join(onedrive_root, "temp_testing")
+                local_root = os.path.join(self._repo_root(), "temp_testing")
+                
+                if os.path.isdir(remote_root):
+                    # Iterate over remote devices
+                    for entry in os.scandir(remote_root):
+                        if entry.is_dir() and not entry.name.startswith("."):
+                            device_id = entry.name
+                            src_dir = entry.path
+                            dst_dir = os.path.join(local_root, device_id)
+                            
+                            # Case 1: Device folder doesn't exist locally -> Copy entire folder
+                            if not os.path.isdir(dst_dir):
+                                try:
+                                    shutil.copytree(src_dir, dst_dir)
+                                    self._log(f"synced new device folder: {device_id}")
+                                except Exception:
+                                    pass
+                            else:
+                                # Case 2: Device folder exists -> Copy missing files
+                                try:
+                                    for root, _, files in os.walk(src_dir):
+                                        # Relative path from device folder
+                                        rel_path = os.path.relpath(root, src_dir)
+                                        dst_subdir = os.path.join(dst_dir, rel_path)
+                                        
+                                        if not os.path.isdir(dst_subdir):
+                                            os.makedirs(dst_subdir, exist_ok=True)
+                                            
+                                        for f in files:
+                                            if f.startswith("."): continue
+                                            src_file = os.path.join(root, f)
+                                            dst_file = os.path.join(dst_subdir, f)
+                                            
+                                            if not os.path.exists(dst_file):
+                                                shutil.copy2(src_file, dst_file)
+                                                # self._log(f"synced file: {f}")
+                                except Exception:
+                                    pass
+        except Exception as e:
+            self._log(f"sync error: {e}")
+            pass
+        finally:
+            self.controls.temperature_testing_panel.btn_refresh.setText("Refresh")
+            self.controls.temperature_testing_panel.btn_refresh.setEnabled(True)
+
+        # 2. Refresh list from local only
         devices = self._scan_temp_devices()
         self.controls.temperature_testing_panel.set_devices(devices)
         # If devices exist, select the first one (or keep current if valid)
@@ -3734,9 +3793,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.controls.temperature_testing_panel.set_device_id(device_id)
         
-        self.controls.temperature_testing_panel.set_device_id(device_id)
-        
-        # Collect tests from both local and OneDrive
+        # Collect tests from local ONLY
         unique_tests = {}  # filename -> full_path
         
         # 1. Local
@@ -3745,17 +3802,9 @@ class MainWindow(QtWidgets.QMainWindow):
             for f in self._collect_csvs(local_path):
                 unique_tests[os.path.basename(f)] = f
                 
-        # 2. OneDrive
-        onedrive_root = data_sync.get_onedrive_data_root()
-        if onedrive_root:
-            remote_path = os.path.join(onedrive_root, "temp_testing", device_id)
-            if os.path.isdir(remote_path):
-                for f in self._collect_csvs(remote_path):
-                    # Overwrite local with remote if duplicate (or preserve local? usually identical)
-                    # Let's prefer the one we found last (remote) or keep local. 
-                    # Actually, if they are identical, it doesn't matter. 
-                    # If we want to support editing metadata, local might be safer, but user asked to see all.
-                    unique_tests[os.path.basename(f)] = f
+        # Removed OneDrive check
+        # onedrive_root = data_sync.get_onedrive_data_root()
+        # ...
 
         if not unique_tests:
             self.controls.temperature_testing_panel.set_tests([])
@@ -3914,126 +3963,356 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
+    def _find_best_windows(self, times: list[float], forces: list[float], targets: dict[str, float]) -> dict[str, dict]:
+        """
+        Find best 2s windows for each target load.
+        Returns dict: { '45': {'val': float, 'err': float}, 'bw': ... }
+        """
+        results = {}
+        if not times or len(times) < 10:
+            return results
+            
+        # Parameters
+        WINDOW_DURATION = 2000  # ms
+        TOLERANCE_PCT = 0.30
+        STD_THRESHOLD = 5.0
+        
+        # Pre-calculate valid windows
+        # This is O(N*W), potentially slow if not careful. 
+        # 20k points, window ~120 points (60Hz * 2s). 
+        # Sliding window calculation is better.
+        
+        import math
+        import statistics
+        
+        n = len(times)
+        
+        # We can optimize by iterating start indices
+        # Assume roughly constant sampling rate
+        t_start = times[0]
+        t_end = times[-1]
+        if t_end - t_start < WINDOW_DURATION:
+            return results
+            
+        # We need to iterate through windows.
+        # Optimization: Step by e.g. 10 samples (approx 1/6th sec)
+        step = 5
+        
+        best_candidates = {k: {'slope': float('inf'), 'std': float('inf'), 'val': 0.0} for k in targets}
+        found_any = {k: False for k in targets}
+        
+        i = 0
+        while i < n:
+            t0 = times[i]
+            # Find end index
+            j = i
+            while j < n and times[j] - t0 < WINDOW_DURATION:
+                j += 1
+            
+            if j >= n: 
+                break
+                
+            # Window is slice [i:j]
+            window_forces = forces[i:j]
+            window_times = times[i:j]
+            
+            if len(window_forces) < 10:
+                i += step
+                continue
+                
+            mean_f = statistics.mean(window_forces)
+            
+            # Check if this window matches any target
+            for tag, target_val in targets.items():
+                if target_val <= 0: continue
+                
+                diff = abs(mean_f - target_val)
+                if diff / target_val <= TOLERANCE_PCT:
+                    # Candidate
+                    try:
+                        std_f = statistics.stdev(window_forces)
+                    except Exception:
+                        std_f = 0.0
+                    
+                    # Calculate slope (linear regression)
+                    # slope = cov(t, f) / var(t)
+                    # t in seconds for meaningful slope (N/s)
+                    wt_s = [(t - t0)/1000.0 for t in window_times]
+                    mean_t = statistics.mean(wt_s)
+                    
+                    num = sum((t - mean_t) * (f - mean_f) for t, f in zip(wt_s, window_forces))
+                    denom = sum((t - mean_t)**2 for t in wt_s)
+                    slope = (num / denom) if denom > 0 else float('inf')
+                    
+                    # Selection criteria:
+                    # "slope closest to 0 and std smallest"
+                    # We prioritize std < 5.0. If both < 5.0, pick min slope.
+                    # If neither < 5.0, pick min std.
+                    
+                    curr_best = best_candidates[tag]
+                    is_better = False
+                    
+                    if not found_any[tag]:
+                        is_better = True
+                    else:
+                        # Logic:
+                        # If new is low noise and old is high noise -> new
+                        # If both low noise -> min slope
+                        # If both high noise -> min std (or min slope? User said "slope closest to 0 and std is smallest")
+                        
+                        curr_low_noise = curr_best['std'] < STD_THRESHOLD
+                        new_low_noise = std_f < STD_THRESHOLD
+                        
+                        if new_low_noise and not curr_low_noise:
+                            is_better = True
+                        elif new_low_noise and curr_low_noise:
+                            if abs(slope) < abs(curr_best['slope']):
+                                is_better = True
+                        elif not new_low_noise and not curr_low_noise:
+                            # Both noisy: minimize combined score? Or just slope?
+                            # "std is the smallest" implies minimizing std is important.
+                            # Let's minimize std primarily if it's high
+                            if std_f < curr_best['std']:
+                                is_better = True
+                                
+                    if is_better:
+                        best_candidates[tag] = {'slope': slope, 'std': std_f, 'val': mean_f}
+                        found_any[tag] = True
+            
+            i += step
+            
+        for tag, found in found_any.items():
+            if found:
+                val = best_candidates[tag]['val']
+                target = targets[tag]
+                err = (val - target) / target if target > 0 else 0.0
+                results[tag] = {'val': val, 'err': err, 'target': target}
+                
+        return results
+
     def _ingest_processed_csv(self, tag: str, csv_path: str, t_start_ms: Optional[int] = None, t_end_ms: Optional[int] = None) -> None:
-        # Parse processed CSV and add to heatmap stores under a key derived from filename
+        # New implementation: Smart Window Finding
         import os
         import csv as _csv
-        # Compose key with time-window suffix for stage slicing
-        key = csv_path
-        if t_start_ms is not None or t_end_ms is not None:
-            key = f"{csv_path}#t:{t_start_ms or ''}-{t_end_ms or ''}"
-        base = os.path.basename(csv_path)
-        label = f"{tag}: {base}"
-        points: list[tuple[float, float, str]] = []
-        raw_points: list[dict] = []
-        count = 0
-        abs_pcts: list[float] = []
-        signed_pcts: list[float] = []
+        import statistics
+        
+        # Storage for this run
+        # We use a class attribute dict to store results by (tag, csv_path)
+        if not hasattr(self, "_temp_grid_results"):
+            self._temp_grid_results = {}
+            
+        # Clear previous for this specific key if needed, or just overwrite
+        # We key by 'tag' (TEMP ON / TEMP OFF)
+        # Actually, better to store by tag so we can retrieve easily in _apply_temp_views
+        
+        device_id = self.state.selected_device_id
+        # Determine grid
+        grid_dims = GRID_BY_MODEL.get(self.state.selected_device_type, (3, 3))
+        rows, cols = grid_dims
+        
+        # Targets
         try:
-            self._log(f"ingest_csv: tag='{tag}' path='{csv_path}' window=({t_start_ms},{t_end_ms}) key='{key}'")
+            bw_text = self.controls.temperature_testing_panel.lbl_bw.text()
+            bw_val = float(bw_text) if bw_text and bw_text != "—" else 0.0
         except Exception:
-            pass
+            bw_val = 0.0
+            
+        # Fallback to meta_store if UI empty
+        if bw_val <= 0:
+             try:
+                 bw_val = meta_store.get_latest_body_weight(device_id) or 0.0
+             except Exception:
+                 pass
+                 
+        targets = {
+            "45 lb": 200.0,  # Approx 45 lbs in N
+            "Body Weight": bw_val
+        }
+        
+        # Bin data by cell
+        cell_data = {} # (r, c) -> {'times': [], 'forces': []}
+        
         try:
+            self._log(f"ingest_csv_smart: tag='{tag}' path='{csv_path}' bw={bw_val}")
             with open(csv_path, "r", newline="", encoding="utf-8") as f:
-                # Read header line manually to strip whitespace
+                # Robust header reading
                 header_line = f.readline()
-                if not header_line:
-                    return
+                if not header_line: return
                 import io
-                header_reader = _csv.reader(io.StringIO(header_line))
-                headers = next(header_reader, [])
-                headers = [h.strip() for h in headers]
+                headers = [h.strip() for h in next(_csv.reader(io.StringIO(header_line)), [])]
                 reader = _csv.DictReader(f, fieldnames=headers)
-
+                
                 for row in reader:
                     try:
-                        # Optional time window filter
-                        if t_start_ms is not None or t_end_ms is not None:
-                            try:
-                                tval = int(float(row.get("time", row.get("time_ms", 0)) or 0))
-                            except Exception:
-                                tval = 0
-                            if t_start_ms is not None and tval < int(t_start_ms):
-                                continue
-                            if t_end_ms is not None and tval > int(t_end_ms):
-                                continue
-                        # Prefer COP columns when present, else x_mm/y_mm, else x/y
+                        t_ms = float(row.get("time", row.get("time_ms", 0)) or 0)
+                        # Time filter
+                        if t_start_ms is not None and t_ms < t_start_ms: continue
+                        if t_end_ms is not None and t_ms > t_end_ms: continue
+                        
+                        # Position
                         try:
                             x_mm = float(row.get("COPx", row.get("x_mm", row.get("x", 0.0))) or 0.0)
                             y_mm = float(row.get("COPy", row.get("y_mm", row.get("y", 0.0))) or 0.0)
                         except Exception:
-                            x_mm = float(row.get("x_mm", row.get("x", 0.0)) or 0.0)
-                            y_mm = float(row.get("y_mm", row.get("y", 0.0)) or 0.0)
-                        # Optional percent/ratio fields; if missing, derive a presence ratio (1.0) based on sum-z being nonzero
+                            x_mm = 0.0; y_mm = 0.0
+                            
+                        # Force
                         try:
-                            ratio = float(row.get("ratio"))  # type: ignore[arg-type]
+                            sum_z = float(row.get("sum-z", row.get("sum_z", 0.0)) or 0.0)
                         except Exception:
-                            ratio = 0.0
-                        try:
-                            abs_pct = float(row.get("abs_pct", row.get("absPercent", 0.0)) or 0.0)
-                        except Exception:
-                            abs_pct = 0.0
-                        try:
-                            signed_pct = float(row.get("signed_pct", row.get("signedPercent", 0.0)) or 0.0)
-                        except Exception:
-                            signed_pct = 0.0
-                        if ratio == 0.0:
-                            try:
-                                sum_z = float(row.get("sum-z", row.get("sum_z", 0.0)) or 0.0)
-                            except Exception:
-                                sum_z = 0.0
-                            # Mark presence if any force recorded
-                            if abs(sum_z) > 0.0:
-                                ratio = 1.0
-                        # Choose a bin color heuristic based on ratio if available
-                        mult = getattr(config, "COLOR_BIN_MULTIPLIERS", {"green": 1.0, "light_green": 1.25, "yellow": 1.5, "orange": 2.0})
-                        if ratio <= mult.get("green", 1.0):
-                            bin_color = "green"
-                        elif ratio <= mult.get("light_green", 1.25):
-                            bin_color = "light_green"
-                        elif ratio <= mult.get("yellow", 1.5):
-                            bin_color = "yellow"
-                        elif ratio <= mult.get("orange", 2.0):
-                            bin_color = "orange"
+                            sum_z = 0.0
+                            
+                        if abs(sum_z) < 5.0: continue # Ignore empty frames
+                        
+                        # Map to cell
+                        # We need plate dimensions
+                        # Use self._live_session helpers if available, or re-implement
+                        # Re-implement to be safe/independent
+                        
+                        # Plate dims
+                        if self.state.selected_device_type == "08":
+                            w_mm, h_mm = config.TYPE08_W_MM, config.TYPE08_H_MM
+                        elif self.state.selected_device_type == "07":
+                            w_mm, h_mm = config.TYPE07_W_MM, config.TYPE07_H_MM
+                        elif self.state.selected_device_type == "06":
+                            w_mm, h_mm = config.TYPE06_W_MM, config.TYPE06_H_MM
+                        elif self.state.selected_device_type == "11":
+                            w_mm, h_mm = config.TYPE11_W_MM, config.TYPE11_H_MM
                         else:
-                            bin_color = "red"
-                        points.append((x_mm, y_mm, bin_color))
-                        raw_points.append({"x_mm": x_mm, "y_mm": y_mm, "ratio": ratio, "abs_pct": abs_pct, "signed_pct": signed_pct})
-                        count += 1
-                        abs_pcts.append(abs_pct)
-                        signed_pcts.append(signed_pct)
+                            w_mm, h_mm = config.TYPE06_W_MM, config.TYPE06_H_MM
+                            
+                        # Map from center-origin to top-left
+                        # x is right (+), y is down (+)?
+                        # In WorldCanvas/config, Origin Y fraction is used.
+                        # Assuming standard cartesian: x right, y up.
+                        # Config: TYPE06_W_MM is width (x). TYPE06_H_MM is height (y).
+                        # 0,0 is center.
+                        # x_idx = (x + w/2) / (w/cols)
+                        # y_idx = (h/2 - y) / (h/rows)  <-- Assuming y up is positive
+                        # Let's check row_col_from_xy implementation in this file
+                        # It's not readily available as a simple function.
+                        
+                        # Let's assume standard: x+ right, y+ up.
+                        # Columns: x from -W/2 to W/2
+                        c = int( (x_mm + w_mm/2.0) / (w_mm/cols) )
+                        # Rows: y from H/2 to -H/2 (top to bottom)
+                        r = int( (h_mm/2.0 - y_mm) / (h_mm/rows) )
+                        
+                        c = max(0, min(cols-1, c))
+                        r = max(0, min(rows-1, r))
+                        
+                        k = (r, c)
+                        if k not in cell_data:
+                            cell_data[k] = {'times': [], 'forces': []}
+                        cell_data[k]['times'].append(t_ms)
+                        cell_data[k]['forces'].append(sum_z)
+                        
                     except Exception:
                         continue
-        except Exception:
+                        
+        except Exception as e:
+            self._log(f"ingest error: {e}")
             return
-        # Store into heatmap structures
+            
+        # Analyze each cell
+        grid_results = {}
+        for k, data in cell_data.items():
+            try:
+                res = self._find_best_windows(data['times'], data['forces'], targets)
+                if res:
+                    grid_results[k] = res
+            except Exception:
+                continue
+                
+        # Store results
+        self._temp_grid_results[tag] = grid_results
+        self._log(f"ingest complete: {len(grid_results)} active cells")
+        
+        # Update processed list if needed (handled by caller)
+
+    def _apply_temp_views(self) -> None:
+        # Apply heatmaps/grids based on current selection and results
         try:
-            self._heatmaps[key] = points
-            self._heatmap_points_raw[key] = raw_points
-            # Basic metrics
-            def _median(vals: list[float]) -> float:
-                if not vals:
-                    return 0.0
-                vs = sorted(vals)
-                return vs[len(vs)//2]
-            self._heatmap_metrics[key] = {
-                "count": count,
-                "mean_pct": (sum(abs_pcts) / len(abs_pcts)) if abs_pcts else 0.0,
-                "median_pct": _median(abs_pcts),
-                "max_pct": max(abs_pcts) if abs_pcts else 0.0,
-                "signed_bias_pct": (sum(signed_pcts) / len(signed_pcts)) if signed_pcts else 0.0,
-            }
-            try:
-                m = self._heatmap_metrics[key]
-                self._log(f"ingest_csv_done: key='{key}' points={len(points)} metrics={{count:{m.get('count')}, mean:{m.get('mean_pct'):.2f}%, med:{m.get('median_pct'):.2f}%, max:{m.get('max_pct'):.2f}%, bias:{m.get('signed_bias_pct'):.2f}%}}")
-            except Exception:
-                pass
-            # Add entry to list
-            try:
-                self.controls.live_testing_panel.add_heatmap_entry(label, key, count)
-            except Exception:
-                pass
-        except Exception:
+            target_mode = self.controls.temperature_testing_panel.target_combo.currentText() # "45 lb", "Body Weight", "Both"
+            
+            # Left: Baseline (OFF)
+            # Right: Selected (ON)
+            
+            for tag, canvas in [("TEMP OFF", self.canvas_left), ("TEMP ON", self.canvas_right)]:
+                data = self._temp_grid_results.get(tag, {})
+                
+                # Reset overlay
+                canvas.overlay.clear_colors()
+                
+                # We need to determine rows/cols again to set grid
+                # Or just set it once when device selected.
+                # Safer to set it here.
+                grid_dims = GRID_BY_MODEL.get(self.state.selected_device_type, (3, 3))
+                canvas.overlay.set_grid(*grid_dims)
+                
+                for (r, c), res in data.items():
+                    # Determine value/color based on target_mode
+                    
+                    errs = []
+                    vals = []
+                    
+                    if target_mode == "45 lb" or target_mode == "Both":
+                        if "45 lb" in res:
+                            errs.append(res["45 lb"]["err"])
+                            vals.append(res["45 lb"]["val"])
+                            
+                    if target_mode == "Body Weight" or target_mode == "Both":
+                        if "Body Weight" in res:
+                            errs.append(res["Body Weight"]["err"])
+                            vals.append(res["Body Weight"]["val"])
+                            
+                    if not errs:
+                        continue
+                        
+                    # Use average abs error for color?
+                    # Or max error?
+                    # "display numbers on each cell showing percent off"
+                    
+                    avg_err = sum(errs) / len(errs)
+                    avg_abs_err = sum(abs(e) for e in errs) / len(errs)
+                    
+                    # Color logic
+                    # COLOR_BIN_MULTIPLIERS logic (from config)
+                    # thresholds are model specific
+                    # But here we use percentage error directly? 
+                    # Config uses thresholds N or Pct.
+                    # "Color grid cells based on % error from target (using existing live testing thresholds)."
+                    
+                    # existing thresholds: THRESHOLDS_BW_PCT_BY_MODEL
+                    thresh_pct = config.THRESHOLDS_BW_PCT_BY_MODEL.get(self.state.selected_device_type, 0.01)
+                    
+                    ratio = avg_abs_err / thresh_pct if thresh_pct > 0 else 0.0
+                    
+                    # Bin color
+                    mult = getattr(config, "COLOR_BIN_MULTIPLIERS", {"green": 1.0, "light_green": 1.25, "yellow": 1.5, "orange": 2.0})
+                    if ratio <= mult.get("green", 1.0):
+                        color_name = "green"
+                        qcolor = QtGui.QColor(40, 180, 40, 160)
+                    elif ratio <= mult.get("light_green", 1.25):
+                        color_name = "light_green"
+                        qcolor = QtGui.QColor(120, 220, 60, 160)
+                    elif ratio <= mult.get("yellow", 1.5):
+                        color_name = "yellow"
+                        qcolor = QtGui.QColor(220, 220, 40, 160)
+                    elif ratio <= mult.get("orange", 2.0):
+                        color_name = "orange"
+                        qcolor = QtGui.QColor(255, 140, 20, 160)
+                    else:
+                        color_name = "red"
+                        qcolor = QtGui.QColor(220, 40, 40, 160)
+                        
+                    canvas.overlay.set_cell_color(r, c, qcolor)
+                    canvas.overlay.set_cell_text(r, c, f"{avg_err*100:.1f}%")
+                    
+                canvas.update()
+                
+        except Exception as e:
+            self._log(f"apply views error: {e}")
             pass
 
     def _collect_csvs(self, directory: str) -> list[str]:
@@ -4069,14 +4348,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
             baseline_added = False
             for r in runs:
-                offp = (r or {}).get("output_off")
+                # Filter out baseline-only entries from the UI list (per request)
+                # We still need baseline paths logic internally, but user only picks "slopes"
+                # offp = (r or {}).get("output_off")
                 onp = (r or {}).get("output_on")
-                if offp and not baseline_added:
-                    entries.append({"label": "No values (Baseline)", "path": offp, "is_baseline": True})
-                    baseline_added = True
+                # if offp and not baseline_added:
+                #     entries.append({"label": "No values (Baseline)", "path": offp, "is_baseline": True})
+                #     baseline_added = True
                 if onp:
                     sx = r.get("slope_x"); sy = r.get("slope_y"); sz = r.get("slope_z")
-                    label = f"{sx:.3g},{sy:.3g},{sz:.3g}" if all(v is not None for v in (sx, sy, sz)) else "x,y,z"
+                    label = f"{sx:.3g}, {sy:.3g}, {sz:.3g}" if all(v is not None for v in (sx, sy, sz)) else "x,y,z"
                     entries.append({"label": label, "path": onp, "slope_x": sx, "slope_y": sy, "slope_z": sz, "is_baseline": False})
             # Stage list (from DB)
             try:

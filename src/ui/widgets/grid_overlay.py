@@ -13,6 +13,7 @@ class GridOverlay(QtWidgets.QWidget):
         self.cols = 3
         self.active_cell: Optional[Tuple[int, int]] = None
         self.cell_colors: dict[Tuple[int, int], QtGui.QColor] = {}
+        self.cell_texts: dict[Tuple[int, int], str] = {}
         self._plate_rect_px: Optional[QtCore.QRect] = None
         self._status_text: Optional[str] = None
         # Optional mode: draw a single central circle instead of a full grid
@@ -57,6 +58,10 @@ class GridOverlay(QtWidgets.QWidget):
         self.cell_colors[(int(row), int(col))] = color
         self.update()
 
+    def set_cell_text(self, row: int, col: int, text: str) -> None:
+        self.cell_texts[(int(row), int(col))] = str(text)
+        self.update()
+
     def clear_cell_color(self, row: int, col: int) -> None:
         try:
             key = (int(row), int(col))
@@ -68,6 +73,7 @@ class GridOverlay(QtWidgets.QWidget):
 
     def clear_colors(self) -> None:
         self.cell_colors.clear()
+        self.cell_texts.clear()
         self.update()
 
     def set_status(self, text: Optional[str]) -> None:
@@ -128,6 +134,22 @@ class GridOverlay(QtWidgets.QWidget):
                             int(cell_h),
                         )
                         p.fillRect(cell_rect, color)
+
+                    # Draw cell text if present
+                    text = self.cell_texts.get((r, c))
+                    if text:
+                        cell_rect_text = QtCore.QRect(
+                            int(rect.left() + c * cell_w),
+                            int(rect.top() + r * cell_h),
+                            int(cell_w),
+                            int(cell_h),
+                        )
+                        p.setPen(QtGui.QColor(255, 255, 255))
+                        font = p.font()
+                        font.setPointSize(10)
+                        font.setBold(True)
+                        p.setFont(font)
+                        p.drawText(cell_rect_text, QtCore.Qt.AlignCenter, text)
 
             # Draw grid lines
             p.setPen(QtGui.QPen(QtGui.QColor(180, 180, 180, 180), 1))

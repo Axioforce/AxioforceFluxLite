@@ -17,6 +17,7 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
     test_changed = QtCore.Signal(str)
     processed_selected = QtCore.Signal(object)  # dict with slopes/paths
     view_mode_changed = QtCore.Signal(str)
+    target_changed = QtCore.Signal(str)
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -109,6 +110,12 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         controls_layout.addWidget(self.view_combo, 0, 1)
         controls_layout.addWidget(QtWidgets.QLabel("Stage:"), 1, 0)
         controls_layout.addWidget(self.stage_combo, 1, 1)
+        
+        self.target_combo = QtWidgets.QComboBox()
+        self.target_combo.addItems(["45 lb", "Body Weight", "Both"])
+        controls_layout.addWidget(QtWidgets.QLabel("Target:"), 2, 0)
+        controls_layout.addWidget(self.target_combo, 2, 1)
+        
         middle_layout.addWidget(controls_widget, 0)
 
         # Right column: metrics compare
@@ -160,6 +167,7 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         self.view_combo.currentTextChanged.connect(lambda s: self.view_mode_changed.emit(str(s)))
         self.test_list.currentItemChanged.connect(self._emit_test_changed)
         self.processed_list.currentItemChanged.connect(self._emit_processed_changed)
+        self.target_combo.currentTextChanged.connect(lambda s: self.target_changed.emit(str(s)))
 
     def set_devices(self, devices: list[str]) -> None:
         self.device_combo.blockSignals(True)
