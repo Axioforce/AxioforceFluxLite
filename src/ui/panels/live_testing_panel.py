@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional
+import os
 
 from PySide6 import QtCore, QtWidgets, QtGui
 
@@ -72,6 +73,9 @@ class LiveTestingPanel(QtWidgets.QWidget):
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(10)
 
+        # Backing store for discrete tests (for filtering)
+        self._all_discrete_tests: list[tuple[str, str, str]] = []
+
         # Session Controls
         controls_box = QtWidgets.QGroupBox("Session Controls")
         controls_layout = QtWidgets.QVBoxLayout(controls_box)
@@ -91,8 +95,25 @@ class LiveTestingPanel(QtWidgets.QWidget):
 
         # Discrete temp testing test picker (list, only visible in Discrete Temp. mode)
         discrete_picker_box = QtWidgets.QVBoxLayout()
+        # Legacy label, now hidden (filters + list are self-explanatory)
         self.lbl_discrete_tests = QtWidgets.QLabel("Tests:")
-        discrete_picker_box.addWidget(self.lbl_discrete_tests)
+        self.lbl_discrete_tests.setVisible(False)
+
+        # Filters row: plate type + specific plate
+        filters_row = QtWidgets.QHBoxLayout()
+        filters_row.setContentsMargins(0, 0, 0, 0)
+        filters_row.setSpacing(6)
+        self.discrete_type_filter = QtWidgets.QComboBox()
+        self.discrete_type_filter.addItems(["All types", "06", "07", "08", "11"])
+        self.discrete_plate_filter = QtWidgets.QComboBox()
+        self.discrete_plate_filter.addItem("All plates")
+        self.discrete_type_label = QtWidgets.QLabel("Type:")
+        self.discrete_plate_label = QtWidgets.QLabel("Plate:")
+        filters_row.addWidget(self.discrete_type_label)
+        filters_row.addWidget(self.discrete_type_filter)
+        filters_row.addWidget(self.discrete_plate_label)
+        filters_row.addWidget(self.discrete_plate_filter, 1)
+        discrete_picker_box.addLayout(filters_row)
         self.discrete_test_list = QtWidgets.QListWidget()
         try:
             from PySide6 import QtWidgets as _QtW
@@ -370,6 +391,9 @@ class LiveTestingPanel(QtWidgets.QWidget):
             self.controller.view_session_ended.connect(self._on_session_ended)
             self.controller.view_stage_changed.connect(self._on_stage_changed)
             self.controller.view_grid_configured.connect(self.configure_grid)
+            # Discrete temp test lists + temps-in-test
+            self.controller.discrete_tests_listed.connect(self.set_discrete_tests)
+            self.controller.discrete_temps_updated.connect(self.set_temps_in_test)
 
         # Discrete temp testing hooks
         try:
@@ -378,6 +402,11 @@ class LiveTestingPanel(QtWidgets.QWidget):
             self.btn_discrete_new.clicked.connect(lambda: self.discrete_new_requested.emit())
             self.btn_discrete_add.clicked.connect(self._emit_discrete_add)
             self.btn_plot_test.clicked.connect(lambda: self.plot_test_requested.emit())
+            self.discrete_type_filter.currentTextChanged.connect(lambda _s: self._apply_discrete_filters())
+            self.discrete_plate_filter.currentTextChanged.connect(lambda _s: self._apply_discrete_filters())
+            # Forward selected test path to controller for analysis
+            if self.controller:
+                self.discrete_test_selected.connect(self.controller.on_discrete_test_selected)
         except Exception:
             pass
 
@@ -409,11 +438,15 @@ class LiveTestingPanel(QtWidgets.QWidget):
         except Exception:
             pass
         try:
-            # Discrete temp testing controls
-            self.lbl_discrete_tests.setVisible(is_discrete)
+            # Discrete temp testing controls (filters + list + buttons)
             self.discrete_test_list.setVisible(is_discrete)
             self.btn_discrete_new.setVisible(is_discrete)
             self.btn_discrete_add.setVisible(is_discrete)
+            self.discrete_type_filter.setVisible(is_discrete)
+            self.discrete_plate_filter.setVisible(is_discrete)
+            # Also hide labels when not in discrete mode
+            self.discrete_type_label.setVisible(is_discrete)
+            self.discrete_plate_label.setVisible(is_discrete)
         except Exception:
             pass
         # Toggle Temps-in-Test pane and Calibration Heatmap based on mode
@@ -436,6 +469,8 @@ class LiveTestingPanel(QtWidgets.QWidget):
 
     def _on_session_mode_changed(self, _text: str) -> None:
         self._update_session_controls_for_mode()
+        if self._is_discrete_temp_session() and self.controller:
+            self.controller.refresh_discrete_tests()
 
     def _on_discrete_test_changed(self, current: Optional[QtWidgets.QListWidgetItem], _previous: Optional[QtWidgets.QListWidgetItem]) -> None:
         # Enable Add button only when a valid test is selected
@@ -470,18 +505,84 @@ class LiveTestingPanel(QtWidgets.QWidget):
 
     def set_discrete_tests(self, tests: list[tuple[str, str, str]]) -> None:
         """Populate discrete test picker with (label, date, key) triples."""
+        # Cache full list for filtering
+        self._all_discrete_tests = list(tests or [])
+
+        # Refresh plate filter options based on available device ids
+        try:
+            device_ids: set[str] = set()
+            base_dir = "discrete_temp_testing"
+            for _label, _date_str, key in self._all_discrete_tests:
+                path = str(key)
+                try:
+                    rel = os.path.relpath(path, base_dir)
+                except Exception:
+                    rel = path
+                parts = rel.split(os.sep)
+                if parts and parts[0]:
+                    device_ids.add(parts[0])
+            self.discrete_plate_filter.blockSignals(True)
+            self.discrete_plate_filter.clear()
+            self.discrete_plate_filter.addItem("All plates")
+            for did in sorted(device_ids):
+                self.discrete_plate_filter.addItem(did)
+        except Exception:
+            pass
+        finally:
+            try:
+                self.discrete_plate_filter.blockSignals(False)
+            except Exception:
+                pass
+
+        # Apply filters to populate the list widget
+        self._apply_discrete_filters()
+
+    def _apply_discrete_filters(self) -> None:
+        """Re-populate discrete_test_list based on current filter selections."""
         try:
             self.discrete_test_list.blockSignals(True)
         except Exception:
             pass
         try:
             self.discrete_test_list.clear()
-            for label, date_str, key in (tests or []):
+            base_dir = "discrete_temp_testing"
+            try:
+                type_sel = str(self.discrete_type_filter.currentText() or "All types")
+            except Exception:
+                type_sel = "All types"
+            try:
+                plate_sel = str(self.discrete_plate_filter.currentText() or "All plates")
+            except Exception:
+                plate_sel = "All plates"
+
+            for label, date_str, key in self._all_discrete_tests:
+                path = str(key)
+                # Derive device id and type from path
+                try:
+                    rel = os.path.relpath(path, base_dir)
+                except Exception:
+                    rel = path
+                parts = rel.split(os.sep)
+                device_id = parts[0] if parts else ""
+                dev_type = ""
+                if device_id:
+                    if "." in device_id:
+                        dev_type = device_id.split(".", 1)[0]
+                    else:
+                        dev_type = device_id[:2]
+
+                # Apply filters
+                if type_sel != "All types" and dev_type != type_sel:
+                    continue
+                if plate_sel != "All plates" and device_id != plate_sel:
+                    continue
+
                 item = QtWidgets.QListWidgetItem()
                 try:
-                    item.setData(QtCore.Qt.UserRole, str(key))
+                    item.setData(QtCore.Qt.UserRole, path)
                     item.setData(QtCore.Qt.UserRole + 1, str(label))
                     item.setData(QtCore.Qt.UserRole + 2, str(date_str))
+                    item.setData(QtCore.Qt.UserRole + 3, device_id)
                 except Exception:
                     pass
                 self.discrete_test_list.addItem(item)

@@ -169,7 +169,11 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         
         if self.controller:
             self.controller.tests_listed.connect(self.set_tests)
+            self.controller.devices_listed.connect(self.set_devices)
             # self.controller.processing_status.connect(self._on_processing_status) # TODO: Implement status handler
+            
+            # Initial fetch
+            self.controller.refresh_devices()
 
     def set_devices(self, devices: list[str]) -> None:
         self.device_combo.blockSignals(True)

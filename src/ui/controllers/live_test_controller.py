@@ -8,11 +8,14 @@ class LiveTestController(QtCore.QObject):
     Controller for the Live Testing UI.
     """
     # Signals for View
-    view_session_started = QtCore.Signal(object) # session
+    view_session_started = QtCore.Signal(object)  # session
     view_session_ended = QtCore.Signal()
-    view_stage_changed = QtCore.Signal(int, object) # index, stage
-    view_cell_updated = QtCore.Signal(int, int, object) # row, col, result
+    view_stage_changed = QtCore.Signal(int, object)  # index, stage
+    view_cell_updated = QtCore.Signal(int, int, object)  # row, col, result
     view_grid_configured = QtCore.Signal(int, int)
+    # Discrete temp testing: available tests + analyzed temps for a selected test
+    discrete_tests_listed = QtCore.Signal(list)  # list of (label, date, csv_path)
+    discrete_temps_updated = QtCore.Signal(bool, object)  # includes_baseline, temps_f (list[float])
 
     def __init__(self, testing_service: TestingService):
         super().__init__()
@@ -56,15 +59,71 @@ class LiveTestController(QtCore.QObject):
     def prev_stage(self):
         self.service.prev_stage()
 
-    def handle_cell_click(self, row: int, col: int, current_data: dict):
-        # Logic to record result based on current data (e.g. from telemetry)
-        # This requires the controller to know the current telemetry or for it to be passed in.
-        # For now, we assume the view passes the result to be recorded, 
-        # OR the controller should be listening to telemetry to capture the snapshot.
-        
-        # In the original code, the panel grabbed the current snapshot from the bridge/state.
-        # Ideally, the controller should have access to the latest telemetry.
-        pass
+    def refresh_discrete_tests(self):
+        """Fetch available discrete temperature tests and update view."""
+        # TODO: Run in background thread if this causes stutter
+        tests = self.service.list_discrete_tests()
+        self.discrete_tests_listed.emit(tests)
+
+    @QtCore.Slot(str)
+    def on_discrete_test_selected(self, csv_path: str) -> None:
+        """
+        Handle selection changes from the Discrete Temp test picker.
+
+        Computes baseline presence + temperature list from the selected
+        discrete_temp_session CSV and pushes it to the view.
+        """
+        if not csv_path:
+            self.discrete_temps_updated.emit(False, [])
+            return
+        includes_baseline, temps_f = self.service.analyze_discrete_temp_csv(csv_path)
+        self.discrete_temps_updated.emit(bool(includes_baseline), list(temps_f or []))
+
+    def handle_cell_click(self, row: int, col: int, current_data: dict | None = None) -> None:
+        """
+        Handle a user clicking a cell in the live-testing grid.
+
+        For now we treat this as a simple "mark cell as measured" action:
+        - Use the currently active stage from the TestingService.
+        - Create a lightweight TestResult with whatever telemetry the caller
+          provides (if any).
+        - Delegate persistence/broadcast to TestingService.record_result.
+
+        This keeps the controller responsible for session state, while callers
+        remain free to evolve the shape of current_data over time.
+        """
+        # No active session -> ignore the click
+        if not self.service.current_session:
+            return
+
+        try:
+            stage_idx = int(getattr(self.service, "current_stage_index", 0))
+        except Exception:
+            stage_idx = 0
+
+        payload = current_data or {}
+        # Best-effort extraction of basic telemetry; callers are free to omit.
+        try:
+            fz_mean = payload.get("fz_mean_n")
+        except Exception:
+            fz_mean = None
+        try:
+            cop_x = payload.get("cop_x_mm")
+            cop_y = payload.get("cop_y_mm")
+        except Exception:
+            cop_x = cop_y = None
+
+        result = TestResult(
+            row=row,
+            col=col,
+            fz_mean_n=fz_mean,
+            cop_x_mm=cop_x,
+            cop_y_mm=cop_y,
+        )
+
+        # Let the service own mutation + signal emission
+        self.service.set_active_cell(row, col)
+        self.service.record_result(stage_idx, row, col, result)
 
     def _on_session_started(self, session):
         self.view_grid_configured.emit(session.grid_rows, session.grid_cols)

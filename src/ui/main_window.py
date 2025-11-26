@@ -11,6 +11,8 @@ from .widgets.world_canvas import WorldCanvas
 from .panels.control_panel import ControlPanel
 from .widgets.force_plot import ForcePlotWidget
 from .widgets.moments_view import MomentsViewWidget
+from .widgets.temp_plot_widget import TempPlotWidget
+from .widgets.temp_slopes_widget import TempSlopesWidget
 from .bridge import UiBridge # Keep for compatibility if needed by other components
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -32,6 +34,9 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Connect Signals
         self._connect_signals()
+        
+        # Start Controller (triggers autoconnect)
+        self.controller.start()
         
     def _setup_ui(self):
         self.canvas_left = WorldCanvas(self.state)
@@ -62,6 +67,9 @@ class MainWindow(QtWidgets.QMainWindow):
         moments_left = MomentsViewWidget()
         self.moments_view_left = moments_left
         self.top_tabs_left.addTab(moments_left, "Moments View")
+        # Discrete Temp: Temp-vs-Force plot tab
+        self.temp_plot_tab = TempPlotWidget()
+        self.top_tabs_left.addTab(self.temp_plot_tab, "Temp Plot")
 
         # Right Tabs
         self.top_tabs_right.addTab(self.canvas_right, "Plate View")
@@ -76,6 +84,9 @@ class MainWindow(QtWidgets.QMainWindow):
         moments_right = MomentsViewWidget()
         self.moments_view_right = moments_right
         self.top_tabs_right.addTab(moments_right, "Moments View")
+        # Discrete Temp: slope summary tab on the right
+        self.temp_slope_tab = TempSlopesWidget()
+        self.top_tabs_right.addTab(self.temp_slope_tab, "Temp Slopes")
 
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.splitter.addWidget(self.top_tabs_left)
@@ -95,6 +106,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.status_label = QtWidgets.QLabel("Disconnected")
         self.statusBar().addPermanentWidget(self.status_label)
+        
+        # Link Temp Plot -> Temp Slopes for current-plot metrics
+        try:
+            self.temp_plot_tab.set_slopes_widget(self.temp_slope_tab)
+        except Exception:
+            pass
         
         # Initial sizing
         self.splitter.setSizes([800, 800])
@@ -135,6 +152,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.controller.live_test.view_grid_configured.connect(self.canvas.show_live_grid)
         self.controller.live_test.view_session_ended.connect(self.canvas.hide_live_grid)
         self.controller.live_test.view_cell_updated.connect(self._on_live_cell_updated)
+        # User interaction: clicks on the live grid overlay
+        self.canvas.live_cell_clicked.connect(self._on_live_cell_clicked)
+        
+        # Discrete Temp: wire test selection + plot button to Temp Plot/Slopes
+        try:
+            live_panel = self.controls.live_testing_panel
+            live_panel.discrete_test_selected.connect(self.temp_plot_tab.set_test_path)
+            live_panel.plot_test_requested.connect(self.temp_plot_tab.plot_current)
+        except Exception:
+            pass
         
         # Temp Testing Signals
         # TODO: Wire up if needed (e.g. plotting)
@@ -147,6 +174,19 @@ class MainWindow(QtWidgets.QMainWindow):
         from PySide6 import QtGui
         color = QtGui.QColor(0, 255, 0, 100) # Green
         self.canvas.set_live_cell_color(row, col, color)
+
+    def _on_live_cell_clicked(self, row: int, col: int) -> None:
+        """
+        Bridge canvas cell clicks into the live-test controller.
+
+        Telemetry-aware callers can later thread additional context through
+        handle_cell_click; for now we just mark the cell as visited.
+        """
+        try:
+            self.controller.live_test.handle_cell_click(int(row), int(col), {})
+        except Exception:
+            # Never let a bad click path take down the UI loop.
+            pass
 
     def closeEvent(self, event):
         self.controller.shutdown()

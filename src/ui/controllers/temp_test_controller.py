@@ -25,6 +25,8 @@ class TempTestController(QtCore.QObject):
     """
     # Signals for View
     tests_listed = QtCore.Signal(list) # list of file paths
+    devices_listed = QtCore.Signal(list) # list of device IDs
+    processing_status = QtCore.Signal(dict) # forwarded from service
     processing_status = QtCore.Signal(dict) # forwarded from service
 
     def __init__(self, testing_service: TestingService, hardware_service: HardwareService):
@@ -41,6 +43,11 @@ class TempTestController(QtCore.QObject):
         """List available tests for the device."""
         tests = self.testing.list_temperature_tests(device_id)
         self.tests_listed.emit(tests)
+
+    def refresh_devices(self):
+        """List available devices in temp_testing folder."""
+        devices = self.testing.list_temperature_devices()
+        self.devices_listed.emit(devices)
 
     def run_processing(self, payload: dict):
         """

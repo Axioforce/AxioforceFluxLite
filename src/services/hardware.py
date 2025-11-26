@@ -7,6 +7,7 @@ from PySide6 import QtCore
 from .. import config
 from ..io_client import IoClient
 from ..domain.models import DeviceState, Device, LAUNCH_NAME, LANDING_NAME
+import requests
 
 class HardwareService(QtCore.QObject):
     """
@@ -84,6 +85,10 @@ class HardwareService(QtCore.QObject):
         self.connection_status_changed.emit("Disconnected")
 
     def _on_connect(self) -> None:
+        # Force status update in case IoClient handler didn't run yet or failed
+        if self.client:
+            self.client.status.connected = True
+            
         self.connection_status_changed.emit("Connected")
         if self.client:
             try:
@@ -96,6 +101,17 @@ class HardwareService(QtCore.QObject):
 
     def _on_disconnect(self, *args) -> None:
         self.connection_status_changed.emit("Disconnected")
+        # If we disconnected unexpectedly, try to auto-connect again after a delay
+        # But only if we aren't already trying.
+        if not self.client:
+             # If client is None, we manually disconnected. Don't auto-connect.
+             return
+             
+        # If client exists but disconnected, it might be a blip, or backend restart.
+        # IoClient will try to reconnect to SAME port.
+        # But if backend changed ports, IoClient will fail forever.
+        # So we should probably restart auto-connect logic after some time if it doesn't recover.
+        pass
 
     def _on_json(self, data: dict) -> None:
         self.data_received.emit(data)
@@ -275,4 +291,129 @@ class HardwareService(QtCore.QObject):
             pass
         
         self.device_list_updated.emit(devices)
+
+    def auto_connect(self, host: str = config.SOCKET_HOST, http_port: int = config.HTTP_PORT) -> None:
+        """
+        Attempt to automatically connect to the backend.
+        Runs in a background thread.
+        Stops once connected.
+        """
+        def _run():
+            # Fallback ports to try if discovery fails
+            fallback_ports = [3000]
+            
+            while not self._stop_flag.is_set():
+                # If already connected, we are done.
+                if self.client and self.client.status.connected:
+                    self.connection_status_changed.emit("Connected")
+                    return
+
+                self.connection_status_changed.emit("Auto-connecting...")
+                
+                # 1. Try discovery
+                port = self._discover_socket_port(host, http_port)
+                if port:
+                    self.connection_status_changed.emit(f"Found port {port}, connecting...")
+                    self.connect(host, port)
+                    # Wait for connection
+                    for _ in range(25): # 5s
+                        if self.client and self.client.status.connected:
+                            return # Success! Exit thread.
+                        time.sleep(0.2)
+                    
+                    # If we found a port via discovery but failed to connect, 
+                    # we should probably NOT try fallbacks immediately, or maybe we should?
+                    # Let's assume discovery is authoritative.
+                
+                # 2. Try fallback ports ONLY if not connected
+                if not (self.client and self.client.status.connected):
+                    for p in fallback_ports:
+                        # Check again before trying next port
+                        if self.client and self.client.status.connected:
+                            return # Success!
+                        
+                        self.connection_status_changed.emit(f"Trying port {p}...")
+                        try:
+                            self.connect(host, p)
+                            # Wait for connection
+                            for _ in range(25): # 5s
+                                if self.client and self.client.status.connected:
+                                    return # Success!
+                                time.sleep(0.2)
+                        except Exception:
+                            pass
+                
+                if self.client and self.client.status.connected:
+                    return
+                    
+                self.connection_status_changed.emit("Retrying in 5s...")
+                
+                # Disconnect to clean up before next attempt (stops the previous IoClient thread)
+                self.disconnect()
+                time.sleep(5)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _discover_socket_port(self, host: str, http_port: int, timeout_s: float = 0.7) -> Optional[int]:
+        """Attempt to discover the socket.io port by querying the backend HTTP config."""
+        try:
+            base = host.strip()
+            if not base.startswith("http://") and not base.startswith("https://"):
+                base = f"http://{base}"
+            if base.endswith('/'):
+                base = base[:-1]
+
+            candidates = [
+                "config",
+                "dynamo/config",
+                "api/config",
+                "flux/config",
+                "v1/config",
+                "backend/config",
+            ]
+
+            def _find_socket_port(obj: Any) -> Optional[int]:
+                try:
+                    if isinstance(obj, dict):
+                        for k, v in obj.items():
+                            key = str(k).lower()
+                            if "socketport" in key or ("socket" in key and "port" in key):
+                                try:
+                                    port_val = int(v)
+                                    if 1000 <= port_val <= 65535:
+                                        return port_val
+                                except Exception:
+                                    pass
+                            found = _find_socket_port(v)
+                            if found is not None:
+                                return found
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            found = _find_socket_port(item)
+                            if found is not None:
+                                return found
+                except Exception:
+                    pass
+                return None
+
+            headers = {"Accept": "application/json"}
+            for path in candidates:
+                try:
+                    url = f"{base}:{http_port}/{path}"
+                    resp = requests.get(url, headers=headers, timeout=timeout_s)
+                    if resp.status_code != 200:
+                        continue
+                    data = None
+                    try:
+                        data = resp.json()
+                    except Exception:
+                        continue
+                    port = _find_socket_port(data)
+                    if port is not None:
+                        return port
+                except Exception:
+                    continue
+        except Exception:
+            return None
+        return None
 

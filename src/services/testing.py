@@ -33,6 +33,11 @@ class TestingService(QtCore.QObject):
     def active_cell(self) -> Optional[Tuple[int, int]]:
         return self._active_cell
 
+    @property
+    def current_stage_index(self) -> int:
+        """Return the index of the currently active stage in the session."""
+        return int(self._current_stage_index)
+
     def start_session(self, tester_name: str, device_id: str, model_id: str, body_weight_n: float, thresholds: TestThresholds, is_temp_test: bool = False, is_discrete_temp: bool = False) -> TestSession:
         rows, cols = GRID_BY_MODEL.get(model_id, (3, 3))
         
@@ -175,3 +180,146 @@ class TestingService(QtCore.QObject):
             pass
             
         return sorted(files)
+
+    def list_temperature_devices(self) -> List[str]:
+        """List available devices (subdirectories) in temp_testing folder."""
+        base_dir = "temp_testing"
+        if not os.path.isdir(base_dir):
+            return []
+            
+        devices = []
+        try:
+            for d in os.listdir(base_dir):
+                if os.path.isdir(os.path.join(base_dir, d)):
+                    devices.append(d)
+        except Exception:
+            pass
+        return sorted(devices)
+
+    def list_discrete_tests(self) -> List[Tuple[str, str, str]]:
+        """
+        List available discrete temperature tests from the on-disk folder.
+
+        Folder layout is expected to look like:
+            discrete_temp_testing/
+                <device_id>/
+                    <date>/
+                        <tester>/
+                            discrete_temp_session.csv
+
+        We walk the tree so older nested layouts continue to work, and we
+        return a friendly (label, date_str, key/path) triple for each CSV.
+        """
+        base_dir = "discrete_temp_testing"
+        if not os.path.isdir(base_dir):
+            return []
+
+        tests: List[Tuple[str, str, str, float]] = []
+        try:
+            for root, _dirs, files in os.walk(base_dir):
+                for fname in files:
+                    if not fname.lower().endswith(".csv"):
+                        continue
+                    path = os.path.join(root, fname)
+                    try:
+                        rel = os.path.relpath(path, base_dir)
+                    except Exception:
+                        rel = fname
+                    parts = rel.split(os.sep)
+                    device_id = parts[0] if len(parts) > 0 else ""
+                    date_part = parts[1] if len(parts) > 1 else ""
+                    tester = parts[2] if len(parts) > 2 else ""
+
+                    # Build a concise label like "mike • 06.0000000c" (no filename).
+                    label_bits = [p for p in (tester, device_id) if p]
+                    label = " • ".join(label_bits) if label_bits else (device_id or tester or fname)
+
+                    # Prefer the folder date (e.g. 11-20-2025), fallback to mtime.
+                    date_str = ""
+                    if date_part:
+                        # 11-20-2025 -> 11.20.2025 for display
+                        date_str = date_part.replace("-", ".")
+                    try:
+                        mtime = os.path.getmtime(path)
+                    except Exception:
+                        mtime = 0.0
+                    if not date_str:
+                        try:
+                            dt = datetime.datetime.fromtimestamp(mtime)
+                            date_str = dt.strftime("%m.%d.%Y")
+                        except Exception:
+                            date_str = ""
+
+                    tests.append((label, date_str, path, float(mtime)))
+        except Exception:
+            pass
+
+        # Sort newest-first by modification time
+        tests.sort(key=lambda x: x[3], reverse=True)
+        return [(label, date_str, path) for (label, date_str, path, _mtime) in tests]
+
+    # --- Discrete temperature test analysis ---------------------------------
+
+    def analyze_discrete_temp_csv(self, csv_path: str) -> Tuple[bool, List[float]]:
+        """
+        Analyze a discrete_temp_session.csv-style file and return:
+          - includes_baseline: whether any session temp is within the 74–78°F window
+          - temps_f: list of non-baseline session temps (°F), sorted high → low
+
+        This mirrors the legacy _on_discrete_test_selected behavior from the
+        pre-refactor MainWindow, but is UI-agnostic so controllers/views can
+        consume it cleanly.
+        """
+        includes_baseline = False
+        temps_f: List[float] = []
+
+        if not csv_path or not os.path.isfile(csv_path):
+            return includes_baseline, temps_f
+
+        try:
+            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f, skipinitialspace=True)
+                sessions: Dict[str, List[float]] = {}
+                for row in reader:
+                    if not row:
+                        continue
+                    # Normalize keys defensively
+                    clean_row = { (k.strip() if k else k): v for k, v in row.items() if k }
+                    key = str(clean_row.get("time") or "").strip()
+                    if not key:
+                        continue
+                    try:
+                        temp_val = float(clean_row.get("sum-t") or 0.0)
+                    except Exception:
+                        continue
+                    sessions.setdefault(key, []).append(temp_val)
+
+            if not sessions:
+                return includes_baseline, temps_f
+
+            # Average per-session temperature
+            session_temps: List[float] = []
+            for vals in sessions.values():
+                if not vals:
+                    continue
+                avg = sum(vals) / float(len(vals))
+                session_temps.append(avg)
+
+            if not session_temps:
+                return includes_baseline, temps_f
+
+            baseline_low = 74.0
+            baseline_high = 78.0
+            non_baseline: List[float] = []
+            for t in session_temps:
+                if baseline_low <= t <= baseline_high:
+                    includes_baseline = True
+                else:
+                    non_baseline.append(t)
+
+            temps_f = sorted(non_baseline, reverse=True)
+        except Exception:
+            includes_baseline = False
+            temps_f = []
+
+        return includes_baseline, temps_f

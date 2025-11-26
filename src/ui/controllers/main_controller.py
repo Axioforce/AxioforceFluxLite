@@ -26,7 +26,7 @@ class MainController(QtCore.QObject):
     def start(self):
         """Initialize services and start background tasks."""
         # Connect hardware signals to any global handlers if needed
-        pass
+        self.hardware.auto_connect()
 
     def shutdown(self):
         """Cleanup and shutdown services."""
