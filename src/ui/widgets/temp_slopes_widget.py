@@ -240,3 +240,4 @@ class TempSlopesWidget(QtWidgets.QWidget):
             pass
 
 
+
