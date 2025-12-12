@@ -1312,6 +1312,7 @@ class TestingService(QtCore.QObject):
                         if current["stage_key"] != stage_key:
                             should_close = True
                         elif current["cell"] != cell:
+                            # IMPORTANT: This is where we detect if we've moved to a new cell
                             should_close = True
                         else:
                             # Check COP stability

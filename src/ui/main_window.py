@@ -276,6 +276,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 baseline_windows=data.get("baseline_windows"),
                 baseline_segments=data.get("baseline_segments"),
                 selected_windows=data.get("selected_windows"),
+                selected_segments=data.get("selected_segments"),
             )
         except Exception as e:
             print(f"[MainWindow] Plot error: {e}")

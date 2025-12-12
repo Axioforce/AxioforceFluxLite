@@ -9,7 +9,8 @@ def plot_stage_comparison(
     body_weight_n: float,
     baseline_windows: dict = None,
     baseline_segments: list = None,
-    selected_windows: dict = None
+    selected_windows: dict = None,
+    selected_segments: list = None
 ):
     """
     Plots baseline vs selected CSVs with window visualization.
@@ -21,6 +22,7 @@ def plot_stage_comparison(
         baseline_windows: Dict of best windows {stage_key: {cell: {t_start, t_end, ...}}}
         baseline_segments: List of candidate segments [{t_start, t_end, ...}]
         selected_windows: Dict of best windows for selected run
+        selected_segments: List of candidate segments for selected run
     """
     
     # Load data
@@ -82,6 +84,12 @@ def plot_stage_comparison(
         ax2.set_xlabel("Time (ms)")
         ax2.grid(True, alpha=0.3)
         
+        if selected_segments:
+            for seg in selected_segments:
+                t_start = seg.get("t_start", 0) - t0
+                t_end = seg.get("t_end", 0) - t0
+                ax2.axvspan(t_start, t_end, color='gray', alpha=0.2, ymin=0, ymax=1)
+
         if selected_windows:
              _plot_windows(ax2, selected_windows, t0, sel_counts)
 

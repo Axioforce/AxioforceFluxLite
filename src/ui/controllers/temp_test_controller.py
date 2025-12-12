@@ -370,6 +370,7 @@ class TempTestController(QtCore.QObject):
         baseline_windows = {}
         baseline_segments = []
         selected_windows = {}
+        selected_segments = []
         
         if self._last_analysis_payload:
             base_data = self._last_analysis_payload.get("baseline") or {}
@@ -377,6 +378,7 @@ class TempTestController(QtCore.QObject):
             baseline_windows = base_data.get("_windows") or {}
             baseline_segments = base_data.get("_segments") or []
             selected_windows = sel_data.get("_windows") or {}
+            selected_segments = sel_data.get("_segments") or []
         
         # Emit signal to run plot on main thread
         self.plot_ready.emit({
@@ -386,4 +388,5 @@ class TempTestController(QtCore.QObject):
             "baseline_windows": baseline_windows,
             "baseline_segments": baseline_segments,
             "selected_windows": selected_windows,
+            "selected_segments": selected_segments,
         })
