@@ -653,10 +653,50 @@ class WorldCanvas(QtWidgets.QWidget):
         self._grid_overlay.set_active_cell(rr, cc)
         self._grid_overlay.set_active_cell(rr, cc)
 
+    def _map_cell_for_device(self, row: int, col: int) -> Tuple[int, int]:
+        try:
+            rows = int(self._grid_overlay.rows)
+            cols = int(self._grid_overlay.cols)
+        except Exception:
+            return int(row), int(col)
+        if rows <= 0 or cols <= 0:
+            return int(row), int(col)
+        dev_type = (self.state.selected_device_type or "").strip()
+        if dev_type in ("06", "08"):
+            r = rows - 1 - int(col)
+            c = cols - 1 - int(row)
+            return r, c
+        return int(row), int(col)
+
+    def _map_cell_for_rotation(self, row: int, col: int) -> Tuple[int, int]:
+        try:
+            rows = int(self._grid_overlay.rows)
+            cols = int(self._grid_overlay.cols)
+        except Exception:
+            return int(row), int(col)
+        if rows <= 0 or cols <= 0:
+            return int(row), int(col)
+        k = int(self._rotation_quadrants) % 4
+        r = int(row)
+        c = int(col)
+        if k == 0:
+            return r, c
+        if k == 1:
+            return c, (cols - 1 - r)
+        if k == 2:
+            return (rows - 1 - r), (cols - 1 - c)
+        # k == 3
+        return (rows - 1 - c), r
+
     def set_live_cell_color(self, row: int, col: int, color: QtGui.QColor) -> None:
         dr, dc = self._map_cell_for_device(int(row), int(col))
         rr, cc = self._map_cell_for_rotation(dr, dc)
         self._grid_overlay.set_cell_color(rr, cc, color)
+
+    def set_live_cell_text(self, row: int, col: int, text: str) -> None:
+        dr, dc = self._map_cell_for_device(int(row), int(col))
+        rr, cc = self._map_cell_for_rotation(dr, dc)
+        self._grid_overlay.set_cell_text(rr, cc, text)
 
     def clear_live_cell_color(self, row: int, col: int) -> None:
         dr, dc = self._map_cell_for_device(int(row), int(col))

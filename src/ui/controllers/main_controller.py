@@ -16,7 +16,7 @@ class MainController(QtCore.QObject):
     def __init__(self):
         super().__init__()
         self.hardware = HardwareService()
-        self.testing = TestingService()
+        self.testing = TestingService(self.hardware)
         self.data_sync = DataSyncService()
         self.models = ModelService(self.hardware)
         

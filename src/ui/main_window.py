@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Callable, Dict, Optional, Tuple, List
+from typing import Dict, Optional
 import os
 
 from PySide6 import QtCore, QtWidgets, QtGui
@@ -164,29 +164,121 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
         
         # Temp Testing Signals
-        # TODO: Wire up if needed (e.g. plotting)
+        self._temp_analysis_payload: Optional[Dict] = None
+        try:
+            temp_panel = self.controls.temperature_testing_panel
+            temp_ctrl = self.controller.temp_test
+            # Wire analysis results
+            temp_ctrl.analysis_ready.connect(self._on_temp_analysis_ready)
+            temp_ctrl.grid_display_ready.connect(self._on_temp_grid_display_ready)
+            # Re-render when stage changes
+            temp_panel.stage_changed.connect(self._on_temp_stage_changed)
+            # Plot button - goes through controller, then back to main thread for matplotlib
+            temp_panel.plot_stages_requested.connect(temp_ctrl.plot_stage_detection)
+            temp_ctrl.plot_ready.connect(self._on_temp_plot_ready)
+        except Exception:
+            pass
         
     def _on_live_cell_updated(self, row, col, result):
-        # Determine color based on result (this logic was in MainWindow/Panel)
-        # For now, just set a default color or use result info
-        # We need a helper to map result to color
-        # Let's assume result has a 'passed' flag or similar, or we just color it blue
-        from PySide6 import QtGui
-        color = QtGui.QColor(0, 255, 0, 100) # Green
+        # Determine color based on result
+        color = QtGui.QColor(0, 255, 0, 100)  # Green default
         self.canvas.set_live_cell_color(row, col, color)
 
     def _on_live_cell_clicked(self, row: int, col: int) -> None:
-        """
-        Bridge canvas cell clicks into the live-test controller.
-
-        Telemetry-aware callers can later thread additional context through
-        handle_cell_click; for now we just mark the cell as visited.
-        """
+        """Bridge canvas cell clicks into the live-test controller."""
         try:
             self.controller.live_test.handle_cell_click(int(row), int(col), {})
         except Exception:
-            # Never let a bad click path take down the UI loop.
             pass
+
+    # --- Temperature Testing Grid Display ---
+
+    def _on_temp_analysis_ready(self, payload: dict) -> None:
+        """Handle temperature analysis results."""
+        self._temp_analysis_payload = payload
+        # Update metrics panel
+        try:
+            self.controls.temperature_testing_panel.set_analysis_metrics(payload)
+        except Exception:
+            pass
+        # Request grid display preparation from controller
+        self._request_temp_grid_update()
+
+    def _on_temp_stage_changed(self, stage: str) -> None:
+        """Re-render grids when stage filter changes."""
+        if self._temp_analysis_payload:
+            try:
+                self.controls.temperature_testing_panel.set_analysis_metrics(self._temp_analysis_payload)
+            except Exception:
+                pass
+            self._request_temp_grid_update()
+
+    def _request_temp_grid_update(self) -> None:
+        """Ask controller to prepare grid display data."""
+        if not self._temp_analysis_payload:
+            return
+        try:
+            stage_key = self.controls.temperature_testing_panel.current_stage()
+        except Exception:
+            stage_key = "All"
+        self.controller.temp_test.prepare_grid_display(self._temp_analysis_payload, stage_key)
+
+    def _on_temp_grid_display_ready(self, display_data: dict) -> None:
+        """Apply prepared grid display data to canvases."""
+        grid_info = display_data.get("grid_info", {})
+        rows = int(grid_info.get("rows", 3))
+        cols = int(grid_info.get("cols", 3))
+        device_type = str(grid_info.get("device_type", "06"))
+        device_id = str(display_data.get("device_id") or "")
+        
+        # Configure state for canvas rendering
+        self.state.display_mode = "single"
+        self.state.selected_device_type = device_type
+        self.state.selected_device_id = device_id
+        
+        # Setup and clear canvases
+        self.canvas_left.repaint()
+        self.canvas_right.repaint()
+        self.canvas_left.show_live_grid(rows, cols)
+        self.canvas_right.show_live_grid(rows, cols)
+        self.canvas_left.clear_live_colors()
+        self.canvas_right.clear_live_colors()
+        self.canvas_left.repaint()
+        self.canvas_right.repaint()
+        
+        # Apply cells to canvases
+        self._apply_cells_to_canvas(self.canvas_left, display_data.get("baseline_cells", []))
+        self._apply_cells_to_canvas(self.canvas_right, display_data.get("selected_cells", []))
+
+    def _apply_cells_to_canvas(self, canvas: WorldCanvas, cells: list) -> None:
+        """Apply pre-computed cell display data to a canvas."""
+        for cell in cells:
+            row = int(cell.get("row", 0))
+            col = int(cell.get("col", 0))
+            color_bin = str(cell.get("color_bin", "green"))
+            text = str(cell.get("text", ""))
+            
+            # Get color from bin name
+            rgba = config.COLOR_BIN_RGBA.get(color_bin, (0, 200, 0, 180))
+            color = QtGui.QColor(*rgba)
+            
+            canvas.set_live_cell_color(row, col, color)
+            canvas.set_live_cell_text(row, col, text)
+
+    def _on_temp_plot_ready(self, data: dict) -> None:
+        """Launch matplotlib plot on main thread."""
+        try:
+            from .widgets.temp_stage_plotter import plot_stage_comparison
+            plot_stage_comparison(
+                data.get("baseline_path", ""),
+                data.get("selected_path", ""),
+                data.get("body_weight_n", 800.0),
+                baseline_windows=data.get("baseline_windows"),
+                baseline_segments=data.get("baseline_segments"),
+                selected_windows=data.get("selected_windows"),
+            )
+        except Exception as e:
+            print(f"[MainWindow] Plot error: {e}")
 
     def closeEvent(self, event):
         self.controller.shutdown()

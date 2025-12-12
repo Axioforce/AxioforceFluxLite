@@ -115,6 +115,50 @@ COLOR_BIN_MULTIPLIERS = {
     "orange": 2.5,
 }
 
+# RGB colors for each bin (with alpha)
+COLOR_BIN_RGBA = {
+    "green": (0, 200, 0, 180),
+    "light_green": (144, 238, 144, 180),
+    "yellow": (255, 255, 0, 180),
+    "orange": (255, 165, 0, 180),
+    "red": (255, 0, 0, 180),
+}
+
+
+def get_color_bin(error_ratio: float) -> str:
+    """Map error ratio to color bin name."""
+    if error_ratio <= COLOR_BIN_MULTIPLIERS["green"]:
+        return "green"
+    elif error_ratio <= COLOR_BIN_MULTIPLIERS["light_green"]:
+        return "light_green"
+    elif error_ratio <= COLOR_BIN_MULTIPLIERS["yellow"]:
+        return "yellow"
+    elif error_ratio <= COLOR_BIN_MULTIPLIERS["orange"]:
+        return "orange"
+    return "red"
+
+
+def get_passing_threshold(stage_key: str, device_type: str, body_weight_n: float) -> float:
+    """Get the passing threshold in Newtons for a stage and device type."""
+    if stage_key == "db":
+        return float(THRESHOLDS_DB_N_BY_MODEL.get(device_type, 6.0))
+    elif stage_key == "bw":
+        pct = float(THRESHOLDS_BW_PCT_BY_MODEL.get(device_type, 0.015))
+        return body_weight_n * pct if body_weight_n > 0 else 10.0
+    return 10.0  # Fallback
+
+# Temperature analysis constants (tunable)
+TEMP_DB_TARGET_N: float = 45.0 * 4.44822  # 45 lb dumbbell in Newtons
+TEMP_DB_TOL_N: float = 100.0
+TEMP_BW_TOL_N: float = 200.0
+TEMP_STAGE_MIN_DURATION_MS: int = 2000
+TEMP_ANALYSIS_WINDOW_MS: int = 1000
+TEMP_ANALYSIS_WINDOW_TOL_MS: int = 200
+TEMP_MIN_FORCE_N: float = 100.0
+TEMP_SLOPE_SMOOTHING_WINDOW: int = 5
+TEMP_WARMUP_SKIP_MS: int = 20000  # Skip first 20 seconds of data
+TEMP_COP_MAX_DISPLACEMENT_MM: float = 50.0  # Max distance COP can move within a valid segment
+
 
 # Live Testing grid dimensions (rows, cols) per model id
 # 06: 3x3, 07: 3x5, 08: 5x5, 11: 3x5 (identical to 07)

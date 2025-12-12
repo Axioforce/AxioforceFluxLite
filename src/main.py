@@ -14,14 +14,8 @@ from . import config
 def run_qt() -> int:
     from PySide6 import QtWidgets  # type: ignore
     from .ui.main_window import MainWindow
-    from . import meta_store
 
     app = QtWidgets.QApplication(sys.argv)
-    # Ensure local metadata store exists
-    try:
-        meta_store.init_db()
-    except Exception:
-        pass
     
     win = MainWindow()
     win.showMaximized()
