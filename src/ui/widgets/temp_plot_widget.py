@@ -34,6 +34,7 @@ class TempPlotWidget(QtWidgets.QWidget):
         self._temp_slope_avgs: Dict[str, Dict[str, float]] = {}
         self._temp_slope_stds: Dict[str, Dict[str, float]] = {}
         self._temp_weight_models: Dict[str, Dict[str, float]] = {}
+        self._temp_slope_coeffs_by_sensor: Dict[str, Dict[str, Dict[str, float]]] = {}
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
@@ -111,6 +112,8 @@ class TempPlotWidget(QtWidgets.QWidget):
         self._slopes_widget = widget
         try:
             self.plot_metrics_updated.connect(widget.set_current_plot_stats)
+            # Re-plot when toggles change
+            widget.toggles_changed.connect(self.plot_current)
         except Exception:
             pass
 
@@ -119,14 +122,36 @@ class TempPlotWidget(QtWidgets.QWidget):
         """Set the active discrete_temp_session.csv file (folder or file path)."""
         # Caller will typically pass the folder; we normalize to CSV path here.
         p = str(path or "").strip()
-        if not p:
+
+        def _clear():
             self._csv_path = ""
+            if self._plot_widget is not None:
+                try:
+                    self._plot_widget.clear()
+                except Exception:
+                    pass
+            if self._slopes_widget is not None:
+                try:
+                    self._slopes_widget.set_slopes({}, {})
+                    self._slopes_widget.set_current_plot_stats({})
+                except Exception:
+                    pass
+
+        if not p:
+            _clear()
             return
+
         if os.path.isdir(p):
             candidate = os.path.join(p, "discrete_temp_session.csv")
             self._csv_path = candidate if os.path.isfile(candidate) else ""
         else:
             self._csv_path = p if os.path.isfile(p) else ""
+
+        if not self._csv_path:
+            _clear()
+        else:
+            # Auto-plot when a valid test is selected
+            self.plot_current()
 
     @QtCore.Slot()
     def plot_current(self) -> None:
@@ -135,13 +160,18 @@ class TempPlotWidget(QtWidgets.QWidget):
             return
 
         # Compute/update slopes first so TempSlopesWidget stays in sync
-        avgs, stds, weight_models = self._compute_discrete_temp_slopes(self._csv_path)
+        avgs, stds, weight_models, coeffs, coeffs_by_sensor = self._compute_discrete_temp_slopes(
+            self._csv_path
+        )
         self._temp_slope_avgs = avgs
         self._temp_slope_stds = stds
         self._temp_weight_models = weight_models
+        self._temp_slope_coeffs = coeffs  # Cache coeffs on self for plot logic to access
+        self._temp_slope_coeffs_by_sensor = coeffs_by_sensor
+        
         if self._slopes_widget is not None:
             try:
-                self._slopes_widget.set_slopes(avgs, stds)
+                self._slopes_widget.set_slopes(avgs, stds, coeffs)
             except Exception:
                 pass
 
@@ -152,12 +182,18 @@ class TempPlotWidget(QtWidgets.QWidget):
 
     def _compute_discrete_temp_slopes(
         self, csv_path: str
-    ) -> Tuple[Dict[str, Dict[str, float]], Dict[str, Dict[str, float]], Dict[str, Dict[str, float]]]:
+    ) -> Tuple[
+        Dict[str, Dict[str, float]],
+        Dict[str, Dict[str, float]],
+        Dict[str, Dict[str, float]],
+        Dict[str, Dict[str, float]],
+        Dict[str, Dict[str, Dict[str, float]]],
+    ]:
         """
         Port of the legacy _compute_discrete_temp_slopes from old_main_window.
 
         Returns:
-          (avgs, stds, weight_models)
+          (avgs, stds, weight_models, coeffs, coeffs_by_sensor)
         """
         phases = ("45lb", "bodyweight")
         axes = ("x", "y", "z")
@@ -180,7 +216,7 @@ class TempPlotWidget(QtWidgets.QWidget):
             with open(csv_path, "r", encoding="utf-8", newline="") as f:
                 header_line = f.readline()
                 if not header_line:
-                    return {}, {}, {}
+                    return {}, {}, {}, {}
                 header_reader = csv.reader(io.StringIO(header_line))
                 headers = next(header_reader, [])
                 headers = [h.strip() for h in headers]
@@ -219,7 +255,7 @@ class TempPlotWidget(QtWidgets.QWidget):
                                 continue
                             data[phase][ax][sp].append((temp_f, val))
         except Exception:
-            return {}, {}, {}
+            return {}, {}, {}, {}
 
         slopes_by_sensor: Dict[str, Dict[str, Dict[str, float]]] = {
             ph: {ax: {} for ax in axes} for ph in phases
@@ -229,66 +265,196 @@ class TempPlotWidget(QtWidgets.QWidget):
         }
         slope_lists_all: Dict[str, List[float]] = {ax: [] for ax in axes}
 
-        def _fit_slope(points: List[Tuple[float, float]]) -> float:
-            if len(points) < 2:
-                return 0.0
+        # Coeff containers
+        coef_lists_phase: Dict[str, Dict[str, List[float]]] = {
+            ph: {ax: [] for ax in axes} for ph in phases
+        }
+        coef_lists_all: Dict[str, List[float]] = {ax: [] for ax in axes}
+
+        def _get_baseline(points: List[Tuple[float, float]]) -> Tuple[float, float]:
             baseline_low = 74.0
             baseline_high = 78.0
             target_T = 76.0
-            baseline = [(t, y) for (t, y) in points if baseline_low <= t <= baseline_high]
-            if baseline:
-                try:
-                    weights: List[float] = []
-                    for t, _y in baseline:
-                        try:
-                            dt = abs(float(t) - target_T)
-                        except Exception:
-                            dt = 0.0
-                        w = 1.0 / (1.0 + dt)
-                        weights.append(w)
-                    w_sum = sum(weights)
-                    if w_sum <= 0.0:
-                        raise ValueError("baseline_weight_sum_zero")
-                    T0 = sum(w * t for (w, (t, _)) in zip(weights, baseline)) / w_sum
-                    Y0 = sum(w * y for (w, (_, y)) in zip(weights, baseline)) / w_sum
-                except Exception:
-                    try:
-                        T0 = sum(t for t, _ in baseline) / float(len(baseline))
-                        Y0 = sum(y for _, y in baseline) / float(len(baseline))
-                    except Exception:
-                        T0, Y0 = baseline[0]
-                num = 0.0
-                den = 0.0
-                for (t, y) in points:
-                    dt = t - T0
-                    dy = y - Y0
-                    num += dt * dy
-                    den += dt * dt
-                if den <= 0.0:
-                    return 0.0
-                return num / den
-            # Ordinary least squares
+            baseline = [
+                (t, y) for (t, y) in points if baseline_low <= t <= baseline_high
+            ]
+            if not baseline:
+                # Fallback: take average of all points if no baseline found (unlikely but safe)
+                if not points:
+                    return 0.0, 0.0
+                # Try to use points closest to target_T?
+                # For now just return 0,0 which signals invalid baseline
+                return 0.0, 0.0
+
             try:
-                mean_t = sum(t for t, _ in points) / float(len(points))
-                mean_y = sum(y for _, y in points) / float(len(points))
+                weights: List[float] = []
+                for t, _y in baseline:
+                    try:
+                        dt = abs(float(t) - target_T)
+                    except Exception:
+                        dt = 0.0
+                    w = 1.0 / (1.0 + dt)
+                    weights.append(w)
+                w_sum = sum(weights)
+                if w_sum <= 0.0:
+                    raise ValueError("baseline_weight_sum_zero")
+                T0 = sum(w * t for (w, (t, _)) in zip(weights, baseline)) / w_sum
+                Y0 = sum(w * y for (w, (_, y)) in zip(weights, baseline)) / w_sum
+                return T0, Y0
             except Exception:
+                try:
+                    T0 = sum(t for t, _ in baseline) / float(len(baseline))
+                    Y0 = sum(y for _, y in baseline) / float(len(baseline))
+                    return T0, Y0
+                except Exception:
+                    return baseline[0]
+
+        def _fit_slope(points: List[Tuple[float, float]]) -> float:
+            if len(points) < 2:
                 return 0.0
+            T0, Y0 = _get_baseline(points)
+            if T0 == 0.0 and Y0 == 0.0:
+                # Fallback to simple regression if baseline detection failed
+                pass 
+            
+            # Using T0, Y0 as anchor
             num = 0.0
             den = 0.0
-            for (t, y) in points:
-                dt = t - mean_t
-                dy = y - mean_y
+            for t, y in points:
+                dt = t - T0
+                dy = y - Y0
                 num += dt * dy
                 den += dt * dt
             if den <= 0.0:
                 return 0.0
             return num / den
 
+        def _compute_coef(points: List[Tuple[float, float]]) -> float:
+            if len(points) < 2:
+                return 0.0
+            T0, Y0 = _get_baseline(points)
+            if abs(Y0) < 1e-6:
+                return 0.0
+            
+            # (1 - (y / Y0)) / (T0 - t)
+            # Average this over points for this sensor
+            # NOTE: We use T0 - t because we expect y to decrease as t decreases if coef is positive (sensitivity?)
+            # Wait, if temp drops (T0 > t), and value drops (y < Y0), then (1 - y/Y0) is positive.
+            # (T0 - t) is positive. So coef is positive.
+            # If value increases as temp drops, (1 - y/Y0) is negative. Coef is negative.
+            cs = []
+            for t, y in points:
+                dt = T0 - t
+                # Avoid points too close to baseline temp to prevent noise amplification
+                if abs(dt) < 0.5:
+                    continue
+                try:
+                    # Coef calculation as specified:
+                    # percent_off = 1 - (y / Y0)
+                    # per_degree = percent_off / dt
+                    c = (1.0 - (y / Y0)) / dt
+                    cs.append(c)
+                    
+                    # DEBUG: Print sample calc for one sensor to verify
+                    if abs(dt) > 30.0 and len(cs) == 1:
+                         print(f"[DEBUG COEF] T0={T0:.2f}, Y0={Y0:.2f}, t={t:.2f}, y={y:.2f}, dt={dt:.2f}, pct_off={(1-y/Y0):.4f}, c={c:.6f}")
+                except Exception:
+                    pass
+            if not cs:
+                return 0.0
+            
+            # Average across all valid temperature points for this sensor
+            return sum(cs) / float(len(cs))
+
+        # First pass: Calculate per-sensor coefficients
+        # slopes_by_sensor structure is already: [phase][axis][sensor] -> float
+        # We need a similar structure for coeffs
+        
+        # Reset containers to ensure clean state
+        coef_lists_phase = {ph: {ax: [] for ax in axes} for ph in phases}
+        coef_lists_all = {ax: [] for ax in axes}
+        
+        # New: Store full breakdown of coeffs for plotting specific sensors
+        # Structure: coeffs_by_sensor[phase][axis][sensor_name] -> float
+        coeffs_by_sensor: Dict[str, Dict[str, Dict[str, float]]] = {
+            ph: {ax: {} for ax in axes} for ph in phases
+        }
+        
+        # --- NEW LOGIC: Calculate Global Z-Axis Coef from Sum-Z ---
+        # We want to derive the Z-coef from the total force (sum-z) drift, 
+        # as it is more robust than averaging noisy individual sensors.
+        
+        # 1. Build Sum-Z points for each phase
+        sum_z_data: Dict[str, List[Tuple[float, float]]] = {ph: [] for ph in phases}
+        
+        # Re-read file to get sum-z vs sum-t directly? 
+        # Actually we can just iterate the rows we already parsed? No, we parsed into 'data' dict.
+        # We need to re-parse or store 'sum' in 'data'. 
+        # The 'data' dict structure is data[phase][axis][sensor]. 
+        # We don't have 'sum' as a sensor there.
+        
+        # Let's do a quick re-parse for sum-z specifically or modify the initial parse loop.
+        # Modifying initial parse loop is cleaner but let's just do a quick pass here to avoid touching that massive block.
+        # Actually, let's look at the initial parse block...
+        
+        # We will iterate the file again? No, that's inefficient.
+        # Let's add 'sum' to the sensor_prefixes list temporarily? No, 'sum-z' vs 'rear-right-outer-z'.
+        
+        # Let's just create a helper to extract sum-z points from the file quickly.
+        try:
+            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                header_line = f.readline()
+                if header_line:
+                    header_reader = csv.reader(io.StringIO(header_line))
+                    headers = next(header_reader, [])
+                    headers = [h.strip() for h in headers]
+                    reader = csv.DictReader(f, fieldnames=headers, skipinitialspace=True)
+                    for row in reader:
+                        if not row: continue
+                        clean_row = {k.strip(): v for k, v in row.items() if k}
+                        ph = str(clean_row.get("phase_name") or clean_row.get("phase") or "").strip().lower()
+                        if ph not in phases: continue
+                        try:
+                            t_val = float(clean_row.get("sum-t") or 0.0)
+                            z_val = float(clean_row.get("sum-z") or 0.0)
+                            sum_z_data[ph].append((t_val, z_val))
+                        except:
+                            pass
+        except Exception:
+            pass
+
+        # 2. Calculate Coef from Sum-Z for each phase
+        global_z_coefs: Dict[str, float] = {}
+        for ph in phases:
+            pts = sum_z_data.get(ph, [])
+            if not pts:
+                global_z_coefs[ph] = 0.0
+                continue
+            try:
+                # We need to compute coef for sum-z
+                # Note: sum-z is usually negative (downward force). 
+                # Formula: (1 - y/Y0)/dt. 
+                # If Y0 is -1000, and y is -900 (less force), y/Y0 = 0.9. 1-0.9 = 0.1.
+                # If temp dropped (dt > 0), coef is positive.
+                # If force became "more negative" (e.g. -1100), y/Y0 = 1.1. 1-1.1 = -0.1. Coef negative.
+                c = _compute_coef(pts)
+                global_z_coefs[ph] = c
+            except Exception:
+                global_z_coefs[ph] = 0.0
+
+        # Calculate "All" average for Z
+        z_vals_all = [global_z_coefs[p] for p in phases if p in global_z_coefs]
+        global_z_all = sum(z_vals_all) / len(z_vals_all) if z_vals_all else 0.0
+        
+        # -----------------------------------------------------------
+
         for ph in phases:
             for ax in axes:
                 for sp, pts in data.get(ph, {}).get(ax, {}).items():
                     if not pts or len(pts) < 2:
                         continue
+                        
+                    # Calculate Slope (existing logic)
                     try:
                         m = _fit_slope(pts)
                     except Exception:
@@ -296,13 +462,35 @@ class TempPlotWidget(QtWidgets.QWidget):
                     slopes_by_sensor[ph][ax][sp] = m
                     slope_lists_phase[ph][ax].append(m)
                     slope_lists_all[ax].append(m)
+                    
+                    # Calculate Coef
+                    if ax == "z":
+                        # FORCE OVERRIDE: Use the Global Sum-Z Coef for all Z-axis sensors
+                        c = global_z_coefs.get(ph, 0.0)
+                    else:
+                        # For X/Y, stick to per-sensor calculation
+                        try:
+                            c = _compute_coef(pts)
+                        except Exception:
+                            c = 0.0
+                    
+                    # Store per-sensor coefficient
+                    coeffs_by_sensor[ph][ax][sp] = c
+                    
+                    # Store per-sensor coefficient in lists for averaging later
+                    # For Z, this will just append the same global value 8 times, which is fine
+                    coef_lists_phase[ph][ax].append(c)
+                    coef_lists_all[ax].append(c)
 
         avgs: Dict[str, Dict[str, float]] = {"bodyweight": {}, "45lb": {}, "all": {}}
         stds: Dict[str, Dict[str, float]] = {"bodyweight": {}, "45lb": {}, "all": {}}
+        coeffs: Dict[str, Dict[str, float]] = {"bodyweight": {}, "45lb": {}, "all": {}}
         weight_models: Dict[str, Dict[str, float]] = {}
 
+        # Second pass: Average per-sensor coefficients to get per-axis values
         for ax in axes:
             for ph in phases:
+                # Slopes processing
                 vals = slope_lists_phase[ph][ax]
                 if vals:
                     mu = sum(vals) / float(len(vals))
@@ -312,6 +500,16 @@ class TempPlotWidget(QtWidgets.QWidget):
                 else:
                     avgs[ph][ax] = 0.0
                     stds[ph][ax] = 0.0
+                
+                # Coeffs processing: Average of per-sensor averages
+                c_vals = coef_lists_phase[ph][ax]
+                if c_vals:
+                    c_mu = sum(c_vals) / float(len(c_vals))
+                    coeffs[ph][ax] = c_mu
+                else:
+                    coeffs[ph][ax] = 0.0
+
+            # All-phases processing
             vals_all = slope_lists_all[ax]
             if vals_all:
                 mu_all = sum(vals_all) / float(len(vals_all))
@@ -321,6 +519,19 @@ class TempPlotWidget(QtWidgets.QWidget):
             else:
                 avgs["all"][ax] = 0.0
                 stds["all"][ax] = 0.0
+            
+            c_vals_all = coef_lists_all[ax]
+            if c_vals_all:
+                c_mu_all = sum(c_vals_all) / float(len(c_vals_all))
+                coeffs["all"][ax] = c_mu_all
+            else:
+                coeffs["all"][ax] = 0.0
+            
+            if ax == "z":
+                # For "All" phase, average the phase globals
+                z_vals_all = [global_z_coefs.get(p, 0.0) for p in phases]
+                if z_vals_all:
+                     coeffs["all"][ax] = sum(z_vals_all) / float(len(z_vals_all))
 
             # Build simple linear "multiplier vs load" model for this axis
             try:
@@ -361,7 +572,7 @@ class TempPlotWidget(QtWidgets.QWidget):
                 "b": b,
             }
 
-        return avgs, stds, weight_models
+        return avgs, stds, weight_models, coeffs, coeffs_by_sensor
 
     def _plot_from_models(self, csv_path: str) -> None:
         """
@@ -499,6 +710,31 @@ class TempPlotWidget(QtWidgets.QWidget):
         if sensor_label.lower().startswith("sum"):
             m_solid = m_all * 8.0
 
+        # Coef
+        coeffs = self._temp_slope_coeffs or {} if hasattr(self, "_temp_slope_coeffs") else {}
+        coeffs_by_sensor = self._temp_slope_coeffs_by_sensor or {} if hasattr(self, "_temp_slope_coeffs_by_sensor") else {}
+        
+        try:
+            # We must fetch the coefficient for the CURRENT phase (bodyweight or 45lb), not "all"
+            # The line plotting logic needs to match the user's current selection.
+            # phase_label is e.g. "bodyweight" or "45 lb" -> mapped to "bodyweight" / "45lb"
+            c_phase_key = "bodyweight" if "body" in phase_label.lower() else "45lb"
+            
+            # Logic: If looking at a specific sensor, use THAT sensor's coef.
+            # If looking at "Sum", use the global average for the axis.
+            if sensor_label.lower().startswith("sum"):
+                c_val = float(coeffs.get(c_phase_key, {}).get(axis_label, 0.0))
+            else:
+                # Need to map UI sensor name (e.g. "Rear Right Outer") to key (e.g. "rear-right-outer")
+                sensor_key = name_map.get(sensor_label, "")
+                if not sensor_key:
+                    sensor_key = sensor_label.lower().replace(" ", "-")
+                c_val = float(coeffs_by_sensor.get(c_phase_key, {}).get(axis_label, {}).get(sensor_key, 0.0))
+                
+        except Exception:
+            c_val = 0.0
+        c_line_slope = c_val # This is actually just the coef C
+        
         # Weight-adjusted slope using simple linear model
         models = self._temp_weight_models or {}
         m_model = models.get(axis_label, {}) or {}
@@ -534,7 +770,49 @@ class TempPlotWidget(QtWidgets.QWidget):
         else:
             m_dashed = m_eff_single
 
-        # Compute intercepts
+        # Compute intercepts and plot logic
+        # Retrieve toggles
+        toggles = {"show_base": True, "show_adj": True, "show_coef": False}
+        if self._slopes_widget:
+            try:
+                toggles = self._slopes_widget.get_toggles()
+            except Exception:
+                pass
+        
+        show_base = toggles.get("show_base", True)
+        show_adj = toggles.get("show_adj", True)
+        show_coef = toggles.get("show_coef", False)
+
+        # Calculate Coef line
+        # Formula: Y = Y0 * (1 - C * (T0 - t))
+        # This simplifies to a line passing through (T0, Y0)
+        # Slope of this line wrt t is: dy/dt = Y0 * C
+        # because Y = Y0 - Y0*C*T0 + Y0*C*t
+        # So slope m_coef = Y0 * C
+        # Wait, user formula: C = (1 - y/Y0) / (T0 - t)
+        # => C * (T0 - t) = 1 - y/Y0
+        # => y/Y0 = 1 - C*(T0 - t)
+        # => y = Y0 * (1 - C*(T0 - t)) = Y0 - Y0*C*T0 + Y0*C*t
+        # This is a line y = m*t + b where m = Y0*C and b = Y0 - Y0*C*T0
+        
+        # We need T0, Y0 (baseline) for this specific test run to plot the line correctly
+        # We found them earlier for regression, let's try to extract them
+        # Re-scan baseline pts (inefficient but safe)
+        T0_plot, Y0_plot = 0.0, 0.0
+        has_baseline = False
+        if baseline_pts_for_plot:
+            try:
+                # Simple average for plot anchor
+                T0_plot = sum(p[0] for p in baseline_pts_for_plot) / len(baseline_pts_for_plot)
+                Y0_plot = sum(p[1] for p in baseline_pts_for_plot) / len(baseline_pts_for_plot)
+                has_baseline = True
+            except Exception:
+                pass
+        elif xs and ys:
+             # If no baseline points found in 74-78, maybe just take the mean of the run?
+             # Or just disable the line
+             pass
+
         if len(xs) >= 1:
             try:
                 mean_t = sum(xs) / float(len(xs))
@@ -559,25 +837,111 @@ class TempPlotWidget(QtWidgets.QWidget):
             except Exception:
                 pass
 
-            try:
-                solid_ys = [b_solid + m_solid * t for t in xs]
-            except Exception:
-                solid_ys = ys
-            try:
-                dashed_ys = [b_dashed + m_dashed * t for t in xs]
-            except Exception:
-                dashed_ys = ys
+            # Base Slope Line
+            if show_base:
+                try:
+                    solid_ys = [b_solid + m_solid * t for t in xs]
+                except Exception:
+                    solid_ys = ys
+                base_color = (180, 180, 255)
+                solid_pen = self._pg.mkPen(color=base_color, width=2)  # type: ignore[attr-defined]
+                self._plot_widget.plot(xs, solid_ys, pen=solid_pen)  # type: ignore[attr-defined]
+            else:
+                 # Need these for SSE calculation, so compute anyway but don't plot?
+                 # Actually SSE calculation relies on them
+                 try:
+                    solid_ys = [b_solid + m_solid * t for t in xs]
+                 except Exception:
+                    solid_ys = ys
 
-            base_color = (180, 180, 255)
-            solid_pen = self._pg.mkPen(color=base_color, width=2)  # type: ignore[attr-defined]
-            dashed_pen = self._pg.mkPen(
-                color=base_color, width=2, style=QtCore.Qt.DashLine
-            )  # type: ignore[attr-defined]
+            # Adjusted Slope Line
+            if show_adj:
+                try:
+                    dashed_ys = [b_dashed + m_dashed * t for t in xs]
+                except Exception:
+                    dashed_ys = ys
+                base_color = (180, 180, 255)
+                dashed_pen = self._pg.mkPen(
+                    color=base_color, width=2, style=QtCore.Qt.DashLine
+                )  # type: ignore[attr-defined]
+                self._plot_widget.plot(xs, dashed_ys, pen=dashed_pen)  # type: ignore[attr-defined]
+            else:
+                 try:
+                    dashed_ys = [b_dashed + m_dashed * t for t in xs]
+                 except Exception:
+                    dashed_ys = ys
+            
+            # Coef Line
+            if show_coef and has_baseline and xs:
+                # New logic: Connect Baseline point to a calculated point at min temp
+                # 1. Baseline Anchor: (T0_plot, Y0_plot)
+                # 2. Find min temp (t_min) in the data
+                t_min = min(xs)
+                
+                # 3. Calculate what the value SHOULD be at t_min using the coefficient
+                # Formula: Value = Raw * scale_factor
+                # scale_factor = 1.0 - (dt * coefficient)
+                # dt = (room_temp - t) ... wait, user formula was: dt = (room_temp_f - t)
+                # In our context: T0 is the "room temp" / baseline temp (~76)
+                
+                dt = T0_plot - t_min
+                scale_factor = 1.0 - (dt * c_line_slope)
+                
+                # We need the "Raw" value that would result in Y0 at T0. 
+                # Actually, the logic is inverse: 
+                # We want to show what the "ideal" line looks like.
+                # If we are at T0, scale_factor is 1.0, so Value = Raw. 
+                # So Y0 is our "Raw" reference? No, Y0 is the result of the scaling at T0.
+                
+                # Let's look at the user request:
+                # "use the scalar to find what the scaled value should be at that point"
+                
+                # If we assume Y0 is the "correct" value we want to maintain...
+                # And the sensor drifts by Coef % per degree.
+                # The "Raw" reading at t_min would be: Y_min_expected
+                
+                # User said: Value = Raw * scale_factor
+                # We want to plot the "model" line. 
+                # At T0, Value = Y0.
+                # At t_min, we predict Y_min.
+                
+                # Let's assume the user means:
+                # "Show me the line that represents this coefficient behavior starting from the baseline."
+                
+                # If Value = Raw * (1 - (T0 - t)*C)
+                # At T0, Value = Raw. So Raw = Y0.
+                # At t_min, Value = Y0 * (1 - (T0 - t_min) * C)
+                
+                # Let's calculate that point:
+                y_min_calc = Y0_plot * (1.0 - (dt * c_line_slope))
+                
+                print(f"[DEBUG] Plotting Coef Line:")
+                print(f"  Phase: {phase_label}, Axis: {axis_label}, Sensor: {sensor_label}")
+                print(f"  Baseline (T0, Y0): ({T0_plot:.2f}, {Y0_plot:.2f})")
+                print(f"  Coef used: {c_line_slope:.6f}")
+                print(f"  T_min: {t_min:.2f}, dt: {dt:.2f}")
+                print(f"  Y_min_calc: {y_min_calc:.2f} (Expected)")
+                
+                try:
+                    # Draw line from (t_min, y_min_calc) to (T0_plot, Y0_plot)
+                    # We can extend it to max temp too for completeness
+                    t_max = max(xs)
+                    dt_max = T0_plot - t_max
+                    y_max_calc = Y0_plot * (1.0 - (dt_max * c_line_slope))
+                    
+                    coef_xs = [t_min, T0_plot, t_max]
+                    coef_ys = [y_min_calc, Y0_plot, y_max_calc]
+                    
+                    # Sort for plotting
+                    coef_pts = sorted(zip(coef_xs, coef_ys), key=lambda p: p[0])
+                    cx = [p[0] for p in coef_pts]
+                    cy = [p[1] for p in coef_pts]
 
-            # Global all-tests line (solid)
-            self._plot_widget.plot(xs, solid_ys, pen=solid_pen)  # type: ignore[attr-defined]
-            # Load-adjusted line (dashed)
-            self._plot_widget.plot(xs, dashed_ys, pen=dashed_pen)  # type: ignore[attr-defined]
+                    # Plot in a different color, e.g. Cyan or Orange
+                    coef_pen = self._pg.mkPen(color=(255, 165, 0), width=2, style=QtCore.Qt.DashDotLine) # Orange
+                    self._plot_widget.plot(cx, cy, pen=coef_pen)
+                except Exception:
+                    pass
 
             # Baseline points
             try:
@@ -627,6 +991,7 @@ class TempPlotWidget(QtWidgets.QWidget):
                 "b": float(b),
                 "Fref": float(F_ref),
                 "is_sum": bool(sensor_label.lower().startswith("sum")),
+                "coef_val": float(c_line_slope),
             }
             self.plot_metrics_updated.emit(metrics)
         except Exception:

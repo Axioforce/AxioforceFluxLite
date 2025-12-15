@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import os
 import sys
+import logging
 from typing import Optional, Any
 
 import requests  # type: ignore
 
 from . import config
 
-
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%H:%M:%S'
+)
 
 
 def run_qt() -> int:

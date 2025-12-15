@@ -2,6 +2,7 @@ from __future__ import annotations
 from PySide6 import QtCore
 from ...services.testing import TestingService
 from ...domain.models import TestResult
+from ..presenters.grid_presenter import GridPresenter
 
 class LiveTestController(QtCore.QObject):
     """
@@ -11,7 +12,7 @@ class LiveTestController(QtCore.QObject):
     view_session_started = QtCore.Signal(object)  # session
     view_session_ended = QtCore.Signal()
     view_stage_changed = QtCore.Signal(int, object)  # index, stage
-    view_cell_updated = QtCore.Signal(int, int, object)  # row, col, result
+    view_cell_updated = QtCore.Signal(int, int, object)  # row, col, view_model (dict or object)
     view_grid_configured = QtCore.Signal(int, int)
     # Discrete temp testing: available tests + analyzed temps for a selected test
     discrete_tests_listed = QtCore.Signal(list)  # list of (label, date, csv_path)
@@ -20,6 +21,7 @@ class LiveTestController(QtCore.QObject):
     def __init__(self, testing_service: TestingService):
         super().__init__()
         self.service = testing_service
+        self.presenter = GridPresenter()
         
         # Forward service signals
         self.service.session_started.connect(self._on_session_started)
@@ -140,4 +142,40 @@ class LiveTestController(QtCore.QObject):
             self.view_stage_changed.emit(index, self.service.current_session.stages[index])
 
     def _on_cell_updated(self, row, col, result):
+        # Calculate color/display using Presenter
+        session = self.service.current_session
+        if session:
+            idx = self.service.current_stage_index
+            if 0 <= idx < len(session.stages):
+                stage = session.stages[idx]
+                target_n = stage.target_n
+                # Tolerance? It's not in stage directly?
+                # TestingService uses thresholds from session.thresholds for determining PASS/FAIL?
+                # Or it is in stage?
+                # TestStage in domain/testing.py has `target_n`, but no tolerance?
+                # Wait, TestStage definition I used:
+                # @dataclass class TestStage: ... target_n: float ...
+                # It doesn't have tolerance.
+                # Thresholds are in session.thresholds.
+                
+                threshold_n = 10.0 # fallback
+                if stage.name == "45 lb DB": # rough check or use location?
+                    threshold_n = session.thresholds.dumbbell_tol_n
+                elif "Body Weight" in stage.name:
+                    threshold_n = session.thresholds.bodyweight_tol_n
+                
+                vm = self.presenter.compute_live_cell(result, target_n, threshold_n)
+                
+                # Convert to simple object/dict for signal
+                payload = {
+                    "text": vm.text,
+                    "color": vm.color,
+                    "tooltip": vm.tooltip,
+                    # include raw result data if needed?
+                    "fz_mean_n": result.fz_mean_n
+                }
+                self.view_cell_updated.emit(row, col, payload)
+                return
+
+        # Fallback if no session/stage context
         self.view_cell_updated.emit(row, col, result)

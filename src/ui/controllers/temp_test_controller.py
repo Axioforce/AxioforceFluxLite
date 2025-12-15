@@ -6,10 +6,11 @@ import os
 from ... import config
 from ...services.testing import TestingService
 from ...services.hardware import HardwareService
+from ..presenters.grid_presenter import GridPresenter
 
 class ProcessingWorker(QtCore.QThread):
     """Worker thread for running temperature processing in the background."""
-    def __init__(self, service: TestingService, folder: str, device_id: str, csv_path: str, slopes: dict, room_temp_f: float):
+    def __init__(self, service: TestingService, folder: str, device_id: str, csv_path: str, slopes: dict, room_temp_f: float, mode: str = "legacy"):
         super().__init__()
         self.service = service
         self.folder = folder
@@ -17,9 +18,10 @@ class ProcessingWorker(QtCore.QThread):
         self.csv_path = csv_path
         self.slopes = slopes
         self.room_temp_f = float(room_temp_f)
+        self.mode = mode
 
     def run(self):
-        self.service.run_temperature_processing(self.folder, self.device_id, self.csv_path, self.slopes, self.room_temp_f)
+        self.service.run_temperature_processing(self.folder, self.device_id, self.csv_path, self.slopes, self.room_temp_f, self.mode)
 
 class TemperatureAnalysisWorker(QtCore.QThread):
     """Background worker for processed run analysis."""
@@ -62,7 +64,6 @@ class TempTestController(QtCore.QObject):
     analysis_ready = QtCore.Signal(dict)
     analysis_status = QtCore.Signal(dict)
     # Grid display data: dict with keys 'grid_info', 'baseline_cells', 'selected_cells'
-    # Each cell is: {'row': int, 'col': int, 'color_bin': str, 'text': str}
     grid_display_ready = QtCore.Signal(dict)
     # Plot request: dict with baseline_path, selected_path, body_weight_n
     plot_ready = QtCore.Signal(dict)
@@ -71,6 +72,8 @@ class TempTestController(QtCore.QObject):
         super().__init__()
         self.testing = testing_service
         self.hardware = hardware_service
+        self.presenter = GridPresenter()
+        
         self._current_meta: Dict[str, object] = {}
         self._current_processed_runs: List[Dict[str, object]] = []
         self._current_test_csv: Optional[str] = None
@@ -103,18 +106,12 @@ class TempTestController(QtCore.QObject):
     def run_processing(self, payload: dict):
         """
         Run temperature processing on a test file.
-        payload: {
-            'device_id': str,
-            'csv_path': str,
-            'slopes': dict,
-            'folder': str (optional, default to parent of csv_path),
-            'room_temperature_f': float (optional, default 72.0)
-        }
         """
         device_id = payload.get("device_id")
         csv_path = payload.get("csv_path")
         slopes = payload.get("slopes", {})
         room_temp_f = float(payload.get("room_temperature_f", 72.0))
+        mode = str(payload.get("mode", "legacy"))
         
         if not device_id or not csv_path:
             return
@@ -127,7 +124,7 @@ class TempTestController(QtCore.QObject):
             self.processing_status.emit({"status": "error", "message": "Processing already in progress"})
             return
 
-        self._worker = ProcessingWorker(self.testing, folder, device_id, csv_path, slopes, room_temp_f)
+        self._worker = ProcessingWorker(self.testing, folder, device_id, csv_path, slopes, room_temp_f, mode)
         # Clean up worker reference when done
         self._worker.finished.connect(lambda: setattr(self, '_worker', None))
         self._worker.start()
@@ -234,14 +231,6 @@ class TempTestController(QtCore.QObject):
         self.processing_status.emit({"status": "error", "message": message})
 
     def configure_correction(self, payload: dict):
-        """
-        Configure backend temperature correction.
-        payload: {
-            'slopes': dict,
-            'use_temperature_correction': bool,
-            'room_temperature_f': float
-        }
-        """
         self.hardware.configure_temperature_correction(
             payload.get("slopes", {}),
             payload.get("use_temperature_correction", False),
@@ -251,10 +240,7 @@ class TempTestController(QtCore.QObject):
     def prepare_grid_display(self, payload: dict, stage_key: str) -> None:
         """
         Prepare grid cell display data from analysis payload and emit grid_display_ready.
-        
-        Args:
-            payload: Analysis result from analyze_temperature_processed_runs
-            stage_key: 'All', 'db', or 'bw'
+        Uses GridPresenter for logic.
         """
         if not payload:
             return
@@ -267,75 +253,33 @@ class TempTestController(QtCore.QObject):
         baseline = payload.get("baseline", {})
         selected = payload.get("selected", {})
 
+        # Compute view models
+        baseline_vms = self.presenter.compute_analysis_cells(baseline, stage_key, device_type, body_weight_n)
+        selected_vms = self.presenter.compute_analysis_cells(selected, stage_key, device_type, body_weight_n)
+
+        # Convert to dicts for view compatibility (for now)
+        # Passing 'color' (QColor) instead of 'color_bin'
+        def _to_dict(vms):
+            return [{
+                "row": vm.row,
+                "col": vm.col,
+                "text": vm.text,
+                "color": vm.color,
+                "tooltip": vm.tooltip
+            } for vm in vms]
+
         display_data = {
             "grid_info": grid_info,
             "device_id": meta.get("device_id"),
-            "baseline_cells": self._compute_cell_display(baseline, stage_key, device_type, body_weight_n),
-            "selected_cells": self._compute_cell_display(selected, stage_key, device_type, body_weight_n),
+            "baseline_cells": _to_dict(baseline_vms),
+            "selected_cells": _to_dict(selected_vms),
         }
         
         self.grid_display_ready.emit(display_data)
 
-    def _compute_cell_display(
-        self, 
-        data: dict, 
-        stage_key: str, 
-        device_type: str, 
-        body_weight_n: float
-    ) -> List[Dict]:
-        """
-        Compute display data for cells from analysis data.
-        
-        Returns list of dicts with: row, col, color_bin, text
-        """
-        stages = data.get("stages", {})
-        cell_data: Dict[Tuple[int, int], Dict] = {}
-        
-        stage_keys = list(stages.keys()) if stage_key == "All" else [stage_key]
-        
-        for sk in stage_keys:
-            stage_info = stages.get(sk, {})
-            if not stage_info:
-                continue
-                
-            target_n = float(stage_info.get("target_n", 0.0))
-            threshold_n = config.get_passing_threshold(sk, device_type, body_weight_n)
-            
-            for cell in stage_info.get("cells", []):
-                r = int(cell.get("row", 0))
-                c = int(cell.get("col", 0))
-                signed_pct = float(cell.get("signed_pct", 0.0))
-                mean_n = float(cell.get("mean_n", 0.0))
-                
-                # Compute error ratio
-                error_n = abs(mean_n - target_n)
-                error_ratio = error_n / threshold_n if threshold_n > 0 else 0.0
-                
-                key = (r, c)
-                if key not in cell_data:
-                    cell_data[key] = {"signed_pcts": [], "error_ratios": []}
-                cell_data[key]["signed_pcts"].append(signed_pct)
-                cell_data[key]["error_ratios"].append(error_ratio)
-        
-        # Build result list
-        result: List[Dict] = []
-        for (r, c), info in cell_data.items():
-            avg_pct = sum(info["signed_pcts"]) / len(info["signed_pcts"])
-            avg_ratio = sum(info["error_ratios"]) / len(info["error_ratios"])
-            
-            result.append({
-                "row": r,
-                "col": c,
-                "color_bin": config.get_color_bin(avg_ratio),
-                "text": f"{avg_pct:+.1f}%",
-            })
-        
-        return result
-
     def plot_stage_detection(self) -> None:
         """
-        Emit signal to launch matplotlib visualization showing stage detection windows
-        for both baseline and selected processed runs.
+        Emit signal to launch matplotlib visualization showing stage detection windows.
         """
         if not self._current_meta:
             self.processing_status.emit({"status": "error", "message": "No test loaded"})
@@ -362,11 +306,10 @@ class TempTestController(QtCore.QObject):
             return
         
         if not selected_path:
-            selected_path = baseline_path  # Fall back to just showing baseline
+            selected_path = baseline_path
         
         body_weight_n = float(self._current_meta.get("body_weight_n") or 800.0)
         
-        # Retrieve cached window/segment info from last analysis if available
         baseline_windows = {}
         baseline_segments = []
         selected_windows = {}
@@ -380,7 +323,6 @@ class TempTestController(QtCore.QObject):
             selected_windows = sel_data.get("_windows") or {}
             selected_segments = sel_data.get("_segments") or []
         
-        # Emit signal to run plot on main thread
         self.plot_ready.emit({
             "baseline_path": baseline_path,
             "selected_path": selected_path,

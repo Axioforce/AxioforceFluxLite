@@ -15,11 +15,16 @@ from .widgets.temp_plot_widget import TempPlotWidget
 from .widgets.temp_slopes_widget import TempSlopesWidget
 from .bridge import UiBridge # Keep for compatibility if needed by other components
 
+from .pane_switcher import PaneSwitcher
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("AxioforceFluxLite (Refactored)")
-
+        
+        # Pane Switching Helper
+        self.pane_switcher = PaneSwitcher()
+        
         # Initialize Controller
         self.controller = MainController()
         
@@ -70,9 +75,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # Discrete Temp: Temp-vs-Force plot tab
         self.temp_plot_tab = TempPlotWidget()
         self.top_tabs_left.addTab(self.temp_plot_tab, "Temp Plot")
+        self.pane_switcher.register_tab(self.top_tabs_left, self.temp_plot_tab, "temp_plot")
 
         # Right Tabs
         self.top_tabs_right.addTab(self.canvas_right, "Plate View")
+        self.pane_switcher.register_tab(self.top_tabs_right, self.canvas_right, "plate_view_right")
         
         sensor_right = QtWidgets.QWidget()
         srl = QtWidgets.QVBoxLayout(sensor_right)
@@ -87,6 +94,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Discrete Temp: slope summary tab on the right
         self.temp_slope_tab = TempSlopesWidget()
         self.top_tabs_right.addTab(self.temp_slope_tab, "Temp Slopes")
+        self.pane_switcher.register_tab(self.top_tabs_right, self.temp_slope_tab, "temp_slopes")
 
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.splitter.addWidget(self.top_tabs_left)
@@ -159,6 +167,7 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             live_panel = self.controls.live_testing_panel
             live_panel.discrete_test_selected.connect(self.temp_plot_tab.set_test_path)
+            live_panel.discrete_test_selected.connect(self._on_discrete_test_selected) # Switch tabs on selection
             live_panel.plot_test_requested.connect(self.temp_plot_tab.plot_current)
         except Exception:
             pass
@@ -180,14 +189,36 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
         
     def _on_live_cell_updated(self, row, col, result):
-        # Determine color based on result
-        color = QtGui.QColor(0, 255, 0, 100)  # Green default
+        # Result might be a payload dict from controller with pre-calculated color
+        color = None
+        text = None
+        if isinstance(result, dict):
+             color = result.get("color")
+             text = result.get("text")
+        
+        if not isinstance(color, QtGui.QColor):
+             color = QtGui.QColor(0, 255, 0, 100)  # Green default fallback
+
         self.canvas.set_live_cell_color(row, col, color)
+        # If text is provided (e.g. force value), set it? 
+        # The canvas might expect text setting separately or doesn't support it in this method?
+        # WorldCanvas has set_live_cell_text
+        if text:
+            self.canvas.set_live_cell_text(row, col, text)
 
     def _on_live_cell_clicked(self, row: int, col: int) -> None:
         """Bridge canvas cell clicks into the live-test controller."""
         try:
             self.controller.live_test.handle_cell_click(int(row), int(col), {})
+        except Exception:
+            pass
+
+    def _on_discrete_test_selected(self, path: str) -> None:
+        """Switch to Temp Plot and Temp Slopes tabs when a discrete test is selected."""
+        if not path:
+            return
+        try:
+            self.pane_switcher.switch_many("temp_plot", "temp_slopes")
         except Exception:
             pass
 
@@ -255,12 +286,14 @@ class MainWindow(QtWidgets.QMainWindow):
         for cell in cells:
             row = int(cell.get("row", 0))
             col = int(cell.get("col", 0))
-            color_bin = str(cell.get("color_bin", "green"))
             text = str(cell.get("text", ""))
             
-            # Get color from bin name
-            rgba = config.COLOR_BIN_RGBA.get(color_bin, (0, 200, 0, 180))
-            color = QtGui.QColor(*rgba)
+            color = cell.get("color")
+            if not isinstance(color, QtGui.QColor):
+                color_bin = str(cell.get("color_bin", "green"))
+                # Get color from bin name
+                rgba = config.COLOR_BIN_RGBA.get(color_bin, (0, 200, 0, 180))
+                color = QtGui.QColor(*rgba)
             
             canvas.set_live_cell_color(row, col, color)
             canvas.set_live_cell_text(row, col, text)

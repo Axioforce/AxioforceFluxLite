@@ -430,16 +430,29 @@ class ControlPanel(QtWidgets.QWidget):
         # Pass live test controller if available
         live_ctrl = getattr(self.controller, "live_test", None) if self.controller else None
         self.live_testing_panel = LiveTestingPanel(self.state, live_ctrl)
-        self._live_tab_index = tabs.addTab(self.live_testing_panel, "Live Testing")
+        
+        live_scroll = QtWidgets.QScrollArea()
+        live_scroll.setWidget(self.live_testing_panel)
+        live_scroll.setWidgetResizable(True)
+        live_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        
+        self._live_tab_index = tabs.addTab(live_scroll, "Live Testing")
+        
         # Temperature Testing tab (to the right of Live Testing)
         temp_ctrl = getattr(self.controller, "temp_test", None) if self.controller else None
         self.temperature_testing_panel = TemperatureTestingPanel(temp_ctrl)
-        self._temp_tab_index = tabs.addTab(self.temperature_testing_panel, "Temperature Testing")
+        
+        temp_scroll = QtWidgets.QScrollArea()
+        temp_scroll.setWidget(self.temperature_testing_panel)
+        temp_scroll.setWidgetResizable(True)
+        temp_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        
+        self._temp_tab_index = tabs.addTab(temp_scroll, "Temperature Testing")
+        
         # Ensure tabs consume available vertical space (MainWindow controls overall 3:2 split)
         try:
             tabs.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-            self.live_testing_panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-            self.temperature_testing_panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+            # Size policies for panels are now handled by scroll areas' widgetResizable=True
         except Exception:
             pass
 

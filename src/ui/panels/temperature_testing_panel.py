@@ -66,6 +66,14 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
 
         # Slopes
         slopes_row = 2
+        
+        # Processing Mode
+        self.mode_combo = QtWidgets.QComboBox()
+        self.mode_combo.addItems(["Legacy", "Scalar"])
+        settings_layout.addWidget(QtWidgets.QLabel("Mode:"), slopes_row, 0)
+        settings_layout.addWidget(self.mode_combo, slopes_row, 1)
+        slopes_row += 1
+
         self.spin_x = QtWidgets.QDoubleSpinBox()
         self.spin_y = QtWidgets.QDoubleSpinBox()
         self.spin_z = QtWidgets.QDoubleSpinBox()
@@ -74,11 +82,17 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             sp.setDecimals(3)
             sp.setSingleStep(0.1)
             sp.setValue(3.0)
-        settings_layout.addWidget(QtWidgets.QLabel("Slope X:"), slopes_row + 0, 0)
+        
+        self.lbl_slope_x = QtWidgets.QLabel("Slope X:")
+        settings_layout.addWidget(self.lbl_slope_x, slopes_row + 0, 0)
         settings_layout.addWidget(self.spin_x, slopes_row + 0, 1)
-        settings_layout.addWidget(QtWidgets.QLabel("Slope Y:"), slopes_row + 1, 0)
+        
+        self.lbl_slope_y = QtWidgets.QLabel("Slope Y:")
+        settings_layout.addWidget(self.lbl_slope_y, slopes_row + 1, 0)
         settings_layout.addWidget(self.spin_y, slopes_row + 1, 1)
-        settings_layout.addWidget(QtWidgets.QLabel("Slope Z:"), slopes_row + 2, 0)
+        
+        self.lbl_slope_z = QtWidgets.QLabel("Slope Z:")
+        settings_layout.addWidget(self.lbl_slope_z, slopes_row + 2, 0)
         settings_layout.addWidget(self.spin_z, slopes_row + 2, 1)
 
         # Run button
@@ -160,6 +174,7 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             pass
 
         self.device_combo.currentTextChanged.connect(self._on_device_changed)
+        self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
         self.btn_refresh.clicked.connect(self._on_refresh_clicked)
         self.btn_run.clicked.connect(self._on_run_clicked)
         self.test_list.currentItemChanged.connect(self._emit_test_changed)
@@ -259,6 +274,15 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             if e.get("is_baseline"):
                 continue
             label = e.get("label") or e.get("path") or ""
+            mode = str(e.get("mode") or "").capitalize()
+            if mode and mode != "Legacy":
+                label = f"{label} [{mode}]"
+            elif not mode:
+                # Fallback check if slopes look like scalar? 
+                # Or just assume Legacy if missing, as per requirement "If no such meta data exists... we can assume legacy for display"
+                # So we don't append anything for Legacy.
+                pass
+                
             it = QtWidgets.QListWidgetItem(str(label))
             it.setData(QtCore.Qt.UserRole, dict(e))
             self.processed_list.addItem(it)
@@ -343,8 +367,16 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
                     self.lbl_sel_cnt, self.lbl_sel_mean, self.lbl_sel_med, self.lbl_sel_max):
             lbl.setText("—")
 
+    def _on_mode_changed(self, text: str) -> None:
+        prefix = "Scalar" if text == "Scalar" else "Slope"
+        self.lbl_slope_x.setText(f"{prefix} X:")
+        self.lbl_slope_y.setText(f"{prefix} Y:")
+        self.lbl_slope_z.setText(f"{prefix} Z:")
+
     def _on_run_clicked(self) -> None:
+        mode = self.mode_combo.currentText().lower()
         payload = {
+            "mode": mode,
             "device_id": self.device_combo.currentText().strip(),
             "csv_path": self.selected_test(),
             "slopes": {"x": float(self.spin_x.value()), "y": float(self.spin_y.value()), "z": float(self.spin_z.value())},
