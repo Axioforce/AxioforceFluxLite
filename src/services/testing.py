@@ -204,6 +204,17 @@ class TestingService(QtCore.QObject):
         # Ensure scheme
         if not host.startswith("http"):
             host = f"http://{host}"
+        
+        # Clean host of existing port and trailing slash
+        host = host.rstrip("/")
+        try:
+            # simple split to remove port if present
+            # e.g. http://localhost:3000 -> http://localhost
+            head, tail = host.split("://", 1)
+            if ":" in tail:
+                host = f"{head}://{tail.split(':')[0]}"
+        except Exception:
+            pass
 
         # Using /api/device/process-csv as observed in offline_runner.py
         url = f"{host}:{port}/api/device/process-csv"
@@ -214,19 +225,27 @@ class TestingService(QtCore.QObject):
             'csvPath': os.path.abspath(input_csv_path),
             'deviceId': device_id,
             'outputDir': os.path.abspath(output_folder),
-            'useTemperatureCorrection': bool(use_temperature_correction),
-            'roomTemperatureF': float(room_temp_f),
+            'use_temperature_correction': bool(use_temperature_correction),
+            'room_temperature_f': float(room_temp_f),
             'mode': mode
         }
         
         if slopes:
-            body['slopeX'] = float(slopes.get('x', 0))
-            body['slopeY'] = float(slopes.get('y', 0))
-            body['slopeZ'] = float(slopes.get('z', 0))
+            vals = {
+                'x': float(slopes.get('x', 0)),
+                'y': float(slopes.get('y', 0)),
+                'z': float(slopes.get('z', 0))
+            }
+            if mode == "scalar":
+                body['temperature_correction_coefficients'] = vals
+            else:
+                body['temperature_correction_slopes'] = vals
 
         try:
             logger.info(f"POST {url} with body keys: {list(body.keys())}")
-            response = requests.post(url, json=body, timeout=300) 
+            # Match offline_runner.py behavior (json.dumps + specific headers) just in case
+            headers = {"Content-Type": "application/json"}
+            response = requests.post(url, data=json.dumps(body), headers=headers, timeout=300) 
             response.raise_for_status()
             
             # The backend writes the file to disk and returns the path

@@ -114,6 +114,7 @@ class TempTestController(QtCore.QObject):
         mode = str(payload.get("mode", "legacy"))
         
         if not device_id or not csv_path:
+            self.processing_status.emit({"status": "error", "message": "Please select a device and a test file."})
             return
             
         import os
