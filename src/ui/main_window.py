@@ -1528,6 +1528,35 @@ class MainWindow(QtWidgets.QMainWindow):
         baseline_low = 74.0
         baseline_high = 78.0
         target_T = 76.0
+
+        # Also load discrete individual measurements if available
+        meas_pts_for_plot: List[Tuple[float, float]] = []
+        try:
+            meas_csv_path = os.path.join(test_path, "discrete_temp_measurements.csv")
+            if os.path.isfile(meas_csv_path) and os.path.getsize(meas_csv_path) > 0:
+                with open(meas_csv_path, "r", encoding="utf-8", newline="") as mf:
+                    # Same logic as main file
+                    meas_header_line = mf.readline()
+                    if meas_header_line:
+                        import io
+                        meas_header_reader = csv.reader(io.StringIO(meas_header_line))
+                        meas_headers = next(meas_header_reader, [])
+                        meas_headers = [h.strip() for h in meas_headers]
+                        meas_reader = csv.DictReader(mf, fieldnames=meas_headers, skipinitialspace=True)
+                        for row in meas_reader:
+                            if not row: continue
+                            try:
+                                ph = str(row.get("phase_name") or row.get("phase") or "").strip().lower()
+                            except Exception: ph = ""
+                            if ph != phase_name: continue
+                            try:
+                                t_val = float(row.get("sum-t") or 0.0)
+                                v_val = float(row.get(col_name) or 0.0)
+                                meas_pts_for_plot.append((t_val, v_val))
+                            except Exception: pass
+        except Exception:
+            pass
+
         try:
             with open(csv_path, "r", encoding="utf-8", newline="") as f:
                 # Read header line manually to strip whitespace
@@ -1725,6 +1754,23 @@ class MainWindow(QtWidgets.QMainWindow):
             self._temp_plot_widget.plot(xs, solid_ys, pen=solid_pen)  # type: ignore[attr-defined]
             # Load-adjusted line (dashed)
             self._temp_plot_widget.plot(xs, dashed_ys, pen=dashed_pen)  # type: ignore[attr-defined]
+
+            # Plot individual measurements as faint small dots (more subtle than baseline pts)
+            try:
+                if meas_pts_for_plot:
+                    mx = [float(p[0]) for p in meas_pts_for_plot]
+                    my = [float(p[1]) for p in meas_pts_for_plot]
+                    self._temp_plot_widget.plot(  # type: ignore[attr-defined]
+                        mx,
+                        my,
+                        pen=None,
+                        symbol="o",
+                        symbolSize=4,
+                        symbolBrush=self._temp_plot_pg.mkBrush(150, 150, 150, 120),
+                        symbolPen=None,
+                    )
+            except Exception:
+                pass
 
             # Plot all baseline runs as semi-transparent, slightly smaller dots (no line)
             try:
@@ -2402,6 +2448,28 @@ class MainWindow(QtWidgets.QMainWindow):
                     if key in ("time", "phase", "phase_name", "phase_id", "device_id"):
                         continue
                     row.setdefault(key, 0.0)
+
+            # Save this individual measurement (non-averaged) to a separate CSV
+            try:
+                import csv
+                import os
+                if test_path:
+                    meas_csv_path = os.path.join(test_path, "discrete_temp_measurements.csv")
+                    write_header = not os.path.isfile(meas_csv_path) or os.path.getsize(meas_csv_path) == 0
+
+                    with open(meas_csv_path, "a", newline="", encoding="utf-8") as f:
+                        writer = csv.writer(f)
+                        if write_header:
+                            writer.writerow(cols)
+
+                        # Extract values in the correct column order
+                        vals = []
+                        for c in cols:
+                            vals.append(row.get(c, 0.0))
+                        writer.writerow(vals)
+            except Exception:
+                pass
+
             # Fold into per-session stats (running average over up to 3 measurements)
             stats = getattr(self, "_discrete_session_stats", None)
             if not isinstance(stats, dict):

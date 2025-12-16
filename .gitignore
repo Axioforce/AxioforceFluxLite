@@ -6,3 +6,4 @@ __pycache__/
 discrete_temp_testing/
 temp_testing/
 live_test_logs/
+.serena/
