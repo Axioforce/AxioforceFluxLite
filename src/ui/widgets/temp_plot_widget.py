@@ -336,35 +336,42 @@ class TempPlotWidget(QtWidgets.QWidget):
             if abs(Y0) < 1e-6:
                 return 0.0
             
+            # --- NEW APPROACH: Regression-based Coefficient ---
+            # Calculate slope (m) of the entire dataset and normalize by baseline (Y0).
+            # This avoids noise amplification at small dt that occurs with point-by-point averaging.
+            m = _fit_slope(points)
+            return m / Y0
+
+            # --- OLD METHOD (Commented Out) ---
             # (1 - (y / Y0)) / (T0 - t)
             # Average this over points for this sensor
             # NOTE: We use T0 - t because we expect y to decrease as t decreases if coef is positive (sensitivity?)
             # Wait, if temp drops (T0 > t), and value drops (y < Y0), then (1 - y/Y0) is positive.
             # (T0 - t) is positive. So coef is positive.
             # If value increases as temp drops, (1 - y/Y0) is negative. Coef is negative.
-            cs = []
-            for t, y in points:
-                dt = T0 - t
-                # Avoid points too close to baseline temp to prevent noise amplification
-                if abs(dt) < 0.5:
-                    continue
-                try:
-                    # Coef calculation as specified:
-                    # percent_off = 1 - (y / Y0)
-                    # per_degree = percent_off / dt
-                    c = (1.0 - (y / Y0)) / dt
-                    cs.append(c)
-                    
-                    # DEBUG: Print sample calc for one sensor to verify
-                    if abs(dt) > 30.0 and len(cs) == 1:
-                         print(f"[DEBUG COEF] T0={T0:.2f}, Y0={Y0:.2f}, t={t:.2f}, y={y:.2f}, dt={dt:.2f}, pct_off={(1-y/Y0):.4f}, c={c:.6f}")
-                except Exception:
-                    pass
-            if not cs:
-                return 0.0
-            
-            # Average across all valid temperature points for this sensor
-            return sum(cs) / float(len(cs))
+            # cs = []
+            # for t, y in points:
+            #     dt = T0 - t
+            #     # Avoid points too close to baseline temp to prevent noise amplification
+            #     if abs(dt) < 0.5:
+            #         continue
+            #     try:
+            #         # Coef calculation as specified:
+            #         # percent_off = 1 - (y / Y0)
+            #         # per_degree = percent_off / dt
+            #         c = (1.0 - (y / Y0)) / dt
+            #         cs.append(c)
+            #         
+            #         # DEBUG: Print sample calc for one sensor to verify
+            #         if abs(dt) > 30.0 and len(cs) == 1:
+            #              print(f"[DEBUG COEF] T0={T0:.2f}, Y0={Y0:.2f}, t={t:.2f}, y={y:.2f}, dt={dt:.2f}, pct_off={(1-y/Y0):.4f}, c={c:.6f}")
+            #     except Exception:
+            #         pass
+            # if not cs:
+            #     return 0.0
+            # 
+            # # Average across all valid temperature points for this sensor
+            # return sum(cs) / float(len(cs))
 
         # First pass: Calculate per-sensor coefficients
         # slopes_by_sensor structure is already: [phase][axis][sensor] -> float

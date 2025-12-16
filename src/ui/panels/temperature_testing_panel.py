@@ -8,6 +8,54 @@ from typing import Optional
 from PySide6 import QtCore, QtWidgets
 
 
+class ProcessedRunItemWidget(QtWidgets.QWidget):
+    delete_requested = QtCore.Signal(str)
+
+    def __init__(self, text: str, file_path: str, item: QtWidgets.QListWidgetItem, list_widget: QtWidgets.QListWidget, parent=None):
+        super().__init__(parent)
+        self.file_path = file_path
+        self.item = item
+        self.list_widget = list_widget
+
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(8)
+        
+        self.label = QtWidgets.QLabel(text)
+        self.label.setStyleSheet("background: transparent;")
+        layout.addWidget(self.label, 1)
+        
+        self.btn_delete = QtWidgets.QPushButton("×")
+        self.btn_delete.setFixedSize(20, 20)
+        self.btn_delete.setCursor(QtCore.Qt.PointingHandCursor)
+        self.btn_delete.setStyleSheet("""
+            QPushButton {
+                border: none;
+                color: #888;
+                font-weight: bold;
+                font-size: 16px;
+                background: transparent;
+                margin: 0px;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                color: #ff4444;
+                background: rgba(255, 0, 0, 0.1);
+                border-radius: 10px;
+            }
+        """)
+        self.btn_delete.setToolTip("Delete this processed run")
+        self.btn_delete.clicked.connect(self._on_delete)
+        layout.addWidget(self.btn_delete, 0)
+
+    def _on_delete(self):
+        self.delete_requested.emit(self.file_path)
+
+    def mousePressEvent(self, event):
+        self.list_widget.setCurrentItem(self.item)
+        super().mousePressEvent(event)
+
+
 class TemperatureTestingPanel(QtWidgets.QWidget):
     run_requested = QtCore.Signal(dict)
     device_selected = QtCore.Signal(str)
@@ -283,9 +331,18 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
                 # So we don't append anything for Legacy.
                 pass
                 
-            it = QtWidgets.QListWidgetItem(str(label))
+            path = str(e.get("path") or "")
+
+            it = QtWidgets.QListWidgetItem()
             it.setData(QtCore.Qt.UserRole, dict(e))
             self.processed_list.addItem(it)
+            
+            widget = ProcessedRunItemWidget(str(label), path, it, self.processed_list)
+            widget.delete_requested.connect(self._on_delete_processed_requested)
+            
+            it.setSizeHint(widget.sizeHint())
+            self.processed_list.setItemWidget(it, widget)
+
         if self.processed_list.count() > 0:
             last_idx = self.processed_list.count() - 1
             self.processed_list.setCurrentRow(last_idx)
@@ -372,6 +429,21 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         self.lbl_slope_x.setText(f"{prefix} X:")
         self.lbl_slope_y.setText(f"{prefix} Y:")
         self.lbl_slope_z.setText(f"{prefix} Z:")
+
+    def _on_delete_processed_requested(self, file_path: str) -> None:
+        if not file_path:
+            return
+
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Confirm Delete",
+            "Are you sure you want to delete this processed run?\nOnly this file will be deleted.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No
+        )
+        if reply == QtWidgets.QMessageBox.Yes:
+            if self.controller:
+                self.controller.delete_processed_run(file_path)
 
     def _on_run_clicked(self) -> None:
         mode = self.mode_combo.currentText().lower()

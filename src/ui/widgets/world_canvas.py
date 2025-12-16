@@ -445,27 +445,38 @@ class WorldCanvas(QtWidgets.QWidget):
     def _draw_plates(self, p: QtGui.QPainter) -> None:
         if not self.state.flags.show_plates:
             return
+        # Logic to determine which plate dimensions to use based on selected device
         if self.state.display_mode == "single":
-            if not (self.state.selected_device_id or "").strip():
-                self._draw_placeholder_plate(p)
-                return
-            dev_type = (self.state.selected_device_type or "").strip()
-            if dev_type == "06":
-                w_mm = config.TYPE06_W_MM
-                h_mm = config.TYPE06_H_MM
-            elif dev_type == "07":
-                w_mm = config.TYPE07_W_MM
-                h_mm = config.TYPE07_H_MM
-            elif dev_type == "11":
-                w_mm = config.TYPE11_W_MM
-                h_mm = config.TYPE11_H_MM
+            sel_id = (self.state.selected_device_id or "").strip()
+            sel_type = (self.state.selected_device_type or "").strip()
+            
+            # If we have a selected ID but no type, try to find it in available devices
+            if sel_id and not sel_type:
+                 for name, axf_id, dt in self._available_devices:
+                     if axf_id == sel_id:
+                         sel_type = dt
+                         break
+            
+            # Fallback if still unknown
+            if not sel_type:
+                # Default to 07/11 size if uncertain
+                w_mm, h_mm = config.TYPE07_W_MM, config.TYPE07_H_MM
+            elif sel_type == "06":
+                w_mm, h_mm = config.TYPE06_W_MM, config.TYPE06_H_MM
+            elif sel_type == "07":
+                w_mm, h_mm = config.TYPE07_W_MM, config.TYPE07_H_MM
+            elif sel_type == "11":
+                w_mm, h_mm = config.TYPE11_W_MM, config.TYPE11_H_MM
+            elif sel_type == "08":
+                w_mm, h_mm = config.TYPE08_W_MM, config.TYPE08_H_MM
             else:
-                w_mm = config.TYPE08_W_MM
-                h_mm = config.TYPE08_H_MM
+                w_mm, h_mm = config.TYPE07_W_MM, config.TYPE07_H_MM
+                
             self._draw_plate(p, (0.0, 0.0), w_mm, h_mm)
-            self._draw_plate_logo_single(p, (0.0, 0.0), w_mm, h_mm, dev_type)
-            self._draw_connection_port_single(p, (0.0, 0.0), w_mm, h_mm, dev_type)
+            self._draw_plate_logo_single(p, (0.0, 0.0), w_mm, h_mm, sel_type)
+            # self._draw_connection_port_single(p, (0.0, 0.0), w_mm, h_mm, sel_type)
             return
+
         launch_device = self.state.mound_devices.get("Launch Zone")
         if launch_device:
             w_mm, h_mm = self._get_plate_dimensions(launch_device)
@@ -600,6 +611,10 @@ class WorldCanvas(QtWidgets.QWidget):
                 self._grid_overlay.setGeometry(rect.left(), rect.top(), ov_w, ov_h)
                 # Plate rect remains at (0,0,w,h) inside the overlay's coordinate space
                 self._grid_overlay.set_plate_rect_px(QtCore.QRect(0, 0, rect.width(), rect.height()))
+            else:
+                # Hide overlay if not in single mode or no device selected
+                if self._grid_overlay.isVisible():
+                    self._grid_overlay.hide()
         except Exception:
             pass
 
@@ -708,6 +723,8 @@ class WorldCanvas(QtWidgets.QWidget):
 
     def clear_live_colors(self) -> None:
         self._grid_overlay.clear_colors()
+        self._grid_overlay.set_active_cell(None, None)
+        self._grid_overlay.set_status(None)
 
     # --- Calibration heatmap overlay ---
     def set_heatmap_points(self, points: List[Tuple[float, float, str]]) -> None:

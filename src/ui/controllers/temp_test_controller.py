@@ -87,9 +87,12 @@ class TempTestController(QtCore.QObject):
         self._cached_baseline_result: Optional[Dict[str, object]] = None
         self._last_analysis_payload: Optional[Dict[str, object]] = None
 
+        # Clear any retained state
+        self._last_analysis_payload = None
+
         # Forward service signals
         self.testing.processing_status.connect(self.processing_status.emit)
-        self.testing.processing_status.connect(self._on_processing_status)
+        # self.testing.processing_status.connect(self._on_processing_status) # Disable auto-reload for now
         
         self._worker = None # Keep reference to prevent GC
 
@@ -110,7 +113,7 @@ class TempTestController(QtCore.QObject):
         device_id = payload.get("device_id")
         csv_path = payload.get("csv_path")
         slopes = payload.get("slopes", {})
-        room_temp_f = float(payload.get("room_temperature_f", 72.0))
+        room_temp_f = float(payload.get("room_temperature_f", 76.0))
         mode = str(payload.get("mode", "legacy"))
         
         if not device_id or not csv_path:
@@ -230,6 +233,27 @@ class TempTestController(QtCore.QObject):
     def _on_analysis_error(self, message: str) -> None:
         self.analysis_status.emit({"status": "error", "message": message})
         self.processing_status.emit({"status": "error", "message": message})
+
+    def delete_processed_run(self, file_path: str) -> None:
+        """Delete a processed run file."""
+        if not file_path:
+            return
+            
+        if not os.path.exists(file_path):
+            self.processing_status.emit({"status": "error", "message": "File not found"})
+            return
+
+        try:
+            os.remove(file_path)
+            # We do NOT delete the meta file as per instructions "NOTHING ELSE"
+            
+            # Refresh details
+            if self._current_test_csv:
+                self.load_test_details(self._current_test_csv)
+                
+            self.processing_status.emit({"status": "completed", "message": "File deleted"})
+        except Exception as e:
+            self.processing_status.emit({"status": "error", "message": f"Failed to delete file: {str(e)}"})
 
     def configure_correction(self, payload: dict):
         self.hardware.configure_temperature_correction(

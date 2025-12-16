@@ -23,6 +23,11 @@ class GridOverlay(QtWidgets.QWidget):
     def set_grid(self, rows: int, cols: int) -> None:
         self.rows = max(1, int(rows))
         self.cols = max(1, int(cols))
+        # When grid config changes, consider old active cells invalid or mismatched?
+        # But we might just be resizing.
+        # However, old colored cells are likely invalid for new grid.
+        # We don't automatically clear here to allow efficient updates, 
+        # but user should clear if switching contexts.
         self.update()
 
     def set_plate_rect_px(self, rect: QtCore.QRect) -> None:
@@ -31,8 +36,11 @@ class GridOverlay(QtWidgets.QWidget):
 
     def set_center_circle_mode(self, enabled: bool) -> None:
         """Enable/disable single central circle rendering (used for discrete temp testing)."""
+        prev = self._center_circle_mode
         self._center_circle_mode = bool(enabled)
-        self.update()
+        if prev != self._center_circle_mode:
+            # Mode switch: clear potential stale state
+            self.update()
 
     def is_center_circle_mode(self) -> bool:
         """Return True when the overlay is in single-center-circle (discrete temp) mode."""

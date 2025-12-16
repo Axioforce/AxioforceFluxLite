@@ -361,7 +361,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.spin_room_temp.setRange(-100.0, 300.0)
         self.spin_room_temp.setDecimals(1)
         self.spin_room_temp.setSingleStep(0.5)
-        self.spin_room_temp.setValue(72.0)
+        self.spin_room_temp.setValue(76.0)
         temp_layout.addWidget(self.spin_room_temp, tr, 1)
         tr += 1
         self.btn_apply_temp_corr = QtWidgets.QPushButton("Apply Temperature Correction")
@@ -522,6 +522,17 @@ class ControlPanel(QtWidgets.QWidget):
             lambda text: self.backend_capture_detail_changed.emit(str(text))
         )
         self.btn_apply_temp_corr.clicked.connect(self._emit_backend_temp_corr)
+
+        # Periodic Refresh Scan when on Config tab
+        self._refresh_timer = QtCore.QTimer(self)
+        self._refresh_timer.setInterval(2000)
+        self._refresh_timer.timeout.connect(self._on_refresh_timer)
+        self._refresh_timer.start()
+
+    def _on_refresh_timer(self) -> None:
+        """Periodically refresh devices if Config tab is active."""
+        if self.tabs.currentIndex() == getattr(self, "_config_tab_index", -1):
+            self.refresh_devices_requested.emit()
 
     def _emit_backend_temp_corr(self) -> None:
         """Emit a single payload for backend temperature correction settings."""

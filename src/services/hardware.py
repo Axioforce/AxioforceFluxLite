@@ -18,8 +18,9 @@ class HardwareService(QtCore.QObject):
     connection_status_changed = QtCore.Signal(str)  # "Connected", "Disconnected", "Connecting..."
     data_received = QtCore.Signal(dict)  # Raw JSON payload
     device_list_updated = QtCore.Signal(list)  # List of available devices
+    active_devices_updated = QtCore.Signal(set)  # Set of device IDs actively streaming data
     config_status_received = QtCore.Signal(dict) # Dynamo config status
-    
+
     # Model signals
     model_metadata_received = QtCore.Signal(object)
     model_package_status_received = QtCore.Signal(object)
@@ -33,6 +34,7 @@ class HardwareService(QtCore.QObject):
         self._socket_port: Optional[int] = None
         self._stop_flag = threading.Event()
         self._groups: List[dict] = []
+        self._active_devices: set = set()
         
     def connect(self, host: str, port: int) -> None:
         self.disconnect()
@@ -115,6 +117,60 @@ class HardwareService(QtCore.QObject):
 
     def _on_json(self, data: dict) -> None:
         self.data_received.emit(data)
+        
+        # Track active devices from streaming data
+        try:
+            # We assume the payload might be a list of device frames or a dict with device data
+            # Typically structure is { deviceId: {...}, ... } or [ { deviceId: ... }, ... ]
+            # But let's look at how data comes in. Usually it's key-value or list.
+            
+            current_ids = set()
+            
+            if isinstance(data, list):
+                for item in data:
+                    did = item.get("deviceId") or item.get("id")
+                    if did:
+                        current_ids.add(str(did))
+            elif isinstance(data, dict):
+                # Check for direct keys or nested structures
+                if "deviceId" in data:
+                     current_ids.add(str(data["deviceId"]))
+                else:
+                    # Maybe keys are device IDs?
+                    # Or maybe it's "devices": [...]
+                    devs = data.get("devices")
+                    if isinstance(devs, list):
+                        for d in devs:
+                             did = d.get("deviceId") or d.get("id")
+                             if did:
+                                 current_ids.add(str(did))
+                    elif isinstance(devs, dict):
+                        for k in devs.keys():
+                            current_ids.add(str(k))
+                            
+            if current_ids:
+                # If we found IDs, update our set. 
+                # Note: This is a simplistic "live" view. 
+                # Realistically we might want to decay "active" status if no data for X seconds.
+                # But for now, we just emit what we see in this frame.
+                # Or better: accumulate and emit periodically? 
+                # User asked to "look at json.data to see which plates we are getting data from".
+                # So let's just emit the set of IDs seen in this payload.
+                # If the UI accumulates them or fades them, that's up to UI.
+                # But typically active_devices_ready expects the CURRENTLY active set.
+                
+                # Let's accumulate into self._active_devices and clear via timer?
+                # Or just emit what we see now?
+                # If we just emit what we see now, the UI might flicker if data is interleaved.
+                # Let's emit the union for now?
+                pass
+                
+                # Actually, the user's request implies we should "mark them as live".
+                # I'll emit the set of IDs found in this packet. The UI can handle persistence/fading if needed.
+                self.active_devices_updated.emit(current_ids)
+
+        except Exception:
+            pass
 
     def _wakeup_backend(self) -> None:
         # Implementation of _wakeup_backend logic from original controller

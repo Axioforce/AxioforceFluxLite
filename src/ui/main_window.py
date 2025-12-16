@@ -123,15 +123,29 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Initial sizing
         self.splitter.setSizes([800, 800])
+        
+        # Initial pane layout: Left=Plate(0), Right=Sensor(1)
+        self.top_tabs_left.setCurrentIndex(0)
+        self.top_tabs_right.setCurrentIndex(1)
+        
+        # Clear canvases AND overlays
+        self.canvas_left.clear_live_colors()
+        self.canvas_right.clear_live_colors()
+        self.canvas_left.hide_live_grid()  # Ensure overlay is hidden
+        self.canvas_right.hide_live_grid()
+        self.canvas_left.repaint()
+        self.canvas_right.repaint()
+        
+        # Auto-scan devices on startup
+        QtCore.QTimer.singleShot(1000, self.controller.hardware.fetch_discovery)
 
     def _connect_signals(self):
         # Hardware Signals
         self.controller.hardware.connection_status_changed.connect(self.status_label.setText)
         
         # Data Signals
-        # Note: We need to adapt the raw data dictionary to what WorldCanvas expects
-        # or update WorldCanvas to accept the new format.
-        # For now, we might need a small adapter in MainController or here.
+        # Handle live streaming data (Force vectors, Moments, COP)
+        self.controller.hardware.data_received.connect(self._on_live_data)
         
         # Connect Control Panel signals to Controller
         self.controls.connect_requested.connect(self.controller.hardware.connect)
@@ -139,6 +153,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.controls.start_capture_requested.connect(self.controller.hardware.start_capture)
         self.controls.stop_capture_requested.connect(self.controller.hardware.stop_capture)
         self.controls.tare_requested.connect(self.controller.hardware.tare)
+        self.controls.refresh_devices_requested.connect(self.controller.hardware.fetch_discovery)
         
         # Backend Config Signals
         self.controls.backend_model_bypass_changed.connect(self.controller.models.set_bypass)
@@ -155,6 +170,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Hardware -> UI Signals
         self.controller.hardware.device_list_updated.connect(self.controls.set_available_devices)
+        self.controller.hardware.active_devices_updated.connect(self.controls.update_active_devices)
         
         # Live Testing Signals
         self.controller.live_test.view_grid_configured.connect(self.canvas.show_live_grid)
@@ -188,6 +204,114 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         
+    def _on_live_data(self, payload: dict) -> None:
+        """Handle live streaming data from the backend."""
+        try:
+            # We care about:
+            # 1. Force vectors (fx, fy, fz) for the active device -> Sensor Plot
+            # 2. COP (x, y) + Fz for the active device -> Plate View (WorldCanvas)
+            
+            # The payload structure is typically: 
+            # { "devices": [ { "id": "...", "fx": ..., "cop": { "x": ..., "y": ... } }, ... ] }
+            # Or flattened if single device? Let's assume list of devices or dictionary of devices.
+            
+            # Extract list of device frames
+            frames = []
+            if isinstance(payload, list):
+                frames = payload
+            elif isinstance(payload, dict):
+                # Check for "sensors" list (raw data stream) vs "devices" list (processed stream)
+                if "sensors" in payload and isinstance(payload["sensors"], list):
+                    # This is likely a single-device packet with multiple sensors + Sum
+                    # Structure: { deviceId: "...", sensors: [ { name: "Sum", axfId: "...", x, y, z, vector } ] }
+                    # We need to synthesize a "frame" for this device using the Sum sensor
+                    did = str(payload.get("deviceId") or "").strip()
+                    if did:
+                        # Find Sum sensor
+                        sum_sensor = next((s for s in payload["sensors"] if s.get("name") == "Sum"), None)
+                        if sum_sensor:
+                            # Extract COP from payload root (cop: {x, y})
+                            cop_data = payload.get("cop") or {}
+                            
+                            frames.append({
+                                "id": did,
+                                "fx": float(sum_sensor.get("x", 0.0)),
+                                "fy": float(sum_sensor.get("y", 0.0)),
+                                "fz": float(sum_sensor.get("z", 0.0)),
+                                "time": payload.get("time"),
+                                "cop": {
+                                    "x": float(cop_data.get("x", 0.0)),
+                                    "y": float(cop_data.get("y", 0.0))
+                                }
+                            })
+                elif "devices" in payload and isinstance(payload["devices"], list):
+                    frames = payload["devices"]
+                elif "id" in payload or "deviceId" in payload:
+                    frames = [payload]
+            
+            # Find the "active" device selected in UI
+            selected_id = (self.state.selected_device_id or "").strip()
+            
+            # Also support mound mode mapping
+            mound_map = self.state.mound_devices if self.state.display_mode == "mound" else {}
+            
+            snapshots = {} # For mound view
+            
+            for frame in frames:
+                did = str(frame.get("id") or frame.get("deviceId") or "").strip()
+                if not did:
+                    continue
+                
+                # Parse metrics
+                # Note: keys might be "fx" or "force.x" depending on backend.
+                # Assuming standard flux structure: fx, fy, fz, moments:{x,y,z}, cop:{x,y}
+                try:
+                    fx = float(frame.get("fx", 0.0))
+                    fy = float(frame.get("fy", 0.0))
+                    fz = float(frame.get("fz", 0.0))
+                    t_ms = int(frame.get("time") or frame.get("t") or 0)
+                    
+                    # COP
+                    cop = frame.get("cop") or {}
+                    cop_x = float(cop.get("x", 0.0))
+                    cop_y = float(cop.get("y", 0.0))
+                    
+                    # Is this the selected device?
+                    if self.state.display_mode == "single" and did == selected_id:
+                        # 1. Update Sensor Plot (Right pane by default)
+                        if self.sensor_plot_right:
+                            self.sensor_plot_right.add_point(t_ms, fx, fy, fz)
+                        
+                        # 2. Update Plate View (Left pane by default) - Single Snapshot
+                        # Snapshot format: (x_mm, y_mm, fz_n, t_ms, is_visible, raw_x, raw_y)
+                        is_visible = abs(fz) > 5.0 # Basic threshold
+                        snap = (cop_x, cop_y, fz, t_ms, is_visible, cop_x, cop_y)
+                        self.canvas_left.set_single_snapshot(snap)
+                        self.canvas_right.set_single_snapshot(snap) # Sync if both showing plate
+                        
+                    # Mound mapping
+                    if self.state.display_mode == "mound":
+                        # We need to map DID to position name?
+                        # WorldCanvas expects a dict keyed by Position Name (Launch Zone, etc.)
+                        # But we only know DID here.
+                        # We can reverse map using state.mound_devices
+                        for pos_name, mapped_id in mound_map.items():
+                            if mapped_id == did:
+                                is_visible = abs(fz) > 5.0
+                                snap = (cop_x, cop_y, fz, t_ms, is_visible, cop_x, cop_y)
+                                snapshots[pos_name] = snap
+                                break
+                                
+                except Exception:
+                    continue
+            
+            if self.state.display_mode == "mound" and snapshots:
+                self.canvas_left.set_snapshots(snapshots)
+                self.canvas_right.set_snapshots(snapshots)
+                
+        except Exception:
+            pass
+
     def _on_live_cell_updated(self, row, col, result):
         # Result might be a payload dict from controller with pre-calculated color
         color = None
