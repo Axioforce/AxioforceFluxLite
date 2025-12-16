@@ -180,33 +180,51 @@ class MainWindow(QtWidgets.QMainWindow):
         self.canvas.live_cell_clicked.connect(self._on_live_cell_clicked)
         
         # Discrete Temp: wire test selection + plot button to Temp Plot/Slopes
-        try:
-            live_panel = self.controls.live_testing_panel
-            live_panel.discrete_test_selected.connect(self.temp_plot_tab.set_test_path)
-            live_panel.discrete_test_selected.connect(self._on_discrete_test_selected) # Switch tabs on selection
-            live_panel.plot_test_requested.connect(self.temp_plot_tab.plot_current)
-        except Exception:
-            pass
+        live_panel = self.controls.live_testing_panel
+        live_panel.discrete_test_selected.connect(self.temp_plot_tab.set_test_path)
+        live_panel.discrete_test_selected.connect(self._on_discrete_test_selected) # Switch tabs on selection
+        live_panel.plot_test_requested.connect(self.temp_plot_tab.plot_current)
         
         # Temp Testing Signals
         self._temp_analysis_payload: Optional[Dict] = None
-        try:
-            temp_panel = self.controls.temperature_testing_panel
-            temp_ctrl = self.controller.temp_test
-            # Wire analysis results
-            temp_ctrl.analysis_ready.connect(self._on_temp_analysis_ready)
-            temp_ctrl.grid_display_ready.connect(self._on_temp_grid_display_ready)
-            # Re-render when stage changes
-            temp_panel.stage_changed.connect(self._on_temp_stage_changed)
-            # Plot button - goes through controller, then back to main thread for matplotlib
-            temp_panel.plot_stages_requested.connect(temp_ctrl.plot_stage_detection)
-            temp_ctrl.plot_ready.connect(self._on_temp_plot_ready)
-        except Exception:
-            pass
+        temp_panel = self.controls.temperature_testing_panel
+        temp_ctrl = self.controller.temp_test
+        # Wire analysis results
+        temp_ctrl.analysis_ready.connect(self._on_temp_analysis_ready)
+        temp_ctrl.grid_display_ready.connect(self._on_temp_grid_display_ready)
+        # Re-render when stage changes
+        temp_panel.stage_changed.connect(self._on_temp_stage_changed)
+        # Plot button - goes through controller, then back to main thread for matplotlib
+        temp_panel.plot_stages_requested.connect(temp_ctrl.plot_stage_detection)
+        temp_ctrl.plot_ready.connect(self._on_temp_plot_ready)
+
+        # Heatmap / Calibration Signals
+        cal_ctrl = self.controller.calibration
+        
+        live_panel.load_45v_requested.connect(self._on_load_calibration)
+        live_panel.generate_heatmap_requested.connect(self._on_generate_heatmap)
+        live_panel.heatmap_selected.connect(self._on_heatmap_selected)
+        
+        cal_ctrl.status_updated.connect(live_panel.set_calibration_status)
+        cal_ctrl.files_loaded.connect(live_panel.set_generate_enabled)
+        cal_ctrl.heatmap_ready.connect(self._on_heatmap_ready)
+
+        # Mound Device Mapping
+        # Sync canvases when mound configuration changes in either
+        self.canvas_left.mound_device_selected.connect(self._on_mound_device_selected)
+        self.canvas_right.mound_device_selected.connect(self._on_mound_device_selected)
+
+    def _on_mound_device_selected(self, pos_id: str, dev_id: str) -> None:
+        """Trigger update on both canvases when mound mapping changes."""
+        self.canvas_left.update()
+        self.canvas_right.update()
         
     def _on_live_data(self, payload: dict) -> None:
         """Handle live streaming data from the backend."""
         try:
+            # Buffer raw payload for discrete temperature testing
+            self.controller.testing.buffer_live_payload(payload)
+
             # We care about:
             # 1. Force vectors (fx, fy, fz) for the active device -> Sensor Plot
             # 2. COP (x, y) + Fz for the active device -> Plate View (WorldCanvas)
@@ -256,6 +274,7 @@ class MainWindow(QtWidgets.QMainWindow):
             mound_map = self.state.mound_devices if self.state.display_mode == "mound" else {}
             
             snapshots = {} # For mound view
+            moments_data = {} # For moments view
             
             for frame in frames:
                 did = str(frame.get("id") or frame.get("deviceId") or "").strip()
@@ -275,6 +294,13 @@ class MainWindow(QtWidgets.QMainWindow):
                     cop = frame.get("cop") or {}
                     cop_x = float(cop.get("x", 0.0))
                     cop_y = float(cop.get("y", 0.0))
+                    
+                    # Moments
+                    moments = frame.get("moments") or {}
+                    mx = float(moments.get("x", 0.0))
+                    my = float(moments.get("y", 0.0))
+                    mz = float(moments.get("z", 0.0))
+                    moments_data[did] = (t_ms, mx, my, mz)
                     
                     # Is this the selected device?
                     if self.state.display_mode == "single" and did == selected_id:
@@ -308,6 +334,15 @@ class MainWindow(QtWidgets.QMainWindow):
             if self.state.display_mode == "mound" and snapshots:
                 self.canvas_left.set_snapshots(snapshots)
                 self.canvas_right.set_snapshots(snapshots)
+                
+            if moments_data:
+                try:
+                    if self.moments_view_left:
+                        self.moments_view_left.set_moments(moments_data)
+                    if self.moments_view_right:
+                        self.moments_view_right.set_moments(moments_data)
+                except Exception:
+                    pass
                 
         except Exception:
             pass
@@ -343,6 +378,74 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         try:
             self.pane_switcher.switch_many("temp_plot", "temp_slopes")
+        except Exception:
+            pass
+
+    # --- Calibration Heatmaps ---
+
+    def _on_load_calibration(self) -> None:
+        try:
+            d = QtWidgets.QFileDialog(self)
+            d.setFileMode(QtWidgets.QFileDialog.Directory)
+            d.setOption(QtWidgets.QFileDialog.ShowDirsOnly, True)
+            if d.exec():
+                dirs = d.selectedFiles()
+                if dirs:
+                    self.controller.calibration.load_folder(dirs[0])
+        except Exception:
+            pass
+
+    def _on_generate_heatmap(self) -> None:
+        try:
+            # Clear previous results
+            self.controls.live_testing_panel.clear_heatmap_entries()
+            self._heatmaps = {}
+            
+            model_id = (self.state.selected_device_id or "06").strip()
+            plate_type = (self.state.selected_device_type or "06").strip()
+            device_id = (self.state.selected_device_id or "").strip()
+            
+            self.controller.calibration.generate_heatmaps(model_id, plate_type, device_id)
+        except Exception:
+            pass
+
+    def _on_heatmap_ready(self, tag: str, data: dict) -> None:
+        try:
+            if not hasattr(self, "_heatmaps"):
+                self._heatmaps = {}
+            self._heatmaps[tag] = data
+            
+            # Add to list widget in UI
+            count = int((data.get("metrics") or {}).get("count") or 0)
+            self.controls.live_testing_panel.add_heatmap_entry(tag, tag, count)
+            
+            # Auto-select the first one generated
+            # self._on_heatmap_selected(tag)
+        except Exception:
+            pass
+
+    def _on_heatmap_selected(self, key: str) -> None:
+        try:
+            data = (getattr(self, "_heatmaps", {}) or {}).get(key)
+            if not data:
+                return
+            
+            # Update metrics table
+            metrics = data.get("metrics") or {}
+            self.controls.live_testing_panel.set_heatmap_metrics(metrics, False)
+            
+            # Update canvas
+            # points is list of dicts: x_mm, y_mm, bin, etc.
+            points = data.get("points") or []
+            # WorldCanvas expects List[Tuple[float, float, str]]
+            tuples = []
+            for p in points:
+                tuples.append((float(p.get("x_mm", 0)), float(p.get("y_mm", 0)), str(p.get("bin", "green"))))
+            
+            self.canvas_left.set_heatmap_points(tuples)
+            self.canvas_right.set_heatmap_points(tuples)
+            self.canvas_left.repaint()
+            self.canvas_right.repaint()
         except Exception:
             pass
 

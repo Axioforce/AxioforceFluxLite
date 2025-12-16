@@ -7,6 +7,7 @@ from ...services.data_sync import DataSyncService
 from ...services.model_service import ModelService
 from .live_test_controller import LiveTestController
 from .temp_test_controller import TempTestController
+from .calibration_controller import CalibrationController
 
 class MainController(QtCore.QObject):
     """
@@ -22,6 +23,7 @@ class MainController(QtCore.QObject):
         
         self.live_test = LiveTestController(self.testing)
         self.temp_test = TempTestController(self.testing, self.hardware)
+        self.calibration = CalibrationController()
 
     def start(self):
         """Initialize services and start background tasks."""

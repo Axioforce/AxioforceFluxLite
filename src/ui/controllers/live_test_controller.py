@@ -103,6 +103,26 @@ class LiveTestController(QtCore.QObject):
         except Exception:
             stage_idx = 0
 
+        # For discrete temp, try to capture data window (last 1 second)
+        session = self.service.current_session
+        if session and session.is_discrete_temp:
+            import time
+            now_ms = int(time.time() * 1000)
+            try:
+                stage = session.stages[stage_idx]
+                stage_name = stage.name
+            except Exception:
+                stage_name = "Unknown"
+                
+            # Assume 1 second stability window before click
+            success = self.service.accumulate_discrete_measurement(stage_name, now_ms - 1000, now_ms)
+            if not success:
+                print("Warning: Failed to capture discrete data window")
+                # TODO: Warn user via UI signal?
+                # For now, we proceed to record the result visually, but the data row might be missing.
+                # Actually, if accumulation fails, we probably shouldn't mark the cell as done.
+                return
+
         payload = current_data or {}
         # Best-effort extraction of basic telemetry; callers are free to omit.
         try:

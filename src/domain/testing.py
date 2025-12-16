@@ -41,6 +41,10 @@ class TestSession:
     ended_at_ms: Optional[int] = None
     is_temp_test: bool = False
     is_discrete_temp: bool = False
+    # Discrete Temp Specific
+    discrete_test_path: Optional[str] = None
+    discrete_buffer: List[Dict[str, Any]] = field(default_factory=list)
+    discrete_stats: Dict[str, Any] = field(default_factory=dict)  # {"45lb": {...}, "bodyweight": {...}}
 
     def start(self):
         self.started_at_ms = int(time.time() * 1000)
