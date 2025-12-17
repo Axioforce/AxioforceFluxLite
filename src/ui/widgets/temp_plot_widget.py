@@ -279,12 +279,41 @@ class TempPlotWidget(QtWidgets.QWidget):
                 (t, y) for (t, y) in points if baseline_low <= t <= baseline_high
             ]
             if not baseline:
-                # Fallback: take average of all points if no baseline found (unlikely but safe)
                 if not points:
                     return 0.0, 0.0
-                # Try to use points closest to target_T?
-                # For now just return 0,0 which signals invalid baseline
-                return 0.0, 0.0
+                # Fallback: use a weighted average of the K points closest to target_T.
+                # This allows coef generation even when the run never enters the baseline window.
+                try:
+                    k = min(5, len(points))
+                    closest = sorted(
+                        points, key=lambda p: abs(float(p[0]) - target_T)
+                    )[:k]
+                    weights: List[float] = []
+                    for t, _y in closest:
+                        try:
+                            dt = abs(float(t) - target_T)
+                        except Exception:
+                            dt = 0.0
+                        w = 1.0 / (1.0 + dt)
+                        weights.append(w)
+                    w_sum = sum(weights)
+                    if w_sum > 0.0:
+                        T0 = sum(w * float(t) for (w, (t, _y)) in zip(weights, closest)) / w_sum
+                        Y0 = sum(w * float(y) for (w, (_t, y)) in zip(weights, closest)) / w_sum
+                        return T0, Y0
+                except Exception:
+                    pass
+
+                # Last resort: unweighted mean of all points
+                try:
+                    T0 = sum(float(t) for t, _y in points) / float(len(points))
+                    Y0 = sum(float(y) for _t, y in points) / float(len(points))
+                    return T0, Y0
+                except Exception:
+                    try:
+                        return float(points[0][0]), float(points[0][1])
+                    except Exception:
+                        return 0.0, 0.0
 
             try:
                 weights: List[float] = []
@@ -806,19 +835,46 @@ class TempPlotWidget(QtWidgets.QWidget):
         # We found them earlier for regression, let's try to extract them
         # Re-scan baseline pts (inefficient but safe)
         T0_plot, Y0_plot = 0.0, 0.0
-        has_baseline = False
+        has_anchor = False
+        anchor_is_baseline = False
         if baseline_pts_for_plot:
             try:
                 # Simple average for plot anchor
                 T0_plot = sum(p[0] for p in baseline_pts_for_plot) / len(baseline_pts_for_plot)
                 Y0_plot = sum(p[1] for p in baseline_pts_for_plot) / len(baseline_pts_for_plot)
-                has_baseline = True
+                has_anchor = True
+                anchor_is_baseline = True
             except Exception:
                 pass
         elif xs and ys:
-             # If no baseline points found in 74-78, maybe just take the mean of the run?
-             # Or just disable the line
-             pass
+            # Fallback anchor: weighted average of points closest to target_T
+            try:
+                pts_for_anchor = list(zip(xs, ys))
+                k = min(5, len(pts_for_anchor))
+                closest = sorted(
+                    pts_for_anchor, key=lambda p: abs(float(p[0]) - target_T)
+                )[:k]
+                weights: List[float] = []
+                for t, _y in closest:
+                    try:
+                        dt = abs(float(t) - target_T)
+                    except Exception:
+                        dt = 0.0
+                    weights.append(1.0 / (1.0 + dt))
+                w_sum = sum(weights)
+                if w_sum > 0.0:
+                    T0_plot = sum(w * float(t) for (w, (t, _y)) in zip(weights, closest)) / w_sum
+                    Y0_plot = sum(w * float(y) for (w, (_t, y)) in zip(weights, closest)) / w_sum
+                    has_anchor = True
+            except Exception:
+                pass
+            if not has_anchor:
+                try:
+                    T0_plot = sum(xs) / float(len(xs))
+                    Y0_plot = sum(ys) / float(len(ys))
+                    has_anchor = True
+                except Exception:
+                    pass
 
         if len(xs) >= 1:
             try:
@@ -879,7 +935,7 @@ class TempPlotWidget(QtWidgets.QWidget):
                     dashed_ys = ys
             
             # Coef Line
-            if show_coef and has_baseline and xs:
+            if show_coef and has_anchor and xs:
                 # New logic: Connect Baseline point to a calculated point at min temp
                 # 1. Baseline Anchor: (T0_plot, Y0_plot)
                 # 2. Find min temp (t_min) in the data
@@ -924,7 +980,8 @@ class TempPlotWidget(QtWidgets.QWidget):
                 
                 print(f"[DEBUG] Plotting Coef Line:")
                 print(f"  Phase: {phase_label}, Axis: {axis_label}, Sensor: {sensor_label}")
-                print(f"  Baseline (T0, Y0): ({T0_plot:.2f}, {Y0_plot:.2f})")
+                print(f"  Anchor: {'baseline' if anchor_is_baseline else 'fallback'}")
+                print(f"  Anchor (T0, Y0): ({T0_plot:.2f}, {Y0_plot:.2f})")
                 print(f"  Coef used: {c_line_slope:.6f}")
                 print(f"  T_min: {t_min:.2f}, dt: {dt:.2f}")
                 print(f"  Y_min_calc: {y_min_calc:.2f} (Expected)")
@@ -945,7 +1002,8 @@ class TempPlotWidget(QtWidgets.QWidget):
                     cy = [p[1] for p in coef_pts]
 
                     # Plot in a different color, e.g. Cyan or Orange
-                    coef_pen = self._pg.mkPen(color=(255, 165, 0), width=2, style=QtCore.Qt.DashDotLine) # Orange
+                    coef_style = QtCore.Qt.DashDotLine if anchor_is_baseline else QtCore.Qt.DotLine
+                    coef_pen = self._pg.mkPen(color=(255, 165, 0), width=2, style=coef_style) # Orange
                     self._plot_widget.plot(cx, cy, pen=coef_pen)
                 except Exception:
                     pass
@@ -963,6 +1021,21 @@ class TempPlotWidget(QtWidgets.QWidget):
                         symbolSize=6,
                         symbolBrush=self._pg.mkBrush(180, 180, 255, 90),
                         symbolPen=self._pg.mkPen(color=(180, 180, 255, 60), width=1),
+                    )
+            except Exception:
+                pass
+            
+            # Fallback anchor marker (when no baseline window points exist)
+            try:
+                if has_anchor and not anchor_is_baseline and T0_plot and Y0_plot:
+                    self._plot_widget.plot(  # type: ignore[attr-defined]
+                        [float(T0_plot)],
+                        [float(Y0_plot)],
+                        pen=None,
+                        symbol="x",
+                        symbolSize=10,
+                        symbolBrush=None,
+                        symbolPen=self._pg.mkPen(color=(255, 165, 0, 180), width=2),
                     )
             except Exception:
                 pass
