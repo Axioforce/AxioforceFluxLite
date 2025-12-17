@@ -178,6 +178,10 @@ class WorldCanvas(QtWidgets.QWidget):
             self._rotation_quadrants
         )
 
+    def _scale_cop(self, val_m: float) -> float:
+        # Convert meters to mm for drawing
+        return float(val_m) * 1000.0
+
     def _draw_grid(self, p: QtGui.QPainter) -> None:
         w = self.width()
         h = self.height()
@@ -503,9 +507,16 @@ class WorldCanvas(QtWidgets.QWidget):
     def _draw_cop(self, p: QtGui.QPainter, name: str, snap: Tuple[float, float, float, int, bool, float, float]) -> None:
         if not self.state.flags.show_markers:
             return
-        x_mm, y_mm, fz_n, _, is_visible, raw_x_mm, raw_y_mm = snap
+        x_m, y_m, fz_n, _, is_visible, raw_x_m, raw_y_m = snap
         if not is_visible:
             return
+
+        # Convert m -> mm
+        x_mm = self._scale_cop(x_m)
+        y_mm = self._scale_cop(y_m)
+        raw_x_mm = self._scale_cop(raw_x_m)
+        raw_y_mm = self._scale_cop(raw_y_m)
+
         color = config.COLOR_COP_LAUNCH if name == LAUNCH_NAME else config.COLOR_COP_LANDING
         cx, cy = self._to_screen(x_mm, y_mm)
         r_px = max(config.COP_R_MIN_PX, min(config.COP_R_MAX_PX, self.state.cop_scale_k * abs(fz_n)))
@@ -523,9 +534,14 @@ class WorldCanvas(QtWidgets.QWidget):
                    f"raw {raw_x_mm:.1f}, {raw_y_mm:.1f}")
 
     def _draw_cop_single(self, p: QtGui.QPainter, snap: Tuple[float, float, float, int, bool, float, float]) -> None:
-        x_mm, y_mm, fz_n, _, is_visible, raw_x_mm, raw_y_mm = snap
+        x_m, y_m, fz_n, _, is_visible, raw_x_m, raw_y_m = snap
         if not is_visible:
             return
+
+        # Convert m -> mm
+        x_mm = self._scale_cop(x_m)
+        y_mm = self._scale_cop(y_m)
+
         cx, cy = self._to_screen(x_mm, y_mm)
         # In discrete temp testing, when the single-center-circle overlay is active,
         # keep the COP indicator at a fixed pixel size so zoom level and Fz scaling

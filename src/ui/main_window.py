@@ -257,6 +257,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                 "fy": float(sum_sensor.get("y", 0.0)),
                                 "fz": float(sum_sensor.get("z", 0.0)),
                                 "time": payload.get("time"),
+                                "avgTemperatureF": payload.get("avgTemperatureF"),
                                 "cop": {
                                     "x": float(cop_data.get("x", 0.0)),
                                     "y": float(cop_data.get("y", 0.0))
@@ -307,6 +308,22 @@ class MainWindow(QtWidgets.QMainWindow):
                         # 1. Update Sensor Plot (Right pane by default)
                         if self.sensor_plot_right:
                             self.sensor_plot_right.add_point(t_ms, fx, fy, fz)
+                            
+                        # Update Temp Label (Left/Right Sensor Plot)
+                        try:
+                            avg_temp = float(frame.get("avgTemperatureF") or 0.0)
+                            if avg_temp > 1.0:
+                                if self.sensor_plot_left:
+                                    self.sensor_plot_left.set_temperature_f(avg_temp)
+                                if self.sensor_plot_right:
+                                    self.sensor_plot_right.set_temperature_f(avg_temp)
+                            else:
+                                if self.sensor_plot_left:
+                                    self.sensor_plot_left.set_temperature_f(None)
+                                if self.sensor_plot_right:
+                                    self.sensor_plot_right.set_temperature_f(None)
+                        except Exception:
+                            pass
                         
                         # 2. Update Plate View (Left pane by default) - Single Snapshot
                         # Snapshot format: (x_mm, y_mm, fz_n, t_ms, is_visible, raw_x, raw_y)

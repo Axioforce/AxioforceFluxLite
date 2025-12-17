@@ -83,6 +83,11 @@ class ForcePlotWidget(QtWidgets.QWidget):
         self._pg_rz: list[float] = []
         # Time zero for relative axis formatting (ms)
         self._time0_ms: Optional[int] = None
+        
+        # Temperature buffer for 10-second rolling average
+        self._temp_buffer: list[tuple[float, float]] = [] # (time_sec, temp_f)
+        self._last_temp_update_time = 0.0
+        
         if self._use_pg and self._pg is not None:
             pg = self._pg
             # Custom bottom axis formatter: show HR:MIN:SEC where X values are milliseconds
@@ -308,12 +313,32 @@ class ForcePlotWidget(QtWidgets.QWidget):
         self._pg_update_y_range_min(10.0, 1.15)
 
     def set_temperature_f(self, value_f: Optional[float]) -> None:
-        """Update the smoothed temperature label (°F) shown in the Sensor View header."""
+        """Update the smoothed temperature label (°F) using a 10-second rolling average."""
         try:
-            if value_f is None:
-                self._temp_label.setText("Temp: -- °F")
-            else:
-                self._temp_label.setText(f"Temp: {float(value_f):.1f} °F")
+            import time
+            now = time.time()
+            
+            if value_f is not None:
+                # Add sample
+                self._temp_buffer.append((now, float(value_f)))
+            
+            # Prune samples older than 10 seconds
+            cutoff = now - 10.0
+            while self._temp_buffer and self._temp_buffer[0][0] < cutoff:
+                self._temp_buffer.pop(0)
+            
+            # Update display at ~10Hz (every 0.1s)
+            if now - self._last_temp_update_time >= 0.1:
+                self._last_temp_update_time = now
+                
+                if not self._temp_buffer:
+                    self._temp_label.setText("Temp: -- °F")
+                else:
+                    # Calculate average
+                    total = sum(t for _, t in self._temp_buffer)
+                    avg = total / len(self._temp_buffer)
+                    self._temp_label.setText(f"Temp: {avg:.1f} °F")
+                    
         except Exception:
             # Best-effort; never crash the UI on bad input
             pass
