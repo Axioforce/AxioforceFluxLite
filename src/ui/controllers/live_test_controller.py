@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 from PySide6 import QtCore
 from ...services.testing import TestingService
 from ...domain.models import TestResult
@@ -15,13 +16,19 @@ class LiveTestController(QtCore.QObject):
     view_cell_updated = QtCore.Signal(int, int, object)  # row, col, view_model (dict or object)
     view_grid_configured = QtCore.Signal(int, int)
     # Discrete temp testing: available tests + analyzed temps for a selected test
-    discrete_tests_listed = QtCore.Signal(list)  # list of (label, date, csv_path)
+    discrete_tests_listed = QtCore.Signal(list)  # list of (label, date, csv_path) - FILTERED
+    discrete_filter_options = QtCore.Signal(list) # list of device_ids for filter combo
     discrete_temps_updated = QtCore.Signal(bool, object)  # includes_baseline, temps_f (list[float])
 
     def __init__(self, testing_service: TestingService):
         super().__init__()
         self.service = testing_service
         self.presenter = GridPresenter()
+        
+        # Filtering State
+        self._all_discrete_tests = []
+        self._current_type_filter = "All types"
+        self._current_plate_filter = "All plates"
         
         # Forward service signals
         self.service.session_started.connect(self._on_session_started)
@@ -63,9 +70,66 @@ class LiveTestController(QtCore.QObject):
 
     def refresh_discrete_tests(self):
         """Fetch available discrete temperature tests and update view."""
-        # TODO: Run in background thread if this causes stutter
-        tests = self.service.list_discrete_tests()
-        self.discrete_tests_listed.emit(tests)
+        self._all_discrete_tests = self.service.list_discrete_tests()
+        
+        # 1. Compute available device IDs for the filter dropdown
+        device_ids: set[str] = set()
+        base_dir = "discrete_temp_testing"
+        for _label, _date_str, key in self._all_discrete_tests:
+            path = str(key)
+            try:
+                rel = os.path.relpath(path, base_dir)
+            except Exception:
+                rel = path
+            parts = rel.split(os.sep)
+            if parts and parts[0]:
+                device_ids.add(parts[0])
+        
+        self.discrete_filter_options.emit(sorted(list(device_ids)))
+        
+        # 2. Emit filtered list
+        self._emit_filtered_list()
+
+    def set_filters(self, type_filter: str, plate_filter: str):
+        self._current_type_filter = str(type_filter or "All types")
+        self._current_plate_filter = str(plate_filter or "All plates")
+        self._emit_filtered_list()
+
+    def _emit_filtered_list(self):
+        """Apply filters and emit the list."""
+        filtered = []
+        base_dir = "discrete_temp_testing"
+        
+        type_sel = self._current_type_filter
+        plate_sel = self._current_plate_filter
+
+        for label, date_str, key in self._all_discrete_tests:
+            path = str(key)
+            # Derive device id and type from path
+            try:
+                rel = os.path.relpath(path, base_dir)
+            except Exception:
+                rel = path
+            parts = rel.split(os.sep)
+            device_id = parts[0] if parts else ""
+            dev_type = ""
+            if device_id:
+                if "." in device_id:
+                    dev_type = device_id.split(".", 1)[0]
+                else:
+                    dev_type = device_id[:2]
+
+            # Apply filters
+            if type_sel != "All types" and dev_type != type_sel:
+                continue
+            if plate_sel != "All plates" and device_id != plate_sel:
+                continue
+            
+            # Pass tuple + device_id for convenience if needed, but signature matches original list
+            # (label, date, key)
+            filtered.append((label, date_str, key))
+            
+        self.discrete_tests_listed.emit(filtered)
 
     @QtCore.Slot(str)
     def on_discrete_test_selected(self, csv_path: str) -> None:

@@ -10,7 +10,7 @@ from PySide6 import QtCore
 from .. import config
 from .hardware import HardwareService
 from .session_manager import SessionManager
-from .device_geometry_service import DeviceGeometryService
+from .geometry import GeometryService
 from .repositories.test_file_repository import TestFileRepository
 from .analysis.temperature_analyzer import TemperatureAnalyzer
 from ..domain.models import TestSession, TestResult, TestThresholds
@@ -33,10 +33,9 @@ class TestingService(QtCore.QObject):
         self._hardware = hardware_service
         
         # Initialize sub-services
-        self.geometry = DeviceGeometryService()
         self.repo = TestFileRepository()
-        self.analyzer = TemperatureAnalyzer(self.geometry)
-        self.session_manager = SessionManager(self.geometry)
+        self.analyzer = TemperatureAnalyzer()
+        self.session_manager = SessionManager()
 
         # Connect SessionManager signals to Facade signals
         self.session_manager.session_started.connect(self.session_started.emit)

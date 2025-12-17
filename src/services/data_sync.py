@@ -1,6 +1,6 @@
 from __future__ import annotations
 from PySide6 import QtCore
-from .. import data_sync
+from ..core import sync_logic as data_sync
 
 class DataSyncService(QtCore.QObject):
     """

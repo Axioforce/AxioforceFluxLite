@@ -4,7 +4,8 @@ from typing import List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ... import config, data_sync
+from ... import config
+from ...core import sync_logic as data_sync
 from ..state import ViewState
 from .live_testing_panel import LiveTestingPanel
 from .temperature_testing_panel import TemperatureTestingPanel

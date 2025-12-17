@@ -3,7 +3,7 @@ from typing import Optional, Tuple, List
 from PySide6 import QtCore
 
 from ..domain.testing import TestSession, TestStage, TestResult, TestThresholds
-from .device_geometry_service import DeviceGeometryService
+from .geometry import GeometryService
 
 class SessionManager(QtCore.QObject):
     """
@@ -14,9 +14,8 @@ class SessionManager(QtCore.QObject):
     stage_changed = QtCore.Signal(int)       # new stage index
     cell_updated = QtCore.Signal(int, int, object)  # row, col, TestResult
 
-    def __init__(self, geometry_service: DeviceGeometryService):
+    def __init__(self):
         super().__init__()
-        self._geometry = geometry_service
         self._current_session: Optional[TestSession] = None
         self._active_cell: Optional[Tuple[int, int]] = None
         self._current_stage_index: int = 0
@@ -44,7 +43,7 @@ class SessionManager(QtCore.QObject):
         is_temp_test: bool = False, 
         is_discrete_temp: bool = False
     ) -> TestSession:
-        rows, cols = self._geometry.get_grid_dimensions(model_id)
+        rows, cols = GeometryService.get_grid_dimensions(model_id)
         
         session = TestSession(
             tester_name=tester_name,

@@ -7,7 +7,7 @@ import logging
 from typing import Dict, List, Optional, Tuple, Any
 
 from ... import config
-from ..device_geometry_service import DeviceGeometryService
+from ..geometry import GeometryService
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +16,8 @@ class TemperatureAnalyzer:
     Analyzes processed temperature test CSVs to find stable windows and evaluate accuracy.
     """
 
-    def __init__(self, geometry_service: DeviceGeometryService):
-        self.geometry = geometry_service
+    def __init__(self):
+        pass
 
     def analyze_temperature_processed_runs(
         self,
@@ -38,8 +38,8 @@ class TemperatureAnalyzer:
             os.path.basename(selected_csv),
         )
         meta = dict(meta or {})
-        device_type = self.geometry.infer_device_type(meta)
-        rows, cols = self.geometry.get_grid_dimensions(device_type)
+        device_type = GeometryService.infer_device_type(meta)
+        rows, cols = GeometryService.get_grid_dimensions(device_type)
         stage_configs = self._stage_configs_for_meta(meta)
 
         # First pass: analyze baseline to find valid windows
@@ -291,7 +291,7 @@ class TemperatureAnalyzer:
                     if (t_ms - first_t_ms) < warmup_skip_ms:
                         continue
 
-                    cell = self.geometry.map_cop_to_cell(device_type, rows, cols, copx, copy)
+                    cell = GeometryService.map_cop_to_cell(device_type, rows, cols, copx, copy)
                     stage_cfg = self._match_stage(fz, stage_configs)
                     if cell is None or stage_cfg is None:
                         close_current()
