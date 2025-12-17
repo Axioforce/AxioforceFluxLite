@@ -2664,12 +2664,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # If this test folder is a legacy date-only folder, move contents into a per-tester subfolder
         try:
-            import os, shutil
+            import os, shutil, re
             tester_norm = self._normalize_tester_folder(tester)
             # Detect if test_path already has a tester subfolder structure
             has_meta_here = os.path.isfile(os.path.join(test_path, "test_meta.json"))
             has_subdirs = any(os.path.isdir(os.path.join(test_path, d)) for d in os.listdir(test_path))
-            if has_meta_here and not has_subdirs:
+            
+            # Check if we are likely already in a tester subfolder (parent is a date folder)
+            parent_dir_name = os.path.basename(os.path.dirname(os.path.abspath(test_path)))
+            parent_is_date = bool(re.match(r"^\d{1,2}-\d{1,2}-\d{4}$", parent_dir_name))
+            
+            # Check if current folder name matches the tester (normalized)
+            current_is_tester = os.path.basename(test_path).lower() == tester_norm
+            
+            if has_meta_here and not has_subdirs and not parent_is_date and not current_is_tester:
                 # Legacy layout: discrete_temp_testing/<plate>/<date> -> move into <date>/<tester_norm>
                 date_dir = test_path
                 target_dir = os.path.join(date_dir, tester_norm)
