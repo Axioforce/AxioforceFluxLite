@@ -26,8 +26,7 @@ class LiveTestingPanel(QtWidgets.QWidget):
     discrete_add_requested = QtCore.Signal(str)
     discrete_test_selected = QtCore.Signal(str)
     plot_test_requested = QtCore.Signal()
-
-    plot_test_requested = QtCore.Signal()
+    process_test_requested = QtCore.Signal()
 
     def __init__(self, state: ViewState, controller: object = None, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -314,9 +313,16 @@ class LiveTestingPanel(QtWidgets.QWidget):
         self.temps_list = QtWidgets.QListWidget()
         temps_layout.addWidget(self.temps_list, 1)
         # Plot button at bottom (enabled only when a test with data is selected)
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(6)
         self.btn_plot_test = QtWidgets.QPushButton("Plot Test")
         self.btn_plot_test.setEnabled(False)
-        temps_layout.addWidget(self.btn_plot_test)
+        self.btn_process_test = QtWidgets.QPushButton("Process")
+        self.btn_process_test.setEnabled(False)
+        btn_row.addWidget(self.btn_plot_test, 1)
+        btn_row.addWidget(self.btn_process_test, 1)
+        temps_layout.addLayout(btn_row)
 
         # Evenly distribute boxes side-by-side within a constrained-height tab page
         for w in (controls_box, self.temps_box, guide_box, meta_box, model_box, self.cal_box):
@@ -367,6 +373,7 @@ class LiveTestingPanel(QtWidgets.QWidget):
             self.btn_discrete_new.clicked.connect(lambda: self.discrete_new_requested.emit())
             self.btn_discrete_add.clicked.connect(self._emit_discrete_add)
             self.btn_plot_test.clicked.connect(lambda: self.plot_test_requested.emit())
+            self.btn_process_test.clicked.connect(lambda: self.process_test_requested.emit())
             self.discrete_type_filter.currentTextChanged.connect(lambda _s: self._apply_discrete_filters())
             self.discrete_plate_filter.currentTextChanged.connect(lambda _s: self._apply_discrete_filters())
             # Forward selected test path to controller for analysis
@@ -720,8 +727,13 @@ class LiveTestingPanel(QtWidgets.QWidget):
         try:
             has_data = includes_baseline is True or bool(temps_f)
             self.btn_plot_test.setEnabled(bool(has_data))
+            self.btn_process_test.setEnabled(bool(has_data))
         except Exception:
             self.btn_plot_test.setEnabled(False)
+            try:
+                self.btn_process_test.setEnabled(False)
+            except Exception:
+                pass
         try:
             self.temps_list.clear()
             for t in temps_f or []:

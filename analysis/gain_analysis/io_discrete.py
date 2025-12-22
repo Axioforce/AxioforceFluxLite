@@ -88,9 +88,25 @@ def _infer_meta_from_path(path: str) -> Tuple[str, str, str]:
 
 def iter_discrete_csv_paths(root_dir: str) -> Iterator[str]:
     """
-    Yield discrete CSV file paths under `root_dir`:
-      - discrete_temp_session.csv
-      - discrete_temp_measurements.csv
+    Yield discrete CSV file paths under `root_dir` for calculations.
+
+    NOTE:
+      `discrete_temp_measurements.csv` is considered "plot-only" overlay data and
+      must NOT be used for calculations (gain, rollups, etc.). If you need those
+      points for visualization, use `iter_discrete_plot_csv_paths`.
+    """
+    target_names = {"discrete_temp_session.csv"}
+    for base, _dirs, files in os.walk(root_dir):
+        for fn in files:
+            if fn.lower() in target_names:
+                yield os.path.join(base, fn)
+
+
+def iter_discrete_plot_csv_paths(root_dir: str) -> Iterator[str]:
+    """
+    Yield discrete CSV file paths under `root_dir` for plotting/visualization:
+      - discrete_temp_session.csv (canonical, used for calculations)
+      - discrete_temp_measurements.csv (overlay, plot-only; excluded from calcs)
     """
     target_names = {"discrete_temp_session.csv", "discrete_temp_measurements.csv"}
     for base, _dirs, files in os.walk(root_dir):

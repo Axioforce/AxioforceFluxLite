@@ -1,8 +1,6 @@
 from __future__ import annotations
 import os
 import logging
-import requests
-import json
 from typing import Optional, List, Dict, Tuple, Any
 
 from PySide6 import QtCore
@@ -13,6 +11,7 @@ from .session_manager import SessionManager
 from .geometry import GeometryService
 from .repositories.test_file_repository import TestFileRepository
 from .analysis.temperature_analyzer import TemperatureAnalyzer
+from .backend_csv_processor import process_csv_via_backend
 from ..domain.models import TestSession, TestResult, TestThresholds
 
 logger = logging.getLogger(__name__)
@@ -398,86 +397,25 @@ class TestingService(QtCore.QObject):
         slopes: Optional[dict] = None,
         mode: str = "legacy",
     ) -> None:
-        if not os.path.isfile(input_csv_path):
-            raise FileNotFoundError(f"Input CSV not found: {input_csv_path}")
-
-        host = config.SOCKET_HOST
-        port = config.HTTP_PORT
-        # If hardware service discovered a port, use it
-        if self._hardware and self._hardware._http_port:
-             port = self._hardware._http_port
-             if self._hardware._http_host:
-                 host = self._hardware._http_host
-
-        # Ensure scheme
-        if not host.startswith("http"):
-            host = f"http://{host}"
-        
-        # Clean host of existing port and trailing slash
-        host = host.rstrip("/")
-        try:
-            # simple split to remove port if present
-            # e.g. http://localhost:3000 -> http://localhost
-            head, tail = host.split("://", 1)
-            if ":" in tail:
-                host = f"{head}://{tail.split(':')[0]}"
-        except Exception:
-            pass
-
-        # Using /api/device/process-csv as observed in offline_runner.py
-        url = f"{host}:{port}/api/device/process-csv"
-        
-        # Prepare payload for backend (JSON body with paths)
-        # Backend expected to be on localhost/same filesystem
-        body = {
-            'csvPath': os.path.abspath(input_csv_path),
-            'deviceId': device_id,
-            'outputDir': os.path.abspath(output_folder),
-            'use_temperature_correction': bool(use_temperature_correction),
-            'room_temperature_f': float(room_temp_f),
-            'mode': mode
-        }
-        
+        temperature_coefficients = None
         if slopes:
-            vals = {
-                'x': float(slopes.get('x', 0)),
-                'y': float(slopes.get('y', 0)),
-                'z': float(slopes.get('z', 0))
+            temperature_coefficients = {
+                "x": float(slopes.get("x", 0.0)),
+                "y": float(slopes.get("y", 0.0)),
+                "z": float(slopes.get("z", 0.0)),
             }
-            if mode == "scalar":
-                body['temperature_correction_coefficients'] = vals
-            else:
-                body['temperature_correction_slopes'] = vals
 
-        try:
-            logger.info(f"POST {url} with body keys: {list(body.keys())}")
-            # Match offline_runner.py behavior (json.dumps + specific headers) just in case
-            headers = {"Content-Type": "application/json"}
-            response = requests.post(url, data=json.dumps(body), headers=headers, timeout=300) 
-            response.raise_for_status()
-            
-            # The backend writes the file to disk and returns the path
-            data = response.json() or {}
-            out_csv_path = data.get("outputPath") or data.get("path") or data.get("processed_csv")
-            
-            if not out_csv_path or not os.path.isfile(out_csv_path):
-                # Fallback: check if the backend wrote to the expected location? 
-                # Or maybe it failed silently to write but returned success?
-                # We can't rely on response content since this endpoint returns JSON info.
-                logger.warning(f"Backend returned output path: {out_csv_path}, but file not found?")
-            else:
-                # Rename/Move to expected output_filename if different
-                expected_path = os.path.join(output_folder, output_filename)
-
-                if os.path.abspath(out_csv_path) != os.path.abspath(expected_path):
-                    try:
-                        if os.path.exists(expected_path):
-                            os.remove(expected_path)
-                        os.rename(out_csv_path, expected_path)
-                    except Exception as move_err:
-                        logger.error(f"Failed to move processed file to expected name: {move_err}")
-
-        except Exception as e:
-            logger.error(f"Backend processing failed: {e}")
-            raise e
+        process_csv_via_backend(
+            input_csv_path=input_csv_path,
+            device_id=device_id,
+            output_folder=output_folder,
+            output_filename=output_filename,
+            use_temperature_correction=use_temperature_correction,
+            room_temp_f=room_temp_f,
+            mode=mode,
+            temperature_coefficients=temperature_coefficients,
+            sanitize_header=True,
+            hardware=self._hardware,
+            timeout_s=300,
+        )
 

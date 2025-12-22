@@ -12,7 +12,7 @@ from .panels.control_panel import ControlPanel
 from .widgets.force_plot import ForcePlotWidget
 from .widgets.moments_view import MomentsViewWidget
 from .widgets.temp_plot_widget import TempPlotWidget
-from .widgets.temp_slopes_widget import TempSlopesWidget
+from .widgets.temp_coef_widget import TempCoefWidget
 from .bridge import UiBridge # Keep for compatibility if needed by other components
 
 from .pane_switcher import PaneSwitcher
@@ -73,7 +73,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.moments_view_left = moments_left
         self.top_tabs_left.addTab(moments_left, "Moments View")
         # Discrete Temp: Temp-vs-Force plot tab
-        self.temp_plot_tab = TempPlotWidget()
+        self.temp_plot_tab = TempPlotWidget(hardware_service=self.controller.hardware)
         self.top_tabs_left.addTab(self.temp_plot_tab, "Temp Plot")
         self.pane_switcher.register_tab(self.top_tabs_left, self.temp_plot_tab, "temp_plot")
 
@@ -91,10 +91,11 @@ class MainWindow(QtWidgets.QMainWindow):
         moments_right = MomentsViewWidget()
         self.moments_view_right = moments_right
         self.top_tabs_right.addTab(moments_right, "Moments View")
-        # Discrete Temp: slope summary tab on the right
-        self.temp_slope_tab = TempSlopesWidget()
-        self.top_tabs_right.addTab(self.temp_slope_tab, "Temp Slopes")
-        self.pane_switcher.register_tab(self.top_tabs_right, self.temp_slope_tab, "temp_slopes")
+
+        # Discrete Temp: coefficient metrics tab (no slope logic)
+        self.temp_coef_tab = TempCoefWidget()
+        self.top_tabs_right.addTab(self.temp_coef_tab, "Temp Coefs")
+        self.pane_switcher.register_tab(self.top_tabs_right, self.temp_coef_tab, "temp_coefs")
 
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.splitter.addWidget(self.top_tabs_left)
@@ -115,11 +116,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_label = QtWidgets.QLabel("Disconnected")
         self.statusBar().addPermanentWidget(self.status_label)
         
-        # Link Temp Plot -> Temp Slopes for current-plot metrics
-        try:
-            self.temp_plot_tab.set_slopes_widget(self.temp_slope_tab)
-        except Exception:
-            pass
+        # (Removed) Discrete temp slope UI (legacy)
         
         # Initial sizing
         self.splitter.setSizes([800, 800])
@@ -184,6 +181,13 @@ class MainWindow(QtWidgets.QMainWindow):
         live_panel.discrete_test_selected.connect(self.temp_plot_tab.set_test_path)
         live_panel.discrete_test_selected.connect(self._on_discrete_test_selected) # Switch tabs on selection
         live_panel.plot_test_requested.connect(self.temp_plot_tab.plot_current)
+        live_panel.process_test_requested.connect(self.temp_plot_tab.process_current)
+
+        # Link Temp Plot <-> Coef metrics widget (toggle controls + computed values)
+        try:
+            self.temp_plot_tab.set_coef_widget(self.temp_coef_tab)
+        except Exception:
+            pass
         
         # Temp Testing Signals
         self._temp_analysis_payload: Optional[Dict] = None
@@ -390,11 +394,11 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
 
     def _on_discrete_test_selected(self, path: str) -> None:
-        """Switch to Temp Plot and Temp Slopes tabs when a discrete test is selected."""
+        """Switch to Temp Plot tab when a discrete test is selected."""
         if not path:
             return
         try:
-            self.pane_switcher.switch_many("temp_plot", "temp_slopes")
+            self.pane_switcher.switch_many("temp_plot", "temp_coefs")
         except Exception:
             pass
 

@@ -37,11 +37,24 @@ def pct_change(new: float, old: float) -> Optional[float]:
         return None
 
 
-def parse_processed_sumz(processed_csv_path: str) -> List[Tuple[int, float]]:
+def _norm_phase(v: object) -> str:
     """
-    Parse processed CSV and return [(time_ms, sum_z)] in file order.
+    Normalize phase strings so processed CSV rows align with DiscreteRow.phase.
+    Expected discrete phases: '45lb' and 'bodyweight'.
     """
-    out: List[Tuple[int, float]] = []
+    s = str(v or "").strip().lower()
+    if "45" in s:
+        return "45lb"
+    if "body" in s:
+        return "bodyweight"
+    return s
+
+
+def parse_processed_sumz(processed_csv_path: str) -> List[Tuple[int, str, float]]:
+    """
+    Parse processed CSV and return [(time_ms, phase, sum_z)] in file order.
+    """
+    out: List[Tuple[int, str, float]] = []
     with open(processed_csv_path, "r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, skipinitialspace=True)
         if reader.fieldnames:
@@ -54,39 +67,54 @@ def parse_processed_sumz(processed_csv_path: str) -> List[Tuple[int, float]]:
                 t_ms = int(float(r.get("time") or r.get("time_ms") or 0))
             except Exception:
                 t_ms = 0
+            ph = _norm_phase(r.get("phase_name") or r.get("phase") or "")
             try:
                 sz = float(r.get("sum-z") or r.get("sum_z") or 0.0)
             except Exception:
                 sz = 0.0
-            out.append((t_ms, float(sz)))
+            out.append((t_ms, str(ph), float(sz)))
     return out
 
 
 def align_sumz_by_time(
     raw_rows: List[DiscreteRow],
-    processed_pairs: List[Tuple[int, float]],
+    processed_pairs: List[Tuple[int, str, float]],
 ) -> List[Optional[float]]:
     """
-    Align processed sum-z values to raw rows by exact time_ms when possible,
-    otherwise by index order as a fallback.
+    Align processed sum-z values to raw rows by (time_ms, phase) when possible.
+    Falls back to (time_ms) queue, then to index order as a last resort.
     """
-    by_time: Dict[int, float] = {}
-    for t_ms, sz in processed_pairs:
-        # last one wins if duplicates
-        by_time[int(t_ms)] = float(sz)
+    # Primary key: (time_ms, phase)
+    by_time_phase: Dict[Tuple[int, str], float] = {}
+    # Secondary fallback: keep a queue per time for duplicate timestamps
+    by_time_q: Dict[int, List[float]] = {}
+
+    for t_ms, ph, sz in processed_pairs:
+        key = (int(t_ms), _norm_phase(ph))
+        by_time_phase[key] = float(sz)  # last wins for same (time,phase)
+        by_time_q.setdefault(int(t_ms), []).append(float(sz))
 
     out: List[Optional[float]] = []
     miss = 0
     for i, rr in enumerate(raw_rows):
-        if int(rr.time_ms) in by_time:
-            out.append(by_time[int(rr.time_ms)])
+        key = (int(rr.time_ms), _norm_phase(rr.phase))
+        if key in by_time_phase:
+            out.append(by_time_phase[key])
+            continue
+
+        # fallback 1: time-only queue (pop in file order)
+        t = int(rr.time_ms)
+        q = by_time_q.get(t)
+        if q:
+            out.append(q.pop(0))
+            continue
+
+        # fallback 2: index mapping
+        miss += 1
+        if i < len(processed_pairs):
+            out.append(float(processed_pairs[i][2]))
         else:
-            miss += 1
-            # fallback: index mapping
-            if i < len(processed_pairs):
-                out.append(float(processed_pairs[i][1]))
-            else:
-                out.append(None)
+            out.append(None)
     return out
 
 

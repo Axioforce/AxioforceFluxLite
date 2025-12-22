@@ -159,6 +159,12 @@ TEMP_SLOPE_SMOOTHING_WINDOW: int = 5
 TEMP_WARMUP_SKIP_MS: int = 20000  # Skip first 20 seconds of data
 TEMP_COP_MAX_DISPLACEMENT_MM: float = 50.0  # Max distance COP can move within a valid segment
 
+# Discrete Temp Testing: default scalar temperature coefficients (all-tests coefs)
+# These can be overridden via environment variables for quick iteration.
+DISCRETE_TEMP_COEF_X: float = float(os.environ.get("DISCRETE_TEMP_COEF_X", "0.004"))
+DISCRETE_TEMP_COEF_Y: float = float(os.environ.get("DISCRETE_TEMP_COEF_Y", "0.002"))
+DISCRETE_TEMP_COEF_Z: float = float(os.environ.get("DISCRETE_TEMP_COEF_Z", "0.005"))
+
 
 # Live Testing grid dimensions (rows, cols) per model id
 # 06: 3x3, 07: 3x5, 08: 5x5, 11: 3x5 (identical to 07)

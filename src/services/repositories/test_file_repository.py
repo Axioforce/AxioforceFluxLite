@@ -67,41 +67,54 @@ class TestFileRepository:
 
         tests: List[Tuple[str, str, str, float]] = []
         try:
+            # Treat each test folder as a single picker entry.
+            # The canonical file for a test is discrete_temp_session.csv; other CSVs in the folder
+            # (e.g. discrete_temp_measurements.csv) are considered plot-only overlays and must not
+            # create additional picker entries.
             for root, _dirs, files in os.walk(base_dir):
-                for fname in files:
-                    if not fname.lower().endswith(".csv"):
-                        continue
-                    path = os.path.join(root, fname)
+                files_lc = {str(f or "").lower(): f for f in (files or [])}
+
+                # Only list tests that have a session file (canonical).
+                if "discrete_temp_session.csv" not in files_lc:
+                    continue
+
+                try:
+                    rel = os.path.relpath(root, base_dir)
+                except Exception:
+                    rel = root
+                parts = str(rel).split(os.sep)
+                device_id = parts[0] if len(parts) > 0 else ""
+                date_part = parts[1] if len(parts) > 1 else ""
+                tester = parts[2] if len(parts) > 2 else ""
+
+                # Build a concise label like "caleb • 06.0000000c"
+                label_bits = [p for p in (tester, device_id) if p]
+                label = " • ".join(label_bits) if label_bits else (device_id or tester or os.path.basename(root))
+
+                # Prefer the folder date (e.g. 11-20-2025), fallback to mtime.
+                date_str = ""
+                if date_part:
+                    date_str = date_part.replace("-", ".")
+
+                mtimes: List[float] = []
+                for fn in ("discrete_temp_session.csv", "discrete_temp_measurements.csv", "test_meta.json"):
                     try:
-                        rel = os.path.relpath(path, base_dir)
+                        p = os.path.join(root, fn)
+                        if os.path.isfile(p):
+                            mtimes.append(float(os.path.getmtime(p)))
                     except Exception:
-                        rel = fname
-                    parts = rel.split(os.sep)
-                    device_id = parts[0] if len(parts) > 0 else ""
-                    date_part = parts[1] if len(parts) > 1 else ""
-                    tester = parts[2] if len(parts) > 2 else ""
+                        pass
+                mtime = max(mtimes) if mtimes else 0.0
 
-                    # Build a concise label like "mike • 06.0000000c" (no filename).
-                    label_bits = [p for p in (tester, device_id) if p]
-                    label = " • ".join(label_bits) if label_bits else (device_id or tester or fname)
-
-                    # Prefer the folder date (e.g. 11-20-2025), fallback to mtime.
-                    date_str = ""
-                    if date_part:
-                        # 11-20-2025 -> 11.20.2025 for display
-                        date_str = date_part.replace("-", ".")
+                if not date_str:
                     try:
-                        mtime = os.path.getmtime(path)
+                        dt = datetime.datetime.fromtimestamp(mtime)
+                        date_str = dt.strftime("%m.%d.%Y")
                     except Exception:
-                        mtime = 0.0
-                    if not date_str:
-                        try:
-                            dt = datetime.datetime.fromtimestamp(mtime)
-                            date_str = dt.strftime("%m.%d.%Y")
-                        except Exception:
-                            date_str = ""
+                        date_str = ""
 
-                    tests.append((label, date_str, path, float(mtime)))
+                # Key for selection should be the test folder, not an individual CSV file.
+                tests.append((label, date_str, root, float(mtime)))
         except Exception:
             pass
 
@@ -189,7 +202,7 @@ class TestFileRepository:
             slopes = variant.get("slopes", {})
             mode = variant.get("mode", "legacy")
             processed_runs.append({
-                "label": self.format_slopes_label(slopes),
+                "label": self.format_slopes_label(slopes, mode=mode),
                 "path": path,
                 "is_baseline": False,
                 "slopes": slopes,
@@ -232,11 +245,26 @@ class TestFileRepository:
         includes_baseline = False
         temps_f: List[float] = []
 
-        if not csv_path or not os.path.isfile(csv_path):
+        if not csv_path:
+            return includes_baseline, temps_f
+
+        # Accept either a folder path (preferred for the picker) or a direct CSV path.
+        p = str(csv_path).strip()
+        if os.path.isdir(p):
+            p = os.path.join(p, "discrete_temp_session.csv")
+        else:
+            # If a measurements CSV is ever passed here, redirect to the canonical session CSV.
+            try:
+                if os.path.basename(p).lower() == "discrete_temp_measurements.csv":
+                    p = os.path.join(os.path.dirname(p), "discrete_temp_session.csv")
+            except Exception:
+                pass
+
+        if not os.path.isfile(p):
             return includes_baseline, temps_f
 
         try:
-            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+            with open(p, "r", encoding="utf-8", newline="") as f:
                 reader = csv.DictReader(f, skipinitialspace=True)
                 sessions: Dict[str, List[float]] = {}
                 for row in reader:
@@ -410,23 +438,37 @@ class TestFileRepository:
         with open(meta_path, "w", encoding="utf-8") as mf:
             json.dump(meta, mf, indent=2, sort_keys=True)
 
-    def format_slopes_label(self, slopes: dict) -> str:
-        x = float(slopes.get("x", 0.0))
-        y = float(slopes.get("y", 0.0))
-        z = float(slopes.get("z", 0.0))
-        
-        if abs(x - y) < 1e-9 and abs(y - z) < 1e-9:
-            return f"All: {x:.3f}"
+    def format_slopes_label(self, slopes: dict, mode: str = "legacy") -> str:
+        """
+        Human-friendly label for a processed run.
 
-        return ", ".join(
-            f"{axis.upper()}={float(slopes.get(axis, 0.0)):.2f}"
-            for axis in ("x", "y", "z")
-        )
+        Notes:
+        - Scalar mode coefficients are typically small (e.g. 0.004), so we show
+          3 decimals to avoid the UI appearing like "X=0.00".
+        - Legacy mode slopes are usually larger; we default to 2 decimals unless
+          values are small.
+        """
+        mode_lc = str(mode or "legacy").strip().lower()
+
+        def _fmt(val: float) -> str:
+            # Keep scalar mode readable; also preserve precision for small legacy values.
+            decimals = 3 if (mode_lc == "scalar" or abs(val) < 0.1) else 2
+            return f"{val:.{decimals}f}"
+
+        x = float((slopes or {}).get("x", 0.0))
+        y = float((slopes or {}).get("y", 0.0))
+        z = float((slopes or {}).get("z", 0.0))
+
+        if abs(x - y) < 1e-9 and abs(y - z) < 1e-9:
+            return f"All: {_fmt(x)}"
+
+        return f"X={_fmt(x)}, Y={_fmt(y)}, Z={_fmt(z)}"
 
     def formatted_slope_name(self, slopes: dict) -> str:
         def _fmt(val: object) -> str:
             try:
-                as_str = f"{float(val):.3f}".rstrip("0").rstrip(".")
+                # Use 4 decimals so scalar coefficients like 0.0042 are preserved in filenames.
+                as_str = f"{float(val):.4f}".rstrip("0").rstrip(".")
                 if not as_str:
                     as_str = "0"
                 if "." not in as_str:
@@ -569,7 +611,7 @@ class TestFileRepository:
             if not slopes:
                 continue
             runs.append({
-                "label": self.format_slopes_label(slopes),
+                "label": self.format_slopes_label(slopes, mode=mode),
                 "path": full_path,
                 "is_baseline": False,
                 "slopes": slopes,

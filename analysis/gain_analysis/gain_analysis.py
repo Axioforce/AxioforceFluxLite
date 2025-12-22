@@ -69,6 +69,8 @@ def main() -> int:
 
     all_gain_rows = []
     file_count = 0
+    # IMPORTANT: iter_discrete_csv_paths() is session-only by design.
+    # discrete_temp_measurements.csv is plot-only overlay data and must not be used here.
     for csv_path in iter_discrete_csv_paths(args.data_root):
         file_count += 1
         if args.limit_files and file_count > int(args.limit_files):

@@ -127,7 +127,8 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         self.spin_z = QtWidgets.QDoubleSpinBox()
         for sp in (self.spin_x, self.spin_y, self.spin_z):
             sp.setRange(-1000.0, 1000.0)
-            sp.setDecimals(3)
+            sp.setDecimals(4)
+            # Default to legacy-friendly increments; Scalar mode will override to finer steps.
             sp.setSingleStep(0.1)
             sp.setValue(3.0)
         
@@ -429,6 +430,14 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         self.lbl_slope_x.setText(f"{prefix} X:")
         self.lbl_slope_y.setText(f"{prefix} Y:")
         self.lbl_slope_z.setText(f"{prefix} Z:")
+        
+        # Make scalar entry practical (0.0001 granularity); keep legacy mode coarse.
+        step = 0.0001 if text == "Scalar" else 0.1
+        for sp in (self.spin_x, self.spin_y, self.spin_z):
+            try:
+                sp.setSingleStep(step)
+            except Exception:
+                pass
 
     def _on_delete_processed_requested(self, file_path: str) -> None:
         if not file_path:

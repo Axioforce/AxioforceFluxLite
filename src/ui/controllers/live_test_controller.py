@@ -16,7 +16,7 @@ class LiveTestController(QtCore.QObject):
     view_cell_updated = QtCore.Signal(int, int, object)  # row, col, view_model (dict or object)
     view_grid_configured = QtCore.Signal(int, int)
     # Discrete temp testing: available tests + analyzed temps for a selected test
-    discrete_tests_listed = QtCore.Signal(list)  # list of (label, date, csv_path) - FILTERED
+    discrete_tests_listed = QtCore.Signal(list)  # list of (label, date, test_path) - FILTERED
     discrete_filter_options = QtCore.Signal(list) # list of device_ids for filter combo
     discrete_temps_updated = QtCore.Signal(bool, object)  # includes_baseline, temps_f (list[float])
 
