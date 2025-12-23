@@ -524,16 +524,10 @@ class ControlPanel(QtWidgets.QWidget):
         )
         self.btn_apply_temp_corr.clicked.connect(self._emit_backend_temp_corr)
 
-        # Periodic Refresh Scan when on Config tab
-        self._refresh_timer = QtCore.QTimer(self)
-        self._refresh_timer.setInterval(2000)
-        self._refresh_timer.timeout.connect(self._on_refresh_timer)
-        self._refresh_timer.start()
-
-    def _on_refresh_timer(self) -> None:
-        """Periodically refresh devices if Config tab is active."""
-        if self.tabs.currentIndex() == getattr(self, "_config_tab_index", -1):
-            self.refresh_devices_requested.emit()
+        # NOTE: We intentionally do NOT poll the backend for device lists.
+        # Device connect/disconnect is pushed via websocket events, and we also
+        # refresh on explicit user action (Refresh Devices button) or when the
+        # Config tab is selected.
 
     def _emit_backend_temp_corr(self) -> None:
         """Emit a single payload for backend temperature correction settings."""

@@ -189,6 +189,10 @@ COLOR_COP_LAUNCH: Tuple[int, int, int] = (70, 140, 255)
 COLOR_COP_LANDING: Tuple[int, int, int] = (80, 210, 120)
 COLOR_TEXT: Tuple[int, int, int] = (220, 220, 230)
 
+# Plate view sizing: in single-device view, target plate height as a fraction of the
+# canvas height (roughly; width constraints may reduce it).
+PLATE_VIEW_TARGET_HEIGHT_RATIO: float = 0.80
+
 
 @dataclass
 class UiFlags:

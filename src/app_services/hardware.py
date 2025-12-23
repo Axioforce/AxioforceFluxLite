@@ -8,6 +8,7 @@ from .. import config
 from ..io_client import IoClient
 from ..domain.models import DeviceState, Device, LAUNCH_NAME, LANDING_NAME
 import requests
+from ..infra.backend_address import BackendAddress, backend_address_from_config
 
 class HardwareService(QtCore.QObject):
     """
@@ -35,6 +36,22 @@ class HardwareService(QtCore.QObject):
         self._stop_flag = threading.Event()
         self._groups: List[dict] = []
         self._active_devices: set = set()
+        self._connected_devices: set = set()
+
+    def backend_http_address(self) -> BackendAddress:
+        """
+        Authoritative backend HTTP address for the current session.
+
+        If we have a discovered/connected host+port, use it; otherwise fall back to config/env.
+        """
+        try:
+            host = str(self._http_host or "").strip()
+            port = int(self._http_port) if self._http_port else None
+            if host and port:
+                return BackendAddress(host=host, port=int(port))
+        except Exception:
+            pass
+        return backend_address_from_config()
         
     def connect(self, host: str, port: int) -> None:
         self.disconnect()
@@ -70,6 +87,8 @@ class HardwareService(QtCore.QObject):
             self.client.on("getGroupDefinitionsStatus", self._on_group_definitions)
             self.client.on("groupDefinitions", self._on_group_definitions)
             self.client.on("connectedDeviceList", self._on_connected_device_list)
+            # Realtime device connect/disconnect updates
+            self.client.on("connectionStatusUpdate", self._on_connection_status_update)
             
             # Config & Model listeners
             self.client.on("getDynamoConfigStatus", lambda d: self.config_status_received.emit(d))
@@ -84,6 +103,14 @@ class HardwareService(QtCore.QObject):
         if self.client:
             self.client.stop()
             self.client = None
+        # Clear connection-derived state so UI can revert to empty state.
+        try:
+            self._connected_devices = set()
+            self._active_devices = set()
+            self.active_devices_updated.emit(set())
+            self.device_list_updated.emit([])
+        except Exception:
+            pass
         self.connection_status_changed.emit("Disconnected")
 
     def _on_connect(self) -> None:
@@ -103,6 +130,14 @@ class HardwareService(QtCore.QObject):
 
     def _on_disconnect(self, *args) -> None:
         self.connection_status_changed.emit("Disconnected")
+        # Socket disconnected => no streaming.
+        try:
+            self._connected_devices = set()
+            self._active_devices = set()
+            self.active_devices_updated.emit(set())
+            self.device_list_updated.emit([])
+        except Exception:
+            pass
         # If we disconnected unexpectedly, try to auto-connect again after a delay
         # But only if we aren't already trying.
         if not self.client:
@@ -167,7 +202,8 @@ class HardwareService(QtCore.QObject):
                 
                 # Actually, the user's request implies we should "mark them as live".
                 # I'll emit the set of IDs found in this packet. The UI can handle persistence/fading if needed.
-                self.active_devices_updated.emit(current_ids)
+                self._active_devices = set(current_ids)
+                self.active_devices_updated.emit(set(current_ids))
 
         except Exception:
             pass
@@ -183,6 +219,65 @@ class HardwareService(QtCore.QObject):
             self.client.emit("getDeviceTypes", {})
             self.client.emit("getGroupDefinitions", {})
             self.client.emit("getConnectedDevices")
+
+    def _infer_device_type(self, axf_id: str, payload_hint: object | None = None) -> str:
+        """
+        Infer canonical device type ("06","07","08","11") from an axfId.
+        Backends vary on whether deviceTypeId is present; this keeps UI stable.
+        """
+        try:
+            s = str(axf_id or "").strip()
+            if not s:
+                return ""
+            # Common formats: "07.00000051", "07-....", "07..."
+            prefix = s[:2]
+            if prefix in ("06", "07", "08", "11"):
+                return prefix
+        except Exception:
+            pass
+        # Fallback: attempt numeric deviceTypeId mapping if your backend uses it.
+        try:
+            dt = str(payload_hint or "").strip()
+            # If backend already sent canonical type, keep it.
+            if dt in ("06", "07", "08", "11"):
+                return dt
+        except Exception:
+            pass
+        return ""
+
+    def _on_connection_status_update(self, payload: dict) -> None:
+        """
+        Server -> client realtime updates:
+        { "<groupAxfId>": { "isConnected": true, "devices": { "<deviceAxfId>": true/false, ... } } }
+        We use this to refresh the connected device list without polling.
+        """
+        try:
+            connected: set[str] = set()
+            if isinstance(payload, dict):
+                for _gid, g in payload.items():
+                    grp = g or {}
+                    devs = grp.get("devices") or {}
+                    if isinstance(devs, dict):
+                        for dev_id, is_on in devs.items():
+                            if bool(is_on):
+                                connected.add(str(dev_id))
+            self._connected_devices = connected
+        except Exception:
+            pass
+        # If nothing is connected anymore, clear "active" immediately so UI can revert.
+        if not self._connected_devices:
+            try:
+                self._active_devices = set()
+                self.active_devices_updated.emit(set())
+                self.device_list_updated.emit([])
+            except Exception:
+                pass
+        # Pull an authoritative list (names/types) when connection state changes.
+        try:
+            if self.client:
+                self.client.emit("getConnectedDevices")
+        except Exception:
+            pass
 
     # --- Command Methods ---
 
@@ -324,23 +419,41 @@ class HardwareService(QtCore.QObject):
             self._groups = []
 
     def _on_connected_device_list(self, payload: dict | list) -> None:
-        # Parse payload to extract (name, axf_id, device_type) tuples
-        devices = []
+        # Parse payload to extract (name, axf_id, device_type) tuples.
+        #
+        # Supports both:
+        # - legacy: { devices: [device,...] } or [device,...]
+        # - current: [ { axfId, name, ..., devices: [device,...] }, ... ]
+        devices: list[tuple[str, str, str]] = []
         try:
-            raw_list = payload if isinstance(payload, list) else payload.get("devices", [])
-            for item in raw_list:
+            raw_list: list = []
+            if isinstance(payload, list):
+                raw_list = payload
+            elif isinstance(payload, dict):
+                raw_list = payload.get("devices", []) or payload.get("groups", []) or []
+
+            # If this looks like group objects, flatten their devices.
+            flattened: list[dict] = []
+            if raw_list and isinstance(raw_list[0], dict) and "devices" in raw_list[0] and ("isDeviceGroup" in raw_list[0] or "groupConfiguration" in raw_list[0]):
+                for g in raw_list:
+                    grp = g or {}
+                    for d in (grp.get("devices") or []):
+                        if isinstance(d, dict):
+                            flattened.append(d)
+            else:
+                for d in raw_list:
+                    if isinstance(d, dict):
+                        flattened.append(d)
+
+            for item in flattened:
                 try:
-                    name = str(item.get("name") or "Unknown")
-                    axf_id = str(item.get("axfId") or item.get("id") or "")
-                    # Extract device type from deviceTypeId or similar
-                    dt = str(item.get("deviceTypeId") or "")
-                    # Fallback logic for type if needed (e.g. from name or ID)
-                    if not dt and "-" in axf_id:
-                        # heuristic
-                        pass
-                    
-                    if axf_id:
-                        devices.append((name, axf_id, dt))
+                    axf_id = str(item.get("axfId") or item.get("deviceAxfId") or item.get("id") or item.get("deviceId") or "").strip()
+                    if not axf_id:
+                        continue
+                    name = str(item.get("name") or item.get("deviceName") or "Unknown")
+                    dt_hint = item.get("deviceTypeId") or item.get("deviceType") or item.get("type")
+                    dt = self._infer_device_type(axf_id, dt_hint)
+                    devices.append((name, axf_id, dt))
                 except Exception:
                     continue
         except Exception:

@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 import threading
-
-import requests
-import json
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ... import config
-from ...services.geometry import GeometryService
+from ...infra.backend_address import BackendAddress, backend_address_from_config
+from ...infra.group_mapping import detect_existing_mound_mapping
+from ...app_services.geometry import GeometryService
 from ..state import ViewState
 from .grid_overlay import GridOverlay
 from ..dialogs.device_picker import DevicePickerDialog
@@ -22,9 +21,15 @@ class WorldCanvas(QtWidgets.QWidget):
     rotation_changed = QtCore.Signal(int)  # quadrants 0..3
     live_cell_clicked = QtCore.Signal(int, int)  # row, col in canonical grid space
 
-    def __init__(self, state: ViewState, parent: Optional[QtWidgets.QWidget] = None) -> None:
+    def __init__(
+        self,
+        state: ViewState,
+        parent: Optional[QtWidgets.QWidget] = None,
+        backend_address_provider: Optional[Callable[[], BackendAddress]] = None,
+    ) -> None:
         super().__init__(parent)
         self.state = state
+        self._backend_address_provider: Callable[[], BackendAddress] = backend_address_provider or backend_address_from_config
         self._renderer = WorldRenderer(self)
         self._snapshots: Dict[str, Tuple[float, float, float, int, bool, float, float]] = {}
         self._single_snapshot: Optional[Tuple[float, float, float, int, bool, float, float]] = None
@@ -163,7 +168,51 @@ class WorldCanvas(QtWidgets.QWidget):
         
         bounds = (self.WORLD_X_MIN, self.WORLD_X_MAX, self.WORLD_Y_MIN, self.WORLD_Y_MAX)
         px_per_mm, x_mid, y_mid = GeometryService.compute_fit(w, h, bounds, self.MARGIN_PX)
-        
+
+        # In single-device view, size the plate so it takes ~80% of the canvas height.
+        # This keeps the default plate view feeling "full" without zooming in/out manually.
+        if self.state.display_mode == "single":
+            try:
+                dev_type = (self.state.selected_device_type or "").strip()
+                if dev_type == "06":
+                    w_mm = float(config.TYPE06_W_MM)
+                    h_mm = float(config.TYPE06_H_MM)
+                elif dev_type == "07":
+                    w_mm = float(config.TYPE07_W_MM)
+                    h_mm = float(config.TYPE07_H_MM)
+                elif dev_type == "11":
+                    w_mm = float(config.TYPE11_W_MM)
+                    h_mm = float(config.TYPE11_H_MM)
+                else:
+                    w_mm = float(config.TYPE08_W_MM)
+                    h_mm = float(config.TYPE08_H_MM)
+
+                # Match WorldRenderer's rotation swap: on 90/270, rendered height uses w_mm.
+                if int(self._rotation_quadrants) % 2 == 1:
+                    plate_h_mm = w_mm
+                    plate_w_mm = h_mm
+                else:
+                    plate_h_mm = h_mm
+                    plate_w_mm = w_mm
+
+                # Mirror the adaptive pixel margin used by GeometryService.compute_fit
+                base_margin = float(self.MARGIN_PX)
+                max_margin = 0.15 * float(min(w, h))
+                margin_px = min(base_margin, max_margin)
+                margin_px = max(2.0, margin_px)
+                usable_w = max(1.0, float(w) - 2.0 * margin_px)
+                usable_h = max(1.0, float(h) - 2.0 * margin_px)
+
+                target = float(getattr(config, "PLATE_VIEW_TARGET_HEIGHT_RATIO", 0.80))
+                target = max(0.4, min(0.95, target))
+
+                # Prefer height-based sizing, but clamp so the plate still fits horizontally.
+                s_h = (usable_h * target) / max(1e-6, float(plate_h_mm))
+                s_w = usable_w / max(1e-6, float(plate_w_mm))
+                px_per_mm = max(0.01, float(min(s_h, s_w)))
+            except Exception:
+                pass
+
         self.state.px_per_mm = px_per_mm
         self._x_mid = x_mid
         self._y_mid = y_mid
@@ -549,19 +598,7 @@ class WorldCanvas(QtWidgets.QWidget):
             pass
 
     def _http_base(self) -> str:
-        base = str(getattr(config, "SOCKET_HOST", "http://localhost") or "http://localhost")
-        port = int(getattr(config, "HTTP_PORT", 3001))
-        base = base.rstrip("/")
-        if ":" in base.split("//", 1)[-1]:
-            # Host already has a port; replace with HTTP_PORT
-            try:
-                head, tail = base.split("://", 1)
-                host_only = tail.split(":")[0]
-                base = f"{head}://{host_only}:{port}"
-            except Exception:
-                base = f"{base}:{port}"
-        else:
-            base = f"{base}:{port}"
+        base = self._backend_address_provider().base_url()
         try:
             print(f"[canvas] http base resolved: {base}")
         except Exception:
@@ -575,43 +612,14 @@ class WorldCanvas(QtWidgets.QWidget):
         t.start()
 
     def _detect_worker(self) -> None:
-        base = self._http_base()
         mapping: Dict[str, str] = {}
         try:
-            # Prefer groups for explicit configuration label
-            url_g = f"{base}/api/get-groups"
-            print(f"[canvas] GET {url_g}")
-            resp = requests.get(url_g, timeout=4)
-            if resp.ok:
-                payload = resp.json() or {}
-                try:
-                    print(f"[canvas] get-groups ok: keys={list(payload.keys())}")
-                except Exception:
-                    pass
-                groups = payload.get("response") or payload.get("groups") or []
-                print(f"[canvas] get-groups: groups_count={len(groups)}")
-                for g in groups:
-                    cfg = str(g.get("group_configuration") or g.get("configuration") or "").lower()
-                    try:
-                        print(f"[canvas] group cfg={cfg} name={g.get('name')} id={g.get('axf_id') or g.get('axfId')}")
-                    except Exception:
-                        pass
-                    if "pitching" in cfg and "mound" in cfg:
-                        # Extract devices
-                        for d in (g.get("devices") or []):
-                            # Accept both key styles
-                            name = str(d.get("name") or d.get("plateName") or "").strip()
-                            device_id = str(d.get("axf_id") or d.get("deviceId") or "").strip()
-                            pos_id = str(d.get("position_id") or d.get("positionId") or name).strip()
-                            is_virtual = bool(d.get("is_virtual"))
-                            print(f"[canvas] groups device: name={name} pos_id={pos_id} id={device_id} virtual={is_virtual}")
-                            if pos_id in ("Upper Landing Zone", "Lower Landing Zone") and not is_virtual:
-                                mapping[pos_id] = device_id
-                            if pos_id == "Launch Zone" and not is_virtual:
-                                mapping["Launch Zone"] = device_id
-                        break
-            else:
-                print(f"[canvas] get-groups failed: status={resp.status_code} body={str(resp.text)[:200]}")
+            addr = self._backend_address_provider()
+            try:
+                print(f"[canvas] GET {addr.get_groups_url()}")
+            except Exception:
+                pass
+            mapping = detect_existing_mound_mapping(addr, timeout_s=4.0)
         except Exception as e:
             print(f"[canvas] get-groups error: {e}")
         # Emit to UI thread to apply mapping immediately

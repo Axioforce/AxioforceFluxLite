@@ -1,7 +1,8 @@
 from __future__ import annotations
 import os
 from PySide6 import QtCore
-from ...services.testing import TestingService
+from ...project_paths import data_dir
+from ...app_services.testing import TestingService
 from ...domain.models import TestResult
 from ..presenters.grid_presenter import GridPresenter
 
@@ -74,7 +75,7 @@ class LiveTestController(QtCore.QObject):
         
         # 1. Compute available device IDs for the filter dropdown
         device_ids: set[str] = set()
-        base_dir = "discrete_temp_testing"
+        base_dir = data_dir("discrete_temp_testing")
         for _label, _date_str, key in self._all_discrete_tests:
             path = str(key)
             try:
@@ -98,7 +99,7 @@ class LiveTestController(QtCore.QObject):
     def _emit_filtered_list(self):
         """Apply filters and emit the list."""
         filtered = []
-        base_dir = "discrete_temp_testing"
+        base_dir = data_dir("discrete_temp_testing")
         
         type_sel = self._current_type_filter
         plate_sel = self._current_plate_filter

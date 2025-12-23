@@ -30,6 +30,9 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Initialize State (View Model)
         self.state = ViewState()
+        # Track connection/streaming state for clean disconnect behavior
+        self._connected_device_ids: set[str] = set()
+        self._active_device_ids: set[str] = set()
         
         # Initialize Legacy Bridge (for compatibility, if needed)
         self.bridge = UiBridge()
@@ -44,8 +47,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.controller.start()
         
     def _setup_ui(self):
-        self.canvas_left = WorldCanvas(self.state)
-        self.canvas_right = WorldCanvas(self.state)
+        self.canvas_left = WorldCanvas(self.state, backend_address_provider=self.controller.hardware.backend_http_address)
+        self.canvas_right = WorldCanvas(self.state, backend_address_provider=self.controller.hardware.backend_http_address)
         self.canvas = self.canvas_left # Default active canvas
         
         # Control Panel (Left Side)
@@ -167,7 +170,9 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Hardware -> UI Signals
         self.controller.hardware.device_list_updated.connect(self.controls.set_available_devices)
+        self.controller.hardware.device_list_updated.connect(self._on_device_list_updated)
         self.controller.hardware.active_devices_updated.connect(self.controls.update_active_devices)
+        self.controller.hardware.active_devices_updated.connect(self._auto_select_active_device)
         
         # Live Testing Signals
         self.controller.live_test.view_grid_configured.connect(self.canvas.show_live_grid)
@@ -399,6 +404,146 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         try:
             self.pane_switcher.switch_many("temp_plot", "temp_coefs")
+        except Exception:
+            pass
+
+    def _auto_select_active_device(self, active_device_ids: set) -> None:
+        """
+        When a device is actively streaming (green check in Config), auto-select it
+        so Plate View + Sensor View show data without manual selection.
+
+        Guardrails:
+        - Only auto-select when no device is currently selected, OR when the current
+          selection is no longer active and there is exactly one active device.
+        """
+        try:
+            # Track latest active set for disconnect handling
+            self._active_device_ids = set(str(x) for x in (active_device_ids or set()) if str(x).strip())
+            active = sorted(self._active_device_ids)
+            if not active:
+                # If nothing is streaming AND nothing is connected, revert to empty state.
+                if not self._connected_device_ids:
+                    self._clear_device_views()
+                return
+
+            selected = str(self.state.selected_device_id or "").strip()
+
+            # Don't steal selection unless unselected or the choice is clearly stale.
+            should_select = (not selected) or (selected not in active and len(active) == 1)
+            if not should_select:
+                return
+
+            target_id = active[0] if not selected else active[0]
+
+            # Select in the Config device list so we go through the normal wiring
+            # (sets selected_device_id/type/name, display_mode, emits config_changed).
+            try:
+                lw = getattr(self.controls, "device_list", None)
+                if lw is None:
+                    self.state.selected_device_id = target_id
+                    self.state.display_mode = "single"
+                    self.canvas_left.update()
+                    self.canvas_right.update()
+                    return
+
+                for i in range(lw.count()):
+                    item = lw.item(i)
+                    if item is None:
+                        continue
+                    try:
+                        name, axf_id, dev_type = item.data(QtCore.Qt.UserRole)
+                    except Exception:
+                        continue
+                    if str(axf_id).strip() == target_id:
+                        # This triggers ControlPanel._on_device_selected which updates state
+                        lw.setCurrentItem(item)
+                        break
+            except Exception:
+                # Fallback: set state directly
+                self.state.selected_device_id = target_id
+                self.state.display_mode = "single"
+                self.canvas_left.update()
+                self.canvas_right.update()
+        except Exception:
+            pass
+
+    def _on_device_list_updated(self, devices: list) -> None:
+        """
+        Maintain a cached set of connected device IDs from connectedDeviceList.
+        When both connected + active are empty, revert to the "No Devices Connected" UI.
+        """
+        try:
+            ids: set[str] = set()
+            for d in (devices or []):
+                try:
+                    # HardwareService emits (name, axf_id, dev_type) tuples
+                    _name, axf_id, _dt = d
+                    if axf_id:
+                        ids.add(str(axf_id).strip())
+                except Exception:
+                    continue
+            self._connected_device_ids = ids
+            if not self._connected_device_ids and not self._active_device_ids:
+                self._clear_device_views()
+        except Exception:
+            pass
+
+    def _clear_device_views(self) -> None:
+        """Revert UI back to the empty-state plate and clear sensor plots."""
+        try:
+            # Clear selection state
+            self.state.selected_device_id = None
+            self.state.selected_device_type = None
+            self.state.selected_device_name = None
+            self.state.display_mode = "single"
+
+            # Clear config list selection (avoid firing selection handlers)
+            try:
+                lw = getattr(self.controls, "device_list", None)
+                if lw is not None:
+                    lw.blockSignals(True)
+                    lw.setCurrentRow(-1)
+                    lw.blockSignals(False)
+            except Exception:
+                pass
+
+            # Clear plate visuals
+            try:
+                self.canvas_left.hide_live_grid()
+                self.canvas_right.hide_live_grid()
+            except Exception:
+                pass
+            try:
+                self.canvas_left.clear_live_colors()
+                self.canvas_right.clear_live_colors()
+            except Exception:
+                pass
+            try:
+                self.canvas_left.set_heatmap_points([])
+                self.canvas_right.set_heatmap_points([])
+            except Exception:
+                pass
+            try:
+                self.canvas_left.set_single_snapshot(None)
+                self.canvas_right.set_single_snapshot(None)
+            except Exception:
+                pass
+            try:
+                self.canvas_left.repaint()
+                self.canvas_right.repaint()
+            except Exception:
+                pass
+
+            # Clear sensor plots
+            try:
+                if self.sensor_plot_left:
+                    self.sensor_plot_left.clear()
+                    self.sensor_plot_left.set_temperature_f(None)
+                if self.sensor_plot_right:
+                    self.sensor_plot_right.clear()
+                    self.sensor_plot_right.set_temperature_f(None)
+            except Exception:
+                pass
         except Exception:
             pass
 

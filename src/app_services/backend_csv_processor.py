@@ -1,59 +1,27 @@
 from __future__ import annotations
 
 import csv
-import json
 import logging
 import os
-from dataclasses import dataclass
 from typing import Optional
 
-import requests
-
-from .. import config
+from ..infra.backend_address import BackendAddress, backend_address_from_config
+from ..infra.http_client import post_json
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass(frozen=True)
-class BackendAddress:
-    host: str
-    port: int
-
-    def base_url(self) -> str:
-        host = (self.host or "").strip() or "http://localhost"
-        if not host.startswith("http"):
-            host = f"http://{host}"
-        host = host.rstrip("/")
-        # Normalize: strip any existing port if present
-        try:
-            head, tail = host.split("://", 1)
-            if ":" in tail:
-                host = f"{head}://{tail.split(':')[0]}"
-        except Exception:
-            pass
-        return f"{host}:{int(self.port)}"
-
-    def process_csv_url(self) -> str:
-        return f"{self.base_url()}/api/device/process-csv"
-
-
 def _resolve_backend_address(hardware: object | None = None) -> BackendAddress:
-    host = getattr(config, "SOCKET_HOST", "http://localhost")
-    port = int(getattr(config, "HTTP_PORT", 3001))
-
-    # If hardware service discovered a port, prefer it (same behavior as legacy callers)
+    # HardwareService is authoritative when available.
     if hardware is not None:
         try:
-            hw_port = getattr(hardware, "_http_port", None)
-            hw_host = getattr(hardware, "_http_host", None)
-            if hw_port:
-                port = int(hw_port)
-            if hw_host:
-                host = str(hw_host)
+            addr = getattr(hardware, "backend_http_address", None)
+            if callable(addr):
+                resolved = addr()
+                if isinstance(resolved, BackendAddress):
+                    return resolved
         except Exception:
             pass
-
-    return BackendAddress(host=str(host), port=int(port))
+    return backend_address_from_config()
 
 
 def process_csv_via_backend(
@@ -153,11 +121,7 @@ def process_csv_via_backend(
         body["temperature_correction_coefficients"] = vals
 
     logger.info(f"POST {url} with body keys: {list(body.keys())}")
-    headers = {"Content-Type": "application/json"}
-    resp = requests.post(url, data=json.dumps(body), headers=headers, timeout=int(timeout_s))
-    resp.raise_for_status()
-
-    data = resp.json() or {}
+    data = post_json(url, body, timeout_s=float(timeout_s))
     out_csv_path = data.get("outputPath") or data.get("path") or data.get("processed_csv")
 
     expected_path = os.path.join(output_folder, output_filename)

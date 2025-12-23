@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from typing import Optional
-import os
 
 from PySide6 import QtCore, QtWidgets, QtGui
 
 from ..state import ViewState
-from ..delegates import DiscreteTestDelegate
+from .live_testing.session_controls_box import SessionControlsBox
+from .live_testing.testing_guide_box import TestingGuideBox
+from .live_testing.session_info_box import SessionInfoBox
+from .live_testing.model_box import ModelBox
+from .live_testing.calibration_heatmap_box import CalibrationHeatmapBox
+from .live_testing.temps_in_test_box import TempsInTestBox
 
 
 class LiveTestingPanel(QtWidgets.QWidget):
@@ -37,295 +41,88 @@ class LiveTestingPanel(QtWidgets.QWidget):
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(10)
 
-        # Backing store for discrete tests (for filtering)
-        self._all_discrete_tests: list[tuple[str, str, str]] = []
+        # Keep references to sub-boxes (logic lives in the boxes; panel remains public API facade)
+        self._controls_box: SessionControlsBox
+        self._temps_box: TempsInTestBox
+        self._guide_box: TestingGuideBox
+        self._meta_box: SessionInfoBox
+        self._model_box: ModelBox
+        self._cal_box: CalibrationHeatmapBox
 
-        # Session Controls
-        controls_box = QtWidgets.QGroupBox("Session Controls")
-        controls_layout = QtWidgets.QVBoxLayout(controls_box)
+        # Build UI from small focused group boxes, then bind widgets onto this instance
+        controls_box = SessionControlsBox(self)
+        temps_box = TempsInTestBox(self)
+        guide_box = TestingGuideBox(self)
+        meta_box = SessionInfoBox(self)
+        model_box = ModelBox(self)
+        self.cal_box = CalibrationHeatmapBox(self)
 
-        # Session type selector (Normal vs Temperature Test vs Discrete Temp.)
-        mode_row = QtWidgets.QHBoxLayout()
-        mode_row.addWidget(QtWidgets.QLabel("Session Type:"))
-        self.session_mode_combo = QtWidgets.QComboBox()
-        try:
-            # Modes: Normal live test, continuous temperature test, and discrete temperature test
-            self.session_mode_combo.addItems(["Normal", "Temperature Test", "Discrete Temp. Testing"])
-        except Exception:
-            pass
-        mode_row.addWidget(self.session_mode_combo)
-        mode_row.addStretch(1)
-        controls_layout.addLayout(mode_row)
+        self._controls_box = controls_box
+        self._temps_box = temps_box
+        self._guide_box = guide_box
+        self._meta_box = meta_box
+        self._model_box = model_box
+        self._cal_box = self.cal_box
 
-        # Discrete temp testing test picker (list, only visible in Discrete Temp. mode)
-        discrete_picker_box = QtWidgets.QVBoxLayout()
-        # Legacy label, now hidden (filters + list are self-explanatory)
-        self.lbl_discrete_tests = QtWidgets.QLabel("Tests:")
-        self.lbl_discrete_tests.setVisible(False)
+        # Back-compat bindings (attributes referenced by existing methods)
+        # Session controls / discrete picker
+        self.session_mode_combo = controls_box.session_mode_combo
+        self.discrete_test_list = controls_box.discrete_test_list
+        self.btn_discrete_new = controls_box.btn_discrete_new
+        self.btn_discrete_add = controls_box.btn_discrete_add
+        self.discrete_type_filter = controls_box.discrete_type_filter
+        self.discrete_plate_filter = controls_box.discrete_plate_filter
+        self.discrete_type_label = controls_box.discrete_type_label
+        self.discrete_plate_label = controls_box.discrete_plate_label
+        self.btn_start = controls_box.btn_start
+        self.btn_end = controls_box.btn_end
+        self.btn_next = controls_box.btn_next
+        self.btn_prev = controls_box.btn_prev
+        self.lbl_stage_title = controls_box.lbl_stage_title
+        self.stage_label = controls_box.stage_label
+        self.lbl_progress_title = controls_box.lbl_progress_title
+        self.progress_label = controls_box.progress_label
 
-        # Filters row: plate type + specific plate
-        filters_row = QtWidgets.QHBoxLayout()
-        filters_row.setContentsMargins(0, 0, 0, 0)
-        filters_row.setSpacing(6)
-        self.discrete_type_filter = QtWidgets.QComboBox()
-        self.discrete_type_filter.addItems(["All types", "06", "07", "08", "11"])
-        self.discrete_plate_filter = QtWidgets.QComboBox()
-        self.discrete_plate_filter.addItem("All plates")
-        self.discrete_type_label = QtWidgets.QLabel("Type:")
-        self.discrete_plate_label = QtWidgets.QLabel("Plate:")
-        filters_row.addWidget(self.discrete_type_label)
-        filters_row.addWidget(self.discrete_type_filter)
-        filters_row.addWidget(self.discrete_plate_label)
-        filters_row.addWidget(self.discrete_plate_filter, 1)
-        discrete_picker_box.addLayout(filters_row)
-        self.discrete_test_list = QtWidgets.QListWidget()
-        try:
-            from PySide6 import QtWidgets as _QtW
-            self.discrete_test_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
-            self.discrete_test_list.setUniformItemSizes(True)
-            self.discrete_test_list.setSizePolicy(_QtW.QSizePolicy.Expanding, _QtW.QSizePolicy.Expanding)
-            # Use custom delegate for dotted leader formatting
-            self.discrete_test_list.setItemDelegate(DiscreteTestDelegate(self.discrete_test_list))
-        except Exception:
-            pass
-        discrete_picker_box.addWidget(self.discrete_test_list, 1)
-        controls_layout.addLayout(discrete_picker_box)
+        # Temps-in-test
+        self.temps_box = temps_box
+        self.lbl_temps_baseline = temps_box.lbl_temps_baseline
+        self.lbl_temps_baseline_icon = temps_box.lbl_temps_baseline_icon
+        self.temps_list = temps_box.temps_list
+        self.btn_plot_test = temps_box.btn_plot_test
+        self.btn_process_test = temps_box.btn_process_test
 
-        # Discrete temp testing actions (only visible in Discrete Temp. mode)
-        discrete_row = QtWidgets.QHBoxLayout()
-        self.btn_discrete_new = QtWidgets.QPushButton("Start New Test")
-        self.btn_discrete_add = QtWidgets.QPushButton("Add to Existing Test")
-        self.btn_discrete_add.setEnabled(False)
-        try:
-            # Make each button take half the width within the Session Controls group
-            from PySide6 import QtWidgets as _QtW
-            self.btn_discrete_new.setSizePolicy(_QtW.QSizePolicy.Expanding, _QtW.QSizePolicy.Fixed)
-            self.btn_discrete_add.setSizePolicy(_QtW.QSizePolicy.Expanding, _QtW.QSizePolicy.Fixed)
-        except Exception:
-            pass
-        discrete_row.addWidget(self.btn_discrete_new, 1)
-        discrete_row.addWidget(self.btn_discrete_add, 1)
-        controls_layout.addLayout(discrete_row)
+        # Guide
+        self.guide_label = guide_box.guide_label
 
-        self.btn_start = QtWidgets.QPushButton("Start Session")
-        self.btn_end = QtWidgets.QPushButton("End Session")
-        self.btn_end.setEnabled(False)
-        self.btn_next = QtWidgets.QPushButton("Next Stage")
-        self.btn_next.setEnabled(False)
+        # Session info/meta
+        self.lbl_tester = meta_box.lbl_tester
+        self.lbl_device = meta_box.lbl_device
+        self.lbl_model = meta_box.lbl_model
+        self.lbl_bw = meta_box.lbl_bw
+        self.lbl_test_date_title = meta_box.lbl_test_date_title
+        self.lbl_test_date = meta_box.lbl_test_date
+        self.lbl_short_label_title = meta_box.lbl_short_label_title
+        self.lbl_short_label = meta_box.lbl_short_label
+        self.lbl_thresh_db = meta_box.lbl_thresh_db
+        self.lbl_thresh_bw = meta_box.lbl_thresh_bw
 
-        stage_row = QtWidgets.QHBoxLayout()
-        self.lbl_stage_title = QtWidgets.QLabel("Stage:")
-        stage_row.addWidget(self.lbl_stage_title)
-        self.stage_label = QtWidgets.QLabel("—")
-        stage_row.addWidget(self.stage_label)
-        stage_row.addStretch(1)
+        # Model panel
+        self.lbl_current_model = model_box.lbl_current_model
+        self.model_list = model_box.model_list
+        self.lbl_model_status = model_box.lbl_model_status
+        self.btn_activate = model_box.btn_activate
+        self.btn_deactivate = model_box.btn_deactivate
+        self.btn_package_model = model_box.btn_package_model
 
-        progress_row = QtWidgets.QHBoxLayout()
-        self.lbl_progress_title = QtWidgets.QLabel("Progress:")
-        progress_row.addWidget(self.lbl_progress_title)
-        self.progress_label = QtWidgets.QLabel("0 / 0 cells")
-        progress_row.addWidget(self.progress_label)
-        progress_row.addStretch(1)
+        # Calibration heatmap
+        self.lbl_cal_status = self.cal_box.lbl_cal_status
+        self.btn_load_45v = self.cal_box.btn_load_45v
+        self.btn_generate_heatmap = self.cal_box.btn_generate_heatmap
+        self.heatmap_view_combo = self.cal_box.heatmap_view_combo
+        self.heatmap_list = self.cal_box.heatmap_list
+        self.metrics_table = self.cal_box.metrics_table
 
-        controls_layout.addWidget(self.btn_start)
-        controls_layout.addWidget(self.btn_end)
-        nav_row = QtWidgets.QHBoxLayout()
-        self.btn_prev = QtWidgets.QPushButton("Previous Stage")
-        nav_row.addWidget(self.btn_prev)
-        nav_row.addWidget(self.btn_next)
-        nav_row.addStretch(1)
-        controls_layout.addLayout(nav_row)
-        controls_layout.addLayout(stage_row)
-        controls_layout.addLayout(progress_row)
-
-        # Testing Guide
-        guide_box = QtWidgets.QGroupBox("Testing Guide")
-        guide_layout = QtWidgets.QVBoxLayout(guide_box)
-        self.guide_label = QtWidgets.QLabel("Use Start Session to begin. Follow prompts here.")
-        self.guide_label.setWordWrap(True)
-        guide_layout.addWidget(self.guide_label)
-        guide_layout.addStretch(1)
-
-        # Session Info & Thresholds
-        meta_box = QtWidgets.QGroupBox("Session Info & Thresholds")
-        meta_layout = QtWidgets.QFormLayout(meta_box)
-        self.lbl_tester = QtWidgets.QLabel("—")
-        self.lbl_device = QtWidgets.QLabel("—")
-        self.lbl_model = QtWidgets.QLabel("—")
-        self.lbl_bw = QtWidgets.QLabel("—")
-        meta_layout.addRow("Tester:", self.lbl_tester)
-        meta_layout.addRow("Device ID:", self.lbl_device)
-        meta_layout.addRow("Model ID:", self.lbl_model)
-        meta_layout.addRow("Body Weight (N):", self.lbl_bw)
-        self.lbl_thresh_db = QtWidgets.QLabel("—")
-        self.lbl_thresh_bw = QtWidgets.QLabel("—")
-        meta_layout.addRow("45 lb DB (±N):", self.lbl_thresh_db)
-        meta_layout.addRow("Body Weight (±N):", self.lbl_thresh_bw)
-
-        # Live Telemetry removed
-
-        # Model (replaces Debug Status)
-        model_box = QtWidgets.QGroupBox("Model")
-        model_layout = QtWidgets.QVBoxLayout(model_box)
-
-        # Current model row
-        current_row = QtWidgets.QHBoxLayout()
-        current_row.addWidget(QtWidgets.QLabel("Current Model:"))
-        self.lbl_current_model = QtWidgets.QLabel("—")
-        current_row.addWidget(self.lbl_current_model)
-        current_row.addStretch(1)
-        model_layout.addLayout(current_row)
-
-        # Available models list
-        model_layout.addWidget(QtWidgets.QLabel("Available Models:"))
-        self.model_list = QtWidgets.QListWidget()
-        self.model_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
-        try:
-            self.model_list.setUniformItemSizes(True)
-        except Exception:
-            pass
-        try:
-            self.model_list.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
-        except Exception:
-            pass
-        model_layout.addWidget(self.model_list, 1)
-
-        # Status row
-        status_row = QtWidgets.QHBoxLayout()
-        self.lbl_model_status = QtWidgets.QLabel("")
-        self.lbl_model_status.setStyleSheet("color:#ccc;")
-        status_row.addWidget(self.lbl_model_status)
-        status_row.addStretch(1)
-        model_layout.addLayout(status_row)
-
-        # Activate/Deactivate controls
-        act_row = QtWidgets.QHBoxLayout()
-        self.btn_activate = QtWidgets.QPushButton("Activate")
-        self.btn_deactivate = QtWidgets.QPushButton("Deactivate")
-        act_row.addWidget(self.btn_activate)
-        act_row.addWidget(self.btn_deactivate)
-        act_row.addStretch(1)
-        model_layout.addLayout(act_row)
-
-        # Package button
-        self.btn_package_model = QtWidgets.QPushButton("Package Model…")
-        model_layout.addWidget(self.btn_package_model)
-        model_layout.addStretch(1)
-
-        # Calibration Heatmap
-        self.cal_box = QtWidgets.QGroupBox("Calibration Heatmap")
-        cal_layout = QtWidgets.QVBoxLayout(self.cal_box)
-        cal_row = QtWidgets.QHBoxLayout()
-        cal_row.addWidget(QtWidgets.QLabel("Status:"))
-        self.lbl_cal_status = QtWidgets.QLabel("—")
-        cal_row.addWidget(self.lbl_cal_status)
-        cal_row.addStretch(1)
-        cal_layout.addLayout(cal_row)
-        self.btn_load_45v = QtWidgets.QPushButton("Load Test Files…")
-        self.btn_generate_heatmap = QtWidgets.QPushButton("Generate Heatmaps")
-        self.btn_generate_heatmap.setEnabled(False)
-        btn_row = QtWidgets.QHBoxLayout()
-        btn_row.addWidget(self.btn_load_45v)
-        btn_row.addWidget(self.btn_generate_heatmap)
-        btn_row.addStretch(1)
-        cal_layout.addLayout(btn_row)
-        # View mode
-        view_row = QtWidgets.QHBoxLayout()
-        view_row.addWidget(QtWidgets.QLabel("View:"))
-        self.heatmap_view_combo = QtWidgets.QComboBox()
-        self.heatmap_view_combo.addItems(["Heatmap", "Grid View"])
-        view_row.addWidget(self.heatmap_view_combo)
-        view_row.addStretch(1)
-        cal_layout.addLayout(view_row)
-
-        # Metrics table
-        self.metrics_table = QtWidgets.QTableWidget(5, 3)
-        try:
-            self.metrics_table.setHorizontalHeaderLabels(["Metric", "N", "%"])
-            self.metrics_table.verticalHeader().setVisible(False)
-            # Size columns/rows to contents for tighter look
-            hh = self.metrics_table.horizontalHeader()
-            vh = self.metrics_table.verticalHeader()
-            try:
-                hh.setStretchLastSection(False)
-                from PySide6.QtWidgets import QHeaderView as _QHV
-                hh.setSectionResizeMode(_QHV.ResizeToContents)
-                vh.setSectionResizeMode(_QHV.ResizeToContents)
-            except Exception:
-                pass
-            self.metrics_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-            self.metrics_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
-            # Reduce grid and margins
-            self.metrics_table.setShowGrid(False)
-            self.metrics_table.setStyleSheet("QTableWidget { padding: 0px; } QTableWidget::item { padding: 2px 6px; }")
-        except Exception:
-            pass
-        labels = ["Count", "Mean Error", "Median Error", "Max Error", "Bias (signed)"]
-        for i, text in enumerate(labels):
-            self.metrics_table.setItem(i, 0, QtWidgets.QTableWidgetItem(text))
-            self.metrics_table.setItem(i, 1, QtWidgets.QTableWidgetItem("—"))
-            self.metrics_table.setItem(i, 2, QtWidgets.QTableWidgetItem("—"))
-        cal_layout.addWidget(self.metrics_table)
-        try:
-            # Minimize whitespace: compute tight height after sizing to contents
-            self.metrics_table.resizeColumnsToContents()
-            self.metrics_table.resizeRowsToContents()
-            row_h = max(18, self.metrics_table.verticalHeader().defaultSectionSize())
-            header_h = self.metrics_table.horizontalHeader().height()
-            self.metrics_table.setFixedHeight(header_h + row_h * len(labels) + 2)
-        except Exception:
-            pass
-        # Generated heatmaps list + Metrics side-by-side
-        cal_layout.addWidget(QtWidgets.QLabel("Generated Heatmaps:"))
-        self.heatmap_list = QtWidgets.QListWidget()
-        try:
-            self.heatmap_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
-        except Exception:
-            pass
-        # Place picker and metrics table side by side
-        hm_row = QtWidgets.QHBoxLayout()
-        # Left: heatmap picker (expands)
-        try:
-            self.heatmap_list.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        except Exception:
-            pass
-        hm_row.addWidget(self.heatmap_list, 2)
-        # Right: metrics table (tight width)
-        try:
-            self.metrics_table.resizeColumnsToContents()
-            self.metrics_table.resizeRowsToContents()
-            self.metrics_table.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        except Exception:
-            pass
-        hm_row.addWidget(self.metrics_table, 0, QtCore.Qt.AlignTop)
-        cal_layout.addLayout(hm_row, 1)
-
-        # Temps in Test: standalone pane to the right of Session Controls
-        self.temps_box = QtWidgets.QGroupBox("Temps in Test")
-        temps_layout = QtWidgets.QVBoxLayout(self.temps_box)
-        temps_header = QtWidgets.QHBoxLayout()
-        self.lbl_temps_baseline = QtWidgets.QLabel("Includes Baseline:")
-        self.lbl_temps_baseline_icon = QtWidgets.QLabel("✖")
-        temps_header.addWidget(self.lbl_temps_baseline)
-        temps_header.addWidget(self.lbl_temps_baseline_icon)
-        temps_header.addStretch(1)
-        temps_layout.addLayout(temps_header)
-        self.temps_list = QtWidgets.QListWidget()
-        temps_layout.addWidget(self.temps_list, 1)
-        # Plot button at bottom (enabled only when a test with data is selected)
-        btn_row = QtWidgets.QHBoxLayout()
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_row.setSpacing(6)
-        self.btn_plot_test = QtWidgets.QPushButton("Plot Test")
-        self.btn_plot_test.setEnabled(False)
-        self.btn_process_test = QtWidgets.QPushButton("Process")
-        self.btn_process_test.setEnabled(False)
-        btn_row.addWidget(self.btn_plot_test, 1)
-        btn_row.addWidget(self.btn_process_test, 1)
-        temps_layout.addLayout(btn_row)
-
-        # Evenly distribute boxes side-by-side within a constrained-height tab page
-        for w in (controls_box, self.temps_box, guide_box, meta_box, model_box, self.cal_box):
+        for w in (controls_box, temps_box, guide_box, meta_box, model_box, self.cal_box):
             try:
                 w.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
             except Exception:
@@ -432,6 +229,22 @@ class LiveTestingPanel(QtWidgets.QWidget):
                 self.cal_box.setVisible(not is_discrete)
         except Exception:
             pass
+        # Show/hide discrete test meta fields in Session Info
+        try:
+            if hasattr(self, "lbl_test_date_title"):
+                self.lbl_test_date_title.setVisible(is_discrete)
+                self.lbl_test_date.setVisible(is_discrete)
+            if hasattr(self, "lbl_short_label_title"):
+                self.lbl_short_label_title.setVisible(is_discrete)
+                self.lbl_short_label.setVisible(is_discrete)
+        except Exception:
+            pass
+        # Process button moved to Temp Coefs tab; keep this hidden to avoid confusion.
+        try:
+            if hasattr(self, "btn_process_test"):
+                self.btn_process_test.setVisible(False)
+        except Exception:
+            pass
         # Reset add button enabled state whenever mode changes
         if not is_discrete:
             try:
@@ -451,6 +264,13 @@ class LiveTestingPanel(QtWidgets.QWidget):
             self.btn_discrete_add.setEnabled(bool(has_selection and self._is_discrete_temp_session()))
         except Exception:
             pass
+        # Populate Session Info pane from test_meta.json when in discrete mode
+        try:
+            if self._is_discrete_temp_session():
+                key = str(current.data(QtCore.Qt.UserRole)) if (has_selection and current is not None) else ""
+                self._meta_box.apply_discrete_test_meta(key)
+        except Exception:
+            pass
         # Emit selection for Temps-in-Test view
         try:
             if has_selection and current is not None:
@@ -463,109 +283,26 @@ class LiveTestingPanel(QtWidgets.QWidget):
         except Exception:
             pass
 
+    def _apply_discrete_test_meta(self, key: str) -> None:
+        # Backwards-compatible wrapper
+        self._meta_box.apply_discrete_test_meta(key)
+
     def _emit_discrete_add(self) -> None:
-        # Emit currently selected test key (if any)
-        try:
-            item = self.discrete_test_list.currentItem()
-            if item is None:
-                return
-            key = item.data(QtCore.Qt.UserRole)
-            if key:
-                self.discrete_add_requested.emit(str(key))
-        except Exception:
-            pass
+        key = self._controls_box.current_discrete_test_key()
+        if key:
+            self.discrete_add_requested.emit(str(key))
 
     def set_discrete_tests(self, tests: list[tuple[str, str, str]]) -> None:
-        """Populate discrete test picker with (label, date, key) triples."""
-        # Cache full list for filtering
-        self._all_discrete_tests = list(tests or [])
-
-        # Refresh plate filter options based on available device ids
+        self._controls_box.set_discrete_tests(tests)
+        # Refresh add button enabled state
         try:
-            device_ids: set[str] = set()
-            base_dir = "discrete_temp_testing"
-            for _label, _date_str, key in self._all_discrete_tests:
-                path = str(key)
-                try:
-                    rel = os.path.relpath(path, base_dir)
-                except Exception:
-                    rel = path
-                parts = rel.split(os.sep)
-                if parts and parts[0]:
-                    device_ids.add(parts[0])
-            self.discrete_plate_filter.blockSignals(True)
-            self.discrete_plate_filter.clear()
-            self.discrete_plate_filter.addItem("All plates")
-            for did in sorted(device_ids):
-                self.discrete_plate_filter.addItem(did)
+            current = self.discrete_test_list.currentItem()
         except Exception:
-            pass
-        finally:
-            try:
-                self.discrete_plate_filter.blockSignals(False)
-            except Exception:
-                pass
-
-        # Apply filters to populate the list widget
-        self._apply_discrete_filters()
+            current = None
+        self._on_discrete_test_changed(current, None)
 
     def _apply_discrete_filters(self) -> None:
-        """Re-populate discrete_test_list based on current filter selections."""
-        try:
-            self.discrete_test_list.blockSignals(True)
-        except Exception:
-            pass
-        try:
-            self.discrete_test_list.clear()
-            base_dir = "discrete_temp_testing"
-            try:
-                type_sel = str(self.discrete_type_filter.currentText() or "All types")
-            except Exception:
-                type_sel = "All types"
-            try:
-                plate_sel = str(self.discrete_plate_filter.currentText() or "All plates")
-            except Exception:
-                plate_sel = "All plates"
-
-            for label, date_str, key in self._all_discrete_tests:
-                path = str(key)
-                # Derive device id and type from path
-                try:
-                    rel = os.path.relpath(path, base_dir)
-                except Exception:
-                    rel = path
-                parts = rel.split(os.sep)
-                device_id = parts[0] if parts else ""
-                dev_type = ""
-                if device_id:
-                    if "." in device_id:
-                        dev_type = device_id.split(".", 1)[0]
-                    else:
-                        dev_type = device_id[:2]
-
-                # Apply filters
-                if type_sel != "All types" and dev_type != type_sel:
-                    continue
-                if plate_sel != "All plates" and device_id != plate_sel:
-                    continue
-
-                item = QtWidgets.QListWidgetItem()
-                try:
-                    item.setData(QtCore.Qt.UserRole, path)
-                    item.setData(QtCore.Qt.UserRole + 1, str(label))
-                    item.setData(QtCore.Qt.UserRole + 2, str(date_str))
-                    item.setData(QtCore.Qt.UserRole + 3, device_id)
-                except Exception:
-                    pass
-                self.discrete_test_list.addItem(item)
-        except Exception:
-            pass
-        finally:
-            try:
-                self.discrete_test_list.blockSignals(False)
-            except Exception:
-                pass
-        # After repopulating, recompute add button enabled state
+        self._controls_box.apply_discrete_filters()
         try:
             current = self.discrete_test_list.currentItem()
         except Exception:
@@ -617,18 +354,7 @@ class LiveTestingPanel(QtWidgets.QWidget):
     def set_stage_progress(self, stage_text: str, completed_cells: int, total_cells: int) -> None:
         self.stage_label.setText(stage_text)
         self.progress_label.setText(f"{completed_cells} / {total_cells} cells")
-        # Update guide text
-        try:
-            self.guide_label.setText(
-                f"{stage_text}\n\n"
-                "Instructions:\n"
-                "- Place the specified load in any cell.\n"
-                "- Keep COP inside the cell until stable (≈2s, Fz steady).\n"
-                "- When captured, the cell will colorize. Move to next cell.\n"
-                "- After all cells, follow prompts for the next stage/location."
-            )
-        except Exception:
-            pass
+        self._guide_box.set_stage_progress(stage_text, completed_cells, total_cells)
 
     def set_next_stage_enabled(self, enabled: bool) -> None:
         try:
@@ -647,61 +373,16 @@ class LiveTestingPanel(QtWidgets.QWidget):
         return
 
     def set_current_model(self, model_text: Optional[str]) -> None:
-        self.lbl_current_model.setText((model_text or "").strip() or "—")
-        # Clear transient status when model label changes externally
-        self.set_model_status("")
+        self._model_box.set_current_model(model_text)
 
     def set_model_list(self, models: list[dict]) -> None:
-        # Populate the list with modelId and optional location annotation
-        try:
-            self.model_list.clear()
-            for m in (models or []):
-                try:
-                    mid = str((m or {}).get("modelId") or (m or {}).get("model_id") or "").strip()
-                except Exception:
-                    mid = ""
-                if not mid:
-                    continue
-                loc = str((m or {}).get("location") or "").strip()
-                # Format package date if present (ms or s) as MM.DD.YYYY
-                date_text = ""
-                try:
-                    import datetime
-                    raw_ts = (m or {}).get("packageDate") or (m or {}).get("package_date")
-                    if raw_ts is not None:
-                        ts = float(raw_ts)
-                        if ts > 1e12:
-                            ts = ts / 1000.0
-                        dt = datetime.datetime.fromtimestamp(ts)
-                        date_text = dt.strftime("%m.%d.%Y")
-                except Exception:
-                    date_text = ""
-                # Build concise label: id (location) • date
-                if loc and date_text:
-                    text = f"{mid}  ({loc}) • {date_text}"
-                elif loc:
-                    text = f"{mid}  ({loc})"
-                elif date_text:
-                    text = f"{mid}  • {date_text}"
-                else:
-                    text = mid
-                item = QtWidgets.QListWidgetItem(text)
-                # Store raw id for reliable retrieval
-                item.setData(QtCore.Qt.UserRole, mid)
-                self.model_list.addItem(item)
-        except Exception:
-            pass
+        self._model_box.set_model_list(models)
 
     def set_model_status(self, text: Optional[str]) -> None:
-        self.lbl_model_status.setText((text or "").strip())
+        self._model_box.set_model_status(text)
 
     def set_model_controls_enabled(self, enabled: bool) -> None:
-        try:
-            self.btn_activate.setEnabled(bool(enabled))
-            self.btn_deactivate.setEnabled(bool(enabled))
-            self.btn_package_model.setEnabled(bool(enabled))
-        except Exception:
-            pass
+        self._model_box.set_model_controls_enabled(enabled)
 
     def set_debug_status(self, text: str | None) -> None:
         # Debug status deprecated in favor of Model panel; keep as no-op to avoid breaking call sites
@@ -709,41 +390,7 @@ class LiveTestingPanel(QtWidgets.QWidget):
 
     # Temps-in-Test tab helpers
     def set_temps_in_test(self, includes_baseline: bool | None, temps_f: list[float]) -> None:
-        """Update the Temps in Test tab with baseline indicator and temperature list."""
-        try:
-            if includes_baseline is None:
-                # No selection: clear icon and style
-                self.lbl_temps_baseline_icon.setText("")
-                self.lbl_temps_baseline_icon.setStyleSheet("")
-            elif includes_baseline:
-                self.lbl_temps_baseline_icon.setText("✔")
-                self.lbl_temps_baseline_icon.setStyleSheet("color: #3CB371;")  # green
-            else:
-                self.lbl_temps_baseline_icon.setText("✖")
-                self.lbl_temps_baseline_icon.setStyleSheet("color: #CC4444;")  # red
-        except Exception:
-            pass
-        # Enable Plot button only when a test is selected and there is at least one session (including baseline-only)
-        try:
-            has_data = includes_baseline is True or bool(temps_f)
-            self.btn_plot_test.setEnabled(bool(has_data))
-            self.btn_process_test.setEnabled(bool(has_data))
-        except Exception:
-            self.btn_plot_test.setEnabled(False)
-            try:
-                self.btn_process_test.setEnabled(False)
-            except Exception:
-                pass
-        try:
-            self.temps_list.clear()
-            for t in temps_f or []:
-                try:
-                    label = f"{float(t):.1f} °F"
-                except Exception:
-                    label = str(t)
-                self.temps_list.addItem(label)
-        except Exception:
-            pass
+        self._temps_box.set_temps_in_test(includes_baseline, temps_f)
 
     # No stage selector UI anymore; navigation is via Previous/Next buttons
 
@@ -769,39 +416,20 @@ class LiveTestingPanel(QtWidgets.QWidget):
 
     # --- Calibration Heatmap helpers ---
     def set_calibration_enabled(self, enabled: bool) -> None:
-        try:
-            self.btn_load_45v.setEnabled(bool(enabled))
-            # Generate only enabled when a file is loaded; default off here
-        except Exception:
-            pass
+        self._cal_box.set_calibration_enabled(enabled)
 
     def set_calibration_status(self, text: Optional[str]) -> None:
-        try:
-            self.lbl_cal_status.setText((text or "").strip() or "—")
-        except Exception:
-            pass
+        self._cal_box.set_calibration_status(text)
 
     def set_generate_enabled(self, enabled: bool) -> None:
-        try:
-            self.btn_generate_heatmap.setEnabled(bool(enabled))
-        except Exception:
-            pass
+        self._cal_box.set_generate_enabled(enabled)
 
     # --- Heatmap list API ---
     def add_heatmap_entry(self, label: str, key: str, count: int) -> None:
-        try:
-            text = f"{label}  ({count})"
-            item = QtWidgets.QListWidgetItem(text)
-            item.setData(QtCore.Qt.UserRole, str(key))
-            self.heatmap_list.addItem(item)
-        except Exception:
-            pass
+        self._cal_box.add_heatmap_entry(label, key, count)
 
     def clear_heatmap_entries(self) -> None:
-        try:
-            self.heatmap_list.clear()
-        except Exception:
-            pass
+        self._cal_box.clear_heatmap_entries()
 
     def _on_heatmap_item_changed(self, current: Optional[QtWidgets.QListWidgetItem], _previous: Optional[QtWidgets.QListWidgetItem]) -> None:
         if current is None:
@@ -814,42 +442,10 @@ class LiveTestingPanel(QtWidgets.QWidget):
             pass
 
     def set_heatmap_metrics(self, metrics: dict, is_all: bool) -> None:
-        try:
-            # metrics keys:
-            # count, mean_err, median_err, max_err (N)
-            # mean_pct, median_pct, max_pct, signed_bias_pct (%)
-            count = int(metrics.get("count", 0))
-            # Column 1 (N) values
-            if not is_all:
-                n_vals = [
-                    str(count),
-                    f"{float(metrics.get('mean_err', 0.0)):.1f}",
-                    f"{float(metrics.get('median_err', 0.0)):.1f}",
-                    f"{float(metrics.get('max_err', 0.0)):.1f}",
-                    "—",  # Bias has no N
-                ]
-            else:
-                n_vals = [str(count), "—", "—", "—", "—"]
-            # Column 2 (%) values
-            pct_vals = [
-                "—",
-                f"{float(metrics.get('mean_pct', 0.0)):.1f}",
-                f"{float(metrics.get('median_pct', 0.0)):.1f}",
-                f"{float(metrics.get('max_pct', 0.0)):.1f}",
-                f"{float(metrics.get('signed_bias_pct', 0.0)):.1f}",
-            ]
-            for i, v in enumerate(n_vals):
-                self.metrics_table.setItem(i, 1, QtWidgets.QTableWidgetItem(v))
-            for i, v in enumerate(pct_vals):
-                self.metrics_table.setItem(i, 2, QtWidgets.QTableWidgetItem(v))
-        except Exception:
-            pass
+        self._cal_box.set_heatmap_metrics(metrics, is_all)
 
     def current_heatmap_view(self) -> str:
-        try:
-            return str(self.heatmap_view_combo.currentText() or "Heatmap")
-        except Exception:
-            return "Heatmap"
+        return self._cal_box.current_heatmap_view()
 
     def _on_start_clicked(self):
         if self.controller:

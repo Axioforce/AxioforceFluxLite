@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Sequence, Tuple
+from typing import Iterable, List, Sequence, Tuple, Literal
 
 
 Point = Tuple[float, float]  # (temperature_f, value)
@@ -127,19 +127,16 @@ def compute_baseline_anchor(
         return BaselineAnchor(t0=float(pts[0][0]), y0=float(pts[0][1]), method="first", used_baseline_band=False)
 
 
-def estimate_coef(points: Sequence[Point], anchor: BaselineAnchor) -> tuple[float, int] | None:
+def estimate_slope(points: Sequence[Point], anchor: BaselineAnchor) -> tuple[float, int] | None:
     """
-    Estimate coefficient C using an anchored least-squares slope:
+    Estimate anchored least-squares slope m in raw units:
 
       m = sum((ti - T0) * (yi - Y0)) / sum((ti - T0)^2)
-      C = m / Y0
 
-    Returns (C, n_points_used) or None if Y0==0 or denominator==0.
+    Returns (m, n_points_used) or None if denominator==0.
     """
     t0 = float(anchor.t0)
     y0 = float(anchor.y0)
-    if y0 == 0.0:
-        return None
 
     num = 0.0
     den = 0.0
@@ -160,20 +157,89 @@ def estimate_coef(points: Sequence[Point], anchor: BaselineAnchor) -> tuple[floa
         return None
 
     m = num / den
-    c = m / y0
+    if m == m:  # not NaN
+        return float(m), int(n)
+    return None
+
+
+def _rms(vals: Sequence[float]) -> float:
+    try:
+        if not vals:
+            return 0.0
+        s2 = 0.0
+        n = 0
+        for v in vals:
+            try:
+                fv = float(v)
+            except Exception:
+                continue
+            s2 += fv * fv
+            n += 1
+        if n <= 0:
+            return 0.0
+        return float((s2 / float(n)) ** 0.5)
+    except Exception:
+        return 0.0
+
+
+def estimate_coef(
+    points: Sequence[Point],
+    anchor: BaselineAnchor,
+    *,
+    normalization: Literal["y0", "rms_baseline"] = "y0",
+    baseline_low_f: float = 74.0,
+    baseline_high_f: float = 78.0,
+) -> tuple[float, int] | None:
+    """
+    Estimate coefficient C (1/°F) from the anchored slope m:
+
+      m = sum((ti - T0)(yi - Y0)) / sum((ti - T0)^2)
+
+    Normalization options:
+      - "y0":           C = -(m / Y0)        (signed baseline normalization; good for Z)
+      - "rms_baseline": C = -(m / S)         (S is RMS magnitude of baseline-band y's; robust for X/Y)
+
+    Returns (C, n_points_used) or None when denominator is unusable.
+    """
+    est = estimate_slope(points, anchor)
+    if not est:
+        return None
+    m, n = est
+
+    # Choose normalization scale
+    scale = 0.0
+    if normalization == "rms_baseline":
+        baseline_ys = [float(y) for (t, y) in points if baseline_low_f <= float(t) <= baseline_high_f]
+        scale = _rms(baseline_ys)
+        if scale == 0.0:
+            # Fallback: magnitude of Y0, then RMS of all y
+            scale = abs(float(anchor.y0)) or _rms([float(y) for (_t, y) in points])
+    else:
+        scale = float(anchor.y0)
+
+    if scale == 0.0:
+        return None
+
+    # Sign convention: backend expects the opposite sign for the scalar coefficients.
+    c = -(float(m) / float(scale))
     if c == c:  # not NaN
         return float(c), int(n)
     return None
 
 
-def estimate_coefs(points: Sequence[Point], anchor: BaselineAnchor) -> List[float]:
+def estimate_coefs(
+    points: Sequence[Point],
+    anchor: BaselineAnchor,
+    *,
+    normalization: Literal["y0", "rms_baseline"] = "y0",
+) -> List[float]:
     """
     Back-compat helper returning a single anchored-LS coefficient as a list.
 
     Callers that used to summarize(mean) of per-point coefs can keep working,
     while the underlying math matches the anchored least-squares definition.
     """
-    est = estimate_coef(points, anchor)
+    est = estimate_coef(points, anchor, normalization=normalization)
     if not est:
         return []
     c, _n = est

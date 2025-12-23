@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 import os
 import csv
 import io
@@ -9,9 +9,39 @@ import json
 from PySide6 import QtCore, QtWidgets, QtGui
 
 from ... import config
-from ...services.backend_csv_processor import process_csv_via_backend
-from ..discrete_temp.coef_math import compute_baseline_anchor, estimate_coefs, summarize, coef_line_points
+from ...app_services.discrete_temp_processing_service import DiscreteTempProcessingService
+from ..discrete_temp.coef_math import compute_baseline_anchor, estimate_coefs, estimate_slope, summarize, coef_line_points
+from ..discrete_temp.tuning import tuning_folder_for_test
+from ..discrete_temp.tuning_leaderboard import load_leaderboard_and_exploration
 from .temp_coef_widget import TempCoefWidget
+
+
+class _LeaderboardWorker(QtCore.QThread):
+    ready = QtCore.Signal(str, object, object)  # base_dir, rows, stats
+
+    def __init__(self, *, parent: QtCore.QObject, base_dir: str, limit: int) -> None:
+        super().__init__(parent)
+        self._base_dir = str(base_dir or "")
+        self._limit = int(limit)
+
+    def run(self) -> None:
+        rows: list[dict] = []
+        stats: dict = {}
+        try:
+            if self.isInterruptionRequested():
+                return
+            rows, stats = load_leaderboard_and_exploration(
+                self._base_dir, limit=int(self._limit), x_max=0.005, y_max=0.005, z_max=0.008, step=0.001
+            )
+            if self.isInterruptionRequested():
+                return
+        except Exception:
+            rows = []
+            stats = {}
+        try:
+            self.ready.emit(self._base_dir, rows, stats)
+        except Exception:
+            pass
 
 
 class TempPlotWidget(QtWidgets.QWidget):
@@ -23,8 +53,6 @@ class TempPlotWidget(QtWidgets.QWidget):
       - Plot raw `discrete_temp_session.csv` values
       - Optionally overlay backend-NN processed traces (temp correction off/on)
     """
-
-    _processed_ready = QtCore.Signal(object)  # internal: emitted by worker on completion
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None, hardware_service: object | None = None) -> None:
         super().__init__(parent)
@@ -38,9 +66,27 @@ class TempPlotWidget(QtWidgets.QWidget):
         self._nn_on_csv_path: str = ""
         self._show_nn_off: bool = True
         self._show_nn_on: bool = True
-        self._worker: Optional[QtCore.QThread] = None
+        self._tuned_best_csv_path: str = ""
+        self._show_tuned_best: bool = False
+        # Background processing/tuning owned by app-service (keeps orchestration out of widget)
+        self._proc = DiscreteTempProcessingService(hardware=self._hardware, parent=self)
         self._coef_widget: Optional[TempCoefWidget] = None
         self._show_coef_line: bool = False
+        self._best_tuned_coefs: Optional[Dict[str, float]] = None
+        self._best_tuned_score: Optional[float] = None
+        self._leaderboard_worker: _LeaderboardWorker | None = None
+        self._leaderboard_base_dir: str = ""
+        self._exploration_stats: dict = {}
+
+        # UI throttle (prevents freezing when many run_complete events arrive quickly)
+        self._pending_leaderboard_rows: list[dict] | None = None
+        self._pending_leaderboard_select_first: bool = False
+        self._pending_preview_csv: str | None = None
+        self._pending_status_text: str | None = None
+        self._ui_throttle_timer = QtCore.QTimer(self)
+        self._ui_throttle_timer.setSingleShot(True)
+        self._ui_throttle_timer.setInterval(150)
+        self._ui_throttle_timer.timeout.connect(self._flush_throttled_ui)
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
@@ -99,6 +145,14 @@ class TempPlotWidget(QtWidgets.QWidget):
             lbl.setAlignment(QtCore.Qt.AlignCenter)
             root.addWidget(lbl, 1)
 
+        # Wire processing callbacks
+        try:
+            self._proc.processed_ready.connect(self._on_processed_ready)  # type: ignore[arg-type]
+            self._proc.tune_progress.connect(self._on_tune_progress)  # type: ignore[arg-type]
+            self._proc.tune_ready.connect(self._on_tune_ready)  # type: ignore[arg-type]
+        except Exception:
+            pass
+
         # Controls row for phase / sensor / axis selection
         ctrl_row = QtWidgets.QHBoxLayout()
         ctrl_row.setContentsMargins(0, 0, 0, 0)
@@ -136,6 +190,11 @@ class TempPlotWidget(QtWidgets.QWidget):
         self.chk_nn_on.setEnabled(False)
         ctrl_row.addWidget(self.chk_nn_off)
         ctrl_row.addWidget(self.chk_nn_on)
+        # Tuned overlay toggle (enabled when tuning/best.json exists)
+        self.chk_tuned_best = QtWidgets.QCheckBox("Tuned Best")
+        self.chk_tuned_best.setChecked(False)
+        self.chk_tuned_best.setEnabled(False)
+        ctrl_row.addWidget(self.chk_tuned_best)
         ctrl_row.addStretch(1)
         root.addLayout(ctrl_row)
 
@@ -146,10 +205,11 @@ class TempPlotWidget(QtWidgets.QWidget):
             self.axis_combo.currentIndexChanged.connect(lambda _i: self.plot_current())
             self.chk_nn_off.toggled.connect(self._on_toggle_nn_off)
             self.chk_nn_on.toggled.connect(self._on_toggle_nn_on)
+            self.chk_tuned_best.toggled.connect(self._on_toggle_tuned_best)
         except Exception:
             pass
 
-        self._processed_ready.connect(self._on_processed_ready)
+        # (Legacy internal signals removed) processing/tuning signals are emitted by self._proc
 
     # --- Public API ---------------------------------------------------------
 
@@ -159,6 +219,166 @@ class TempPlotWidget(QtWidgets.QWidget):
             widget.toggles_changed.connect(self._on_coef_toggles_changed)
         except Exception:
             pass
+        try:
+            widget.tuned_process_requested.connect(self._on_tuned_process_requested)
+        except Exception:
+            pass
+        try:
+            widget.precise_tune_requested.connect(self._on_precise_tune_requested)
+        except Exception:
+            pass
+        try:
+            widget.stop_tuning_requested.connect(self._on_stop_tuning_requested)
+        except Exception:
+            pass
+        try:
+            widget.tuned_run_selected.connect(self._on_tuned_run_selected)
+        except Exception:
+            pass
+        try:
+            widget.generated_process_requested.connect(self.process_generated_current)
+        except Exception:
+            pass
+
+    def _refresh_tuning_leaderboard(self, base_dir: str) -> None:
+        if self._coef_widget is None:
+            return
+        base_dir = str(base_dir or "")
+        self._leaderboard_base_dir = base_dir
+
+        # Cancel any in-flight leaderboard load so switching tests stays smooth.
+        try:
+            if self._leaderboard_worker is not None and self._leaderboard_worker.isRunning():
+                self._leaderboard_worker.requestInterruption()
+        except Exception:
+            pass
+
+        w = _LeaderboardWorker(parent=self, base_dir=base_dir, limit=10)
+        self._leaderboard_worker = w
+
+        def _done(bd: str, rows_obj: object, stats_obj: object) -> None:
+            # Only apply if this result matches the currently-selected test folder.
+            if str(bd or "") != str(self._leaderboard_base_dir or ""):
+                return
+            if self._coef_widget is None:
+                return
+            try:
+                rows = list(rows_obj or [])
+            except Exception:
+                rows = []
+            try:
+                stats = dict(stats_obj or {})
+            except Exception:
+                stats = {}
+            self._exploration_stats = dict(stats or {})
+            try:
+                self._coef_widget.set_tuning_leaderboard(rows, select_first=True)
+            except Exception:
+                pass
+            # Seed the live leaderboard cache from ALL historical runs for this test folder,
+            # so live updates merge into "best of all time" not just "this session".
+            try:
+                self._live_top_runs = list(rows or [])  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            try:
+                if rows:
+                    self._last_live_best_score = float((rows[0] or {}).get("score_total") or float("inf"))  # type: ignore[attr-defined]
+                else:
+                    self._last_live_best_score = float("inf")  # type: ignore[attr-defined]
+            except Exception:
+                try:
+                    self._last_live_best_score = float("inf")  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+            # Default preview: if we have runs, show the best one automatically.
+            try:
+                if rows:
+                    self._on_tuned_run_selected(rows[0])
+            except Exception:
+                pass
+
+            # Populate "exploration so far" into the same progress UI (before tuning starts).
+            # This is computed off the coarse grid using pair_id tags when available; legacy runs
+            # still contribute to unique_triples but not pair coverage.
+            try:
+                if not getattr(self, "_tuning_active", False):
+                    pairs_total = int(stats.get("pairs_total") or 0)
+                    pairs_done = int(stats.get("pairs_explored_total") or 0)
+                    legacy = int(stats.get("legacy_runs_missing_pair_id") or 0)
+                    uniq = int(stats.get("unique_triples") or 0)
+                    if pairs_total > 0 and pairs_done > 0:
+                        self._coef_widget.set_tuning_progress(pairs_done, pairs_total)
+                        self._coef_widget.set_tuning_status(
+                            f"Explored pairs: {pairs_done}/{pairs_total}  "
+                            f"(XY {int(stats.get('pairs_explored_xy') or 0)}, "
+                            f"XZ {int(stats.get('pairs_explored_xz') or 0)}, "
+                            f"YZ {int(stats.get('pairs_explored_yz') or 0)})  "
+                            f"unique combos={uniq}  legacy(no pair-id)={legacy}"
+                        )
+                    else:
+                        self._coef_widget.set_tuning_progress(0, 1)
+                        self._coef_widget.set_tuning_status(
+                            f"Exploration: unique combos={uniq}  runs={int(stats.get('runs_total_files') or 0)}  "
+                            f"legacy(no pair-id)={legacy}"
+                        )
+            except Exception:
+                pass
+
+        w.ready.connect(_done)
+        w.start()
+
+    def _schedule_ui_update(
+        self,
+        *,
+        leaderboard_rows: list[dict] | None = None,
+        select_first: bool | None = None,
+        preview_csv: str | None = None,
+        status_text: str | None = None,
+    ) -> None:
+        if leaderboard_rows is not None:
+            self._pending_leaderboard_rows = list(leaderboard_rows)
+        if select_first is not None:
+            self._pending_leaderboard_select_first = bool(select_first)
+        if preview_csv is not None:
+            self._pending_preview_csv = str(preview_csv or "")
+        if status_text is not None:
+            self._pending_status_text = str(status_text or "")
+        try:
+            if not self._ui_throttle_timer.isActive():
+                self._ui_throttle_timer.start()
+        except Exception:
+            self._flush_throttled_ui()
+
+    def _flush_throttled_ui(self) -> None:
+        if self._coef_widget is None:
+            return
+        # Apply status first
+        if self._pending_status_text is not None:
+            try:
+                self._coef_widget.set_tuning_status(self._pending_status_text)
+            except Exception:
+                pass
+            self._pending_status_text = None
+
+        # Apply leaderboard update
+        if self._pending_leaderboard_rows is not None:
+            rows = self._pending_leaderboard_rows
+            self._pending_leaderboard_rows = None
+            try:
+                self._coef_widget.set_tuning_leaderboard(rows, select_first=bool(self._pending_leaderboard_select_first))
+            except Exception:
+                pass
+            self._pending_leaderboard_select_first = False
+
+        # Apply preview
+        if self._pending_preview_csv:
+            csv_path = self._pending_preview_csv
+            self._pending_preview_csv = None
+            try:
+                self._on_tuned_run_selected({"output_csv": csv_path})
+            except Exception:
+                pass
 
     @QtCore.Slot(str)
     def set_test_path(self, path: str) -> None:
@@ -171,6 +391,7 @@ class TempPlotWidget(QtWidgets.QWidget):
             self._measurement_csv_path = ""
             self._nn_off_csv_path = ""
             self._nn_on_csv_path = ""
+            self._tuned_best_csv_path = ""
             try:
                 self.chk_nn_off.blockSignals(True)
                 self.chk_nn_on.blockSignals(True)
@@ -180,6 +401,7 @@ class TempPlotWidget(QtWidgets.QWidget):
                 self.chk_nn_on.setChecked(False)
                 self._show_nn_off = False
                 self._show_nn_on = False
+                self._show_tuned_best = False
             finally:
                 try:
                     self.chk_nn_off.blockSignals(False)
@@ -191,6 +413,17 @@ class TempPlotWidget(QtWidgets.QWidget):
                     self._plot_widget.clear()
                 except Exception:
                     pass
+            try:
+                if self._coef_widget is not None:
+                    self._coef_widget.set_tuning_leaderboard([], select_first=False)
+            except Exception:
+                pass
+            # Cancel any in-flight leaderboard work
+            try:
+                if self._leaderboard_worker is not None and self._leaderboard_worker.isRunning():
+                    self._leaderboard_worker.requestInterruption()
+            except Exception:
+                pass
 
         if not p:
             _clear()
@@ -236,15 +469,48 @@ class TempPlotWidget(QtWidgets.QWidget):
                 self._nn_off_csv_path = nn_off if os.path.isfile(nn_off) else ""
                 self._nn_on_csv_path = nn_on if (nn_on and os.path.isfile(nn_on)) else ""
 
+                # Probe for tuned best output (tuning/best.json)
+                try:
+                    tuning_dir = os.path.join(base_dir, "tuning")
+                    best_json = os.path.join(tuning_dir, "best.json")
+                    best_out = ""
+                    best_coeffs = None
+                    if os.path.isfile(best_json):
+                        with open(best_json, "r", encoding="utf-8") as f:
+                            data = json.load(f) or {}
+                        best_out = str((data or {}).get("best_output_csv") or "").strip()
+                        best_coeffs = (data or {}).get("best_coeffs")
+                    self._tuned_best_csv_path = best_out if (best_out and os.path.isfile(best_out)) else ""
+                    # Keep best tuned coefs around for Process button defaulting
+                    try:
+                        if isinstance(best_coeffs, dict):
+                            self._best_tuned_coefs = dict(best_coeffs)
+                            if self._coef_widget is not None:
+                                self._coef_widget.set_best_tuned_coefs(self._best_tuned_coefs)
+                    except Exception:
+                        pass
+                    try:
+                        self._refresh_tuning_leaderboard(base_dir)
+                    except Exception:
+                        pass
+                except Exception:
+                    self._tuned_best_csv_path = ""
+
                 # Apply enable/checked state based on what we found.
                 try:
                     self.chk_nn_off.blockSignals(True)
                     self.chk_nn_on.blockSignals(True)
+                    try:
+                        self.chk_tuned_best.blockSignals(True)
+                    except Exception:
+                        pass
 
                     has_off = bool(self._nn_off_csv_path)
                     has_on = bool(self._nn_on_csv_path)
                     self.chk_nn_off.setEnabled(has_off)
                     self.chk_nn_on.setEnabled(has_on)
+                    has_tuned = bool(self._tuned_best_csv_path)
+                    self.chk_tuned_best.setEnabled(has_tuned)
 
                     # If a file is missing, force it off.
                     if not has_off:
@@ -261,10 +527,22 @@ class TempPlotWidget(QtWidgets.QWidget):
                     else:
                         self.chk_nn_on.setChecked(True)
                         self._show_nn_on = True
+
+                    if not has_tuned:
+                        self.chk_tuned_best.setChecked(False)
+                        self._show_tuned_best = False
+                    else:
+                        # Default off (since it's a "best run" overlay)
+                        self.chk_tuned_best.setChecked(False)
+                        self._show_tuned_best = False
                 finally:
                     try:
                         self.chk_nn_off.blockSignals(False)
                         self.chk_nn_on.blockSignals(False)
+                        try:
+                            self.chk_tuned_best.blockSignals(False)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
             except Exception:
@@ -283,11 +561,11 @@ class TempPlotWidget(QtWidgets.QWidget):
             self.plot_current()
 
     @QtCore.Slot()
-    def process_current(self) -> None:
+    def process_generated_current(self) -> None:
         """
         Process the currently selected discrete_temp_session.csv through the backend NN:
-        - once with temp correction off
-        - once with scalar coefficients on (X/Y/Z)
+        - create NN off if it doesn't already exist in the test folder
+        - always create NN corrected using the generated "All" coefficients
         Then overlay the processed traces on the plot.
         """
         if not self._csv_path:
@@ -320,7 +598,7 @@ class TempPlotWidget(QtWidgets.QWidget):
         if not device_id:
             return
 
-        # Use per-file, Sum-sensor "All" coefficients for processing (preferred),
+        # Use per-file, Sum-sensor "All" coefficients (generated),
         # falling back to config defaults if anything is missing.
         defaults = {"x": float(config.DISCRETE_TEMP_COEF_X), "y": float(config.DISCRETE_TEMP_COEF_Y), "z": float(config.DISCRETE_TEMP_COEF_Z)}
         try:
@@ -348,61 +626,24 @@ class TempPlotWidget(QtWidgets.QWidget):
         coef_tag = "_".join([_fmt(coeffs["x"]), _fmt(coeffs["y"]), _fmt(coeffs["z"])])
         out_off = "discrete_temp_session__nn_off.csv"
         out_on = f"discrete_temp_session__nn_scalar_{coef_tag}.csv"
+        self._proc.process_generated(
+            csv_path=self._csv_path,
+            device_id=device_id,
+            output_dir=base_dir,
+            coeffs=coeffs,
+            off_filename=out_off,
+            on_filename=out_on,
+            room_temp_f=76.0,
+            timeout_s=300,
+        )
 
-        class _Worker(QtCore.QThread):
-            def __init__(self, parent: QtCore.QObject):
-                super().__init__(parent)
-                self.err: Optional[str] = None
-                self.off_path: str = ""
-                self.on_path: str = ""
-
-            def run(self) -> None:
-                try:
-                    self.off_path = process_csv_via_backend(
-                        input_csv_path=self.parent()._csv_path,  # type: ignore[attr-defined]
-                        device_id=device_id,
-                        output_folder=base_dir,
-                        output_filename=out_off,
-                        use_temperature_correction=False,
-                        room_temp_f=76.0,
-                        mode="scalar",
-                        temperature_coefficients=None,
-                        sanitize_header=True,
-                        hardware=self.parent()._hardware,  # type: ignore[attr-defined]
-                        timeout_s=300,
-                    )
-                    self.on_path = process_csv_via_backend(
-                        input_csv_path=self.parent()._csv_path,  # type: ignore[attr-defined]
-                        device_id=device_id,
-                        output_folder=base_dir,
-                        output_filename=out_on,
-                        use_temperature_correction=True,
-                        room_temp_f=76.0,
-                        mode="scalar",
-                        temperature_coefficients=coeffs,
-                        sanitize_header=True,
-                        hardware=self.parent()._hardware,  # type: ignore[attr-defined]
-                        timeout_s=300,
-                    )
-                except Exception as e:
-                    self.err = str(e)
-
-        # Cancel prior worker if still running
-        try:
-            if self._worker is not None and self._worker.isRunning():
-                self._worker.requestInterruption()
-        except Exception:
-            pass
-
-        w = _Worker(self)
-        self._worker = w
-
-        def _done():
-            payload = {"error": getattr(w, "err", None), "off": getattr(w, "off_path", ""), "on": getattr(w, "on_path", "")}
-            self._processed_ready.emit(payload)
-
-        w.finished.connect(_done)
-        w.start()
+    @QtCore.Slot()
+    def process_current(self) -> None:
+        """
+        Backwards-compatible entrypoint (older wiring).
+        Default to generated processing.
+        """
+        self.process_generated_current()
 
     @QtCore.Slot()
     def plot_current(self) -> None:
@@ -488,8 +729,12 @@ class TempPlotWidget(QtWidgets.QWidget):
             nn_off_xs, nn_off_ys = self._read_points(self._nn_off_csv_path, phase_name, col_name)
         if self._nn_on_csv_path and self._show_nn_on:
             nn_on_xs, nn_on_ys = self._read_points(self._nn_on_csv_path, phase_name, col_name)
+        tuned_xs: List[float] = []
+        tuned_ys: List[float] = []
+        if self._tuned_best_csv_path and self._show_tuned_best:
+            tuned_xs, tuned_ys = self._read_points(self._tuned_best_csv_path, phase_name, col_name)
 
-        if not xs and not nn_off_xs and not nn_on_xs:
+        if not xs and not nn_off_xs and not nn_on_xs and not tuned_xs:
             return
 
         try:
@@ -559,14 +804,23 @@ class TempPlotWidget(QtWidgets.QWidget):
                 if xs and ys and self._show_coef_line:
                     pts = list(zip(xs, ys))
                     anchor = compute_baseline_anchor(pts)
-                    coefs = estimate_coefs(pts, anchor)
+                    norm = "rms_baseline" if axis_label in ("x", "y") else "y0"
+                    coefs = estimate_coefs(pts, anchor, normalization=norm)
                     stats = summarize(coefs)
                     if stats.n > 0:
                         t_min = min(xs)
                         t_max = max(xs)
-                        line_pts = coef_line_points(anchor=anchor, coef=stats.mean, t_values=[t_min, anchor.t0, t_max])
-                        cx = [p[0] for p in line_pts]
-                        cy = [p[1] for p in line_pts]
+                        # Robust overlay: plot the anchored least-squares slope in raw units directly:
+                        #   y(t) = Y0 + m * (t - T0)
+                        # Compute m directly (avoids any normalization/sign convention issues).
+                        t0 = float(anchor.t0)
+                        y0 = float(anchor.y0)
+                        est_m = estimate_slope(pts, anchor)
+                        if not est_m:
+                            raise ValueError("no_slope")
+                        m = float(est_m[0])
+                        cx = [float(t_min), float(t0), float(t_max)]
+                        cy = [y0 + m * (x - t0) for x in cx]
                         self._plot_widget.plot(  # type: ignore[attr-defined]
                             cx,
                             cy,
@@ -626,7 +880,24 @@ class TempPlotWidget(QtWidgets.QWidget):
                     except Exception:
                         pass
 
-                # Autoscale NN viewbox independently (Y only)
+                # Tuned best overlay (purple)
+                if tuned_xs and tuned_ys:
+                    show_nn_axis = True
+                    try:
+                        c = self._pg.PlotDataItem(  # type: ignore[attr-defined]
+                            tuned_xs,
+                            tuned_ys,
+                            pen=self._pg.mkPen(color=(200, 120, 255), width=2),
+                            symbol="d",
+                            symbolBrush=(200, 120, 255),
+                            symbolSize=7,
+                        )
+                        self._nn_viewbox.addItem(c)
+                        self._nn_curves.append(c)
+                    except Exception:
+                        pass
+
+                # Autoscale NN viewbox independently (Y only) AFTER adding all overlays (incl tuned)
                 try:
                     if show_nn_axis:
                         self._nn_viewbox.enableAutoRange(axis=self._pg.ViewBox.YAxis, enable=True)
@@ -646,6 +917,11 @@ class TempPlotWidget(QtWidgets.QWidget):
             try:
                 if mxs:
                     x_for_range.extend(list(mxs))
+            except Exception:
+                pass
+            try:
+                if tuned_xs:
+                    x_for_range.extend(list(tuned_xs))
             except Exception:
                 pass
             try:
@@ -716,7 +992,8 @@ class TempPlotWidget(QtWidgets.QWidget):
                 xs, ys = self._read_points(csv_path, ph, f"sum-{ax}")
                 pts = list(zip(xs, ys))
                 anchor = compute_baseline_anchor(pts)
-                stats = summarize(estimate_coefs(pts, anchor))
+                norm = "rms_baseline" if ax in ("x", "y") else "y0"
+                stats = summarize(estimate_coefs(pts, anchor, normalization=norm))
                 out[ph][ax] = float(stats.mean) if stats.n else 0.0
 
         # "All" is the simple average of phase means: (45lb + bodyweight) / 2 per axis.
@@ -758,7 +1035,8 @@ class TempPlotWidget(QtWidgets.QWidget):
         xs, ys = self._read_points(self._csv_path, phase_name, f"{prefix}-{axis_label}")
         pts = list(zip(xs, ys))
         anchor = compute_baseline_anchor(pts)
-        stats = summarize(estimate_coefs(pts, anchor))
+        norm = "rms_baseline" if axis_label in ("x", "y") else "y0"
+        stats = summarize(estimate_coefs(pts, anchor, normalization=norm))
         return {"t0": anchor.t0, "y0": anchor.y0, "coef_mean": stats.mean if stats.n else None, "n": stats.n}
 
     def _on_coef_toggles_changed(self) -> None:
@@ -786,10 +1064,339 @@ class TempPlotWidget(QtWidgets.QWidget):
             pass
         self.plot_current()
 
+    def _resolve_device_id_for_current_test(self) -> str:
+        if not self._csv_path:
+            return ""
+        base_dir = os.path.dirname(self._csv_path)
+        meta_path = os.path.join(base_dir, "test_meta.json")
+        device_id = ""
+        try:
+            if os.path.isfile(meta_path):
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f) or {}
+                device_id = str(meta.get("device_id") or meta.get("deviceId") or "").strip()
+        except Exception:
+            device_id = ""
+
+        if device_id:
+            return device_id
+
+        # Fallback: parse from CSV first data row
+        try:
+            with open(self._csv_path, "r", encoding="utf-8", newline="") as f:
+                header_line = f.readline()
+                header_reader = csv.reader(io.StringIO(header_line))
+                headers = [h.strip() for h in next(header_reader, [])]
+                reader = csv.DictReader(f, fieldnames=headers, skipinitialspace=True)
+                first = next(reader, None) or {}
+                device_id = str(first.get("device_id") or first.get("deviceId") or "").strip()
+        except Exception:
+            device_id = ""
+        return str(device_id or "").strip()
+
+    def _on_tuned_process_requested(self) -> None:
+        if not self._csv_path or self._coef_widget is None:
+            return
+
+        device_id = self._resolve_device_id_for_current_test()
+        if not device_id:
+            self._coef_widget.set_tuning_status("Tuning: missing device_id (no test_meta.json and could not parse CSV).")
+            return
+
+        base_dir = os.path.dirname(self._csv_path)
+        tuning_dir = tuning_folder_for_test(base_dir)
+        runs_dir = os.path.join(tuning_dir, "runs")
+        os.makedirs(runs_dir, exist_ok=True)
+
+        self._coef_widget.set_tuning_enabled(False)
+        self._coef_widget.set_tuning_status("Tuning: starting…")
+        self._tuning_active = True
+        self._coef_widget.set_best_tuned_coefs(None)
+        self._best_tuned_coefs = None
+        self._best_tuned_score = None
+        add_runs = 50
+        try:
+            add_runs = int(self._coef_widget.get_tune_runs())
+        except Exception:
+            add_runs = 50
+        self._proc.tune_best(
+            test_folder=base_dir,
+            csv_path=self._csv_path,
+            device_id=device_id,
+            room_temp_f=76.0,
+            add_runs=int(add_runs),
+            timeout_s=300,
+            sanitize_header=True,
+            baseline_low_f=74.0,
+            baseline_high_f=78.0,
+            x_max=0.005,
+            y_max=0.005,
+            z_max=0.008,
+            step=0.001,
+            stop_after_worse=2,
+            score_axes=("z",),
+            score_weights=(0.0, 0.0, 1.0),
+        )
+
+    def _on_precise_tune_requested(self) -> None:
+        if not self._csv_path or self._coef_widget is None:
+            return
+
+        if not isinstance(self._best_tuned_coefs, dict) or not self._best_tuned_coefs:
+            self._coef_widget.set_tuning_status("Precise Tune: requires a completed best run from normal tuning.")
+            return
+
+        device_id = self._resolve_device_id_for_current_test()
+        if not device_id:
+            self._coef_widget.set_tuning_status("Precise Tune: missing device_id (no test_meta.json and could not parse CSV).")
+            return
+
+        base_dir = os.path.dirname(self._csv_path)
+        self._coef_widget.set_tuning_enabled(False)
+        self._coef_widget.set_tuning_status("Precise Tune: starting…")
+        self._tuning_active = True
+
+        add_runs = 50
+        try:
+            add_runs = int(self._coef_widget.get_tune_runs())
+        except Exception:
+            add_runs = 50
+
+        # Precise tuning: same algorithm, but search within [best .. best+0.001] in steps of 0.0001
+        # and stop after 1 worse score (instead of 2).
+        self._proc.tune_best(
+            test_folder=base_dir,
+            csv_path=self._csv_path,
+            device_id=device_id,
+            room_temp_f=76.0,
+            add_runs=int(add_runs),
+            timeout_s=300,
+            sanitize_header=True,
+            baseline_low_f=74.0,
+            baseline_high_f=78.0,
+            x_max=0.005,
+            y_max=0.005,
+            z_max=0.008,
+            step=0.001,
+            stop_after_worse=1,
+            precise_origin_coeffs=dict(self._best_tuned_coefs),
+            precise_offset_max=0.0,
+            precise_offset_step=0.0001,
+            score_axes=("z",),
+            score_weights=(0.0, 0.0, 1.0),
+        )
+
+    def _on_stop_tuning_requested(self) -> None:
+        if self._coef_widget is None:
+            return
+        try:
+            self._coef_widget.set_tuning_status("Tuning: stopping… (will stop after current run finishes)")
+        except Exception:
+            pass
+        try:
+            self._proc.cancel_tuning()
+        except Exception:
+            pass
+
+    def _on_tune_progress(self, payload: object) -> None:
+        if self._coef_widget is None:
+            return
+        try:
+            p = dict(payload or {})
+        except Exception:
+            p = {}
+        # Live leaderboard updates (one event per completed run)
+        if str(p.get("event") or "") == "run_complete":
+            try:
+                base_dir = os.path.dirname(self._csv_path) if self._csv_path else ""
+                run = dict(p.get("run") or {})
+                if not hasattr(self, "_live_top_runs"):
+                    self._live_top_runs = []  # type: ignore[attr-defined]
+                # Insert and keep best 10 by score
+                try:
+                    score = float(run.get("score_total") or float("inf"))
+                except Exception:
+                    score = float("inf")
+                # Ensure minimal fields
+                if run and score != float("inf"):
+                    self._live_top_runs.append(run)  # type: ignore[attr-defined]
+                    self._live_top_runs.sort(key=lambda r: float((r or {}).get("score_total") or float("inf")))  # type: ignore[attr-defined]
+                    self._live_top_runs = self._live_top_runs[:10]  # type: ignore[attr-defined]
+                    # Throttle leaderboard redraws to keep UI smooth.
+                    self._schedule_ui_update(leaderboard_rows=self._live_top_runs)  # type: ignore[arg-type]
+            except Exception:
+                pass
+
+            # Auto-preview whenever best improves (use best_output_csv from event)
+            try:
+                best_out = str(p.get("best_output_csv") or "").strip()
+                best_score = float(p.get("best_score") or float("inf"))
+                if not hasattr(self, "_last_live_best_score"):
+                    self._last_live_best_score = float("inf")  # type: ignore[attr-defined]
+                if best_out and os.path.isfile(best_out) and best_score < float(self._last_live_best_score):  # type: ignore[attr-defined]
+                    self._last_live_best_score = float(best_score)  # type: ignore[attr-defined]
+                    # Throttle preview and keep selection in sync (avoid replotting too frequently).
+                    try:
+                        if hasattr(self, "_live_top_runs") and self._live_top_runs:  # type: ignore[attr-defined]
+                            self._schedule_ui_update(
+                                leaderboard_rows=self._live_top_runs,  # type: ignore[attr-defined]
+                                select_first=True,
+                                preview_csv=best_out,
+                            )
+                        else:
+                            self._schedule_ui_update(preview_csv=best_out)
+                    except Exception:
+                        self._schedule_ui_update(preview_csv=best_out)
+            except Exception:
+                pass
+
+            # For local refine (Precise Tune), don't use pair progress; show runs used/budget instead.
+            try:
+                mode = str(p.get("tuning_mode") or "")
+                if mode == "local_refine":
+                    runs_new = int(p.get("runs_new") or 0)
+                    budget = int(p.get("budget") or 0)
+                    bs = float(p.get("best_score") or float("inf"))
+                    self._schedule_ui_update(status_text=f"Precise Tune: runs {runs_new}/{budget}  best={bs:.6g}")
+            except Exception:
+                pass
+            return
+        # Ignore older/non-pair progress payloads (prevents resetting bar to 0).
+        if "pairs_done" not in p:
+            return
+        pairs_done = int(p.get("pairs_done") or 0)
+        pairs_total = int(p.get("pairs_total") or 243)
+        best_score = p.get("best_score")
+        best_coeffs = p.get("best_coeffs") or {}
+        best_out = str(p.get("best_output_csv") or "").strip()
+        try:
+            self._coef_widget.set_tuning_progress(pairs_done, pairs_total)
+            self._coef_widget.set_tuning_status(f"Tuning: {pairs_done}/{pairs_total} pairs  best={float(best_score):.6g}")
+        except Exception:
+            self._coef_widget.set_tuning_status(f"Tuning: {pairs_done}/{pairs_total} pairs")
+        try:
+            if isinstance(best_coeffs, dict) and best_coeffs:
+                self._coef_widget.set_best_tuned_coefs(best_coeffs)
+        except Exception:
+            pass
+        # If we have a best output path, keep the tuned overlay showing the current best.
+        try:
+            if best_out and os.path.isfile(best_out):
+                if not hasattr(self, "_last_live_best_score"):
+                    self._last_live_best_score = float("inf")  # type: ignore[attr-defined]
+                try:
+                    bs = float(best_score) if best_score is not None else float("inf")
+                except Exception:
+                    bs = float("inf")
+                if bs < float(self._last_live_best_score):  # type: ignore[attr-defined]
+                    self._last_live_best_score = float(bs)  # type: ignore[attr-defined]
+                    self._on_tuned_run_selected({"output_csv": best_out})
+        except Exception:
+            pass
+
+    def _on_tune_ready(self, payload: object) -> None:
+        if self._coef_widget is None:
+            return
+        try:
+            p = dict(payload or {})
+        except Exception:
+            p = {}
+        err = p.get("error")
+        if err:
+            self._coef_widget.set_tuning_status(f"Tuning: error — {err}")
+            self._coef_widget.set_tuning_enabled(True)
+            self._tuning_active = False
+            return
+        best = p.get("best") or {}
+        cancelled = False
+        try:
+            cancelled = bool((best or {}).get("cancelled"))
+        except Exception:
+            cancelled = False
+        try:
+            best_coeffs = dict((best or {}).get("best_coeffs") or {})
+            best_score = (best or {}).get("best_score_total")
+        except Exception:
+            best_coeffs = {}
+            best_score = None
+        self._best_tuned_coefs = best_coeffs or None
+        try:
+            self._best_tuned_score = float(best_score) if best_score is not None else None
+        except Exception:
+            self._best_tuned_score = None
+        if best_coeffs:
+            self._coef_widget.set_best_tuned_coefs(best_coeffs)
+        if self._best_tuned_score is not None:
+            if cancelled:
+                self._coef_widget.set_tuning_status(
+                    f"Tuning: cancelled — best score={float(self._best_tuned_score):.6g}"
+                )
+            else:
+                self._coef_widget.set_tuning_status(f"Tuning: done — best score={float(self._best_tuned_score):.6g}")
+        else:
+            self._coef_widget.set_tuning_status("Tuning: cancelled" if cancelled else "Tuning: done")
+        self._coef_widget.set_tuning_enabled(True)
+        self._tuning_active = False
+        try:
+            base_dir = os.path.dirname(self._csv_path) if self._csv_path else ""
+            if base_dir:
+                self._refresh_tuning_leaderboard(base_dir)
+        except Exception:
+            pass
+
+        # After tuning completes, enable and auto-toggle the tuned overlay if possible.
+        try:
+            base_dir = os.path.dirname(self._csv_path) if self._csv_path else ""
+            best_json = os.path.join(base_dir, "tuning", "best.json")
+            tuned_path = ""
+            if os.path.isfile(best_json):
+                with open(best_json, "r", encoding="utf-8") as f:
+                    data = json.load(f) or {}
+                tuned_path = str((data or {}).get("best_output_csv") or "").strip()
+            self._tuned_best_csv_path = tuned_path if (tuned_path and os.path.isfile(tuned_path)) else ""
+            if self._tuned_best_csv_path:
+                try:
+                    self.chk_tuned_best.setEnabled(True)
+                    self.chk_tuned_best.setChecked(True)
+                    self._show_tuned_best = True
+                except Exception:
+                    self._show_tuned_best = True
+                self.plot_current()
+        except Exception:
+            pass
+
+    def _on_tuned_run_selected(self, payload: object) -> None:
+        """
+        Preview a selected run as the 'Tuned Best' overlay (without rewriting best.json).
+        """
+        if self._coef_widget is None:
+            return
+        try:
+            p = dict(payload or {})
+        except Exception:
+            p = {}
+        out_csv = str(p.get("output_csv") or "").strip()
+        if not out_csv or not os.path.isfile(out_csv):
+            self._coef_widget.set_tuning_status("Leaderboard: selected run CSV missing.")
+            return
+
+        self._tuned_best_csv_path = out_csv
+        self._show_tuned_best = True
+        try:
+            self.chk_tuned_best.setEnabled(True)
+            self.chk_tuned_best.setChecked(True)
+        except Exception:
+            pass
+        self.plot_current()
+
     def _on_toggle_nn_off(self, v: bool) -> None:
         self._show_nn_off = bool(v)
         self.plot_current()
 
     def _on_toggle_nn_on(self, v: bool) -> None:
         self._show_nn_on = bool(v)
+        self.plot_current()
+
+    def _on_toggle_tuned_best(self, v: bool) -> None:
+        self._show_tuned_best = bool(v)
         self.plot_current()

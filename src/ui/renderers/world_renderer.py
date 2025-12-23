@@ -121,6 +121,41 @@ class WorldRenderer:
             top_y = int(cy - h_px / 2) - 26
             p.drawText(int(cx - 100), top_y, 200, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, short)
 
+    def _draw_single_no_devices(self, p: QtGui.QPainter) -> None:
+        """
+        Render a generic plate outline with a clear empty-state message.
+        This is shown when we're in single-device view but no device is selected/connected.
+        """
+        # Size off the widget height so it occupies most of the vertical space,
+        # but clamp to available width.
+        w = max(1, int(self.canvas.width()))
+        h = max(1, int(self.canvas.height()))
+        margin = 24
+        # Slightly smaller than "fills most of the height" (~10% reduction).
+        target = int(h * 0.77)
+        size = max(120, min(target, w - margin * 2, h - margin * 2))
+        cx = int(w / 2)
+        cy = int(h / 2)
+        rect = QtCore.QRect(int(cx - size / 2), int(cy - size / 2), int(size), int(size))
+
+        # Slightly-opaque fill to visually "own" the plate area without being harsh.
+        fill = QtGui.QColor(70, 72, 80, 230)
+        outline = QtGui.QColor(160, 165, 175, 255)
+        p.setBrush(fill)
+        p.setPen(QtGui.QPen(outline, 2))
+        p.drawRect(rect)
+
+        # Center message
+        p.setPen(QtGui.QPen(QtGui.QColor(235, 238, 245)))
+        font = p.font()
+        try:
+            font.setPointSize(13)
+            font.setBold(False)
+        except Exception:
+            pass
+        p.setFont(font)
+        p.drawText(rect, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, "No Devices Connected")
+
     def _draw_plate_logo_single(self, p: QtGui.QPainter, center_mm: Tuple[float, float], w_mm: float, h_mm: float, dev_type: str) -> None:
         if self.canvas.state.display_mode != "single":
             return
@@ -235,6 +270,11 @@ class WorldRenderer:
         if self.canvas.state.display_mode == "single":
             sel_id = (self.canvas.state.selected_device_id or "").strip()
             sel_type = (self.canvas.state.selected_device_type or "").strip()
+
+            # Empty-state: single view but nothing selected.
+            if not sel_id:
+                self._draw_single_no_devices(p)
+                return
             
             # If we have a selected ID but no type, try to find it in available devices
             if sel_id and not sel_type:

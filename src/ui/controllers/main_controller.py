@@ -1,10 +1,10 @@
 from __future__ import annotations
 from PySide6 import QtCore
 
-from ...services.hardware import HardwareService
-from ...services.testing import TestingService
-from ...services.data_sync import DataSyncService
-from ...services.model_service import ModelService
+from ...app_services.hardware import HardwareService
+from ...app_services.testing import TestingService
+from ...app_services.data_sync import DataSyncService
+from ...app_services.model_service import ModelService
 from .live_test_controller import LiveTestController
 from .temp_test_controller import TempTestController
 from .calibration_controller import CalibrationController

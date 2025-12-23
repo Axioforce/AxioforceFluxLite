@@ -255,16 +255,30 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             self.controller.analysis_status.connect(self._on_analysis_status)
             self.test_changed.connect(self.controller.load_test_details)
             
-            # Initial fetch
-            self.controller.refresh_devices()
+            # IMPORTANT: Do NOT auto-select and auto-run analysis on app startup.
+            # We still allow explicit user-driven refresh via the Refresh button.
 
     def set_devices(self, devices: list[str]) -> None:
         self.device_combo.blockSignals(True)
         self.device_combo.clear()
         self.device_combo.addItems(devices)
+        # Avoid implicit selection which would cascade into test selection and analysis.
+        try:
+            self.device_combo.setCurrentIndex(-1)
+        except Exception:
+            pass
         self.device_combo.blockSignals(False)
-        if devices:
-            self._on_device_changed(self.device_combo.currentText())
+        # Clear dependent UI when device list changes.
+        try:
+            self.test_list.clear()
+            self.processed_list.clear()
+            self._clear_metrics()
+        except Exception:
+            pass
+        try:
+            self.test_changed.emit("")
+        except Exception:
+            pass
 
     def set_device_id(self, device_id: str) -> None:
         self.lbl_device_id.setText(device_id or "—")
@@ -302,9 +316,8 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             item = QtWidgets.QListWidgetItem(display)
             item.setData(QtCore.Qt.UserRole, path)  # store full path
             self.test_list.addItem(item)
-        if self.test_list.count() > 0:
-            self.test_list.setCurrentRow(0)
-        else:
+        # Do not auto-select the first test; user must explicitly pick one.
+        if self.test_list.count() == 0:
             self.test_changed.emit("")
         self._refresh_test_labels()
 
@@ -344,10 +357,13 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             it.setSizeHint(widget.sizeHint())
             self.processed_list.setItemWidget(it, widget)
 
-        if self.processed_list.count() > 0:
-            last_idx = self.processed_list.count() - 1
-            self.processed_list.setCurrentRow(last_idx)
-            self._emit_processed_changed()
+        # Do not auto-select a processed run. Selecting one triggers analysis which
+        # should only happen on explicit user action.
+        if self.processed_list.count() == 0:
+            try:
+                self._clear_metrics()
+            except Exception:
+                pass
 
     def selected_test(self) -> str:
         it = self.test_list.currentItem()
@@ -469,8 +485,18 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
 
     def _on_refresh_clicked(self) -> None:
         if self.controller:
-            device_id = self.device_combo.currentText().strip()
-            self.controller.refresh_tests(device_id)
+            # Refresh the device list first (safe, does not trigger analysis).
+            try:
+                self.controller.refresh_devices()
+            except Exception:
+                pass
+            # If a device is already selected, refresh its tests too.
+            try:
+                device_id = self.device_combo.currentText().strip()
+            except Exception:
+                device_id = ""
+            if device_id:
+                self.controller.refresh_tests(device_id)
         else:
             self.refresh_requested.emit()
 
@@ -489,6 +515,18 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
     def _on_device_changed(self, text: str) -> None:
         device = str(text or "").strip()
         self.device_selected.emit(device)
+        if not device:
+            try:
+                self.test_list.clear()
+                self.processed_list.clear()
+                self._clear_metrics()
+            except Exception:
+                pass
+            try:
+                self.test_changed.emit("")
+            except Exception:
+                pass
+            return
         if self.controller:
             self.controller.refresh_tests(device)
 

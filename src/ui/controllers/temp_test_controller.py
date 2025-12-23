@@ -4,8 +4,8 @@ from typing import Optional, List, Dict, Tuple
 import os
 
 from ... import config
-from ...services.testing import TestingService
-from ...services.hardware import HardwareService
+from ...app_services.testing import TestingService
+from ...app_services.hardware import HardwareService
 from ..presenters.grid_presenter import GridPresenter
 
 class ProcessingWorker(QtCore.QThread):

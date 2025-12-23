@@ -3,24 +3,14 @@ from __future__ import annotations
 from typing import Dict
 
 import os
-import requests
-import json
 from .. import config
+from ..infra.backend_address import backend_address_from_config
+from ..infra.http_client import post_json
 
 
 def _http_base() -> str:
-    base = str(getattr(config, "SOCKET_HOST", "http://localhost") or "http://localhost").rstrip("/")
-    port = int(getattr(config, "HTTP_PORT", 3001))
-    if not base.startswith("http://") and not base.startswith("https://"):
-        base = f"http://{base}"
-    # Replace or add port
-    try:
-        head, tail = base.split("://", 1)
-        host_only = tail.split(":")[0]
-        base = f"{head}://{host_only}:{port}"
-    except Exception:
-        base = f"{base}:{port}"
-    return base
+    # Keep this helper for backwards-compat logs, but delegate to canonical infra logic.
+    return backend_address_from_config().base_url()
 
 
 def run_45v(csv_path: str, model_id: str, plate_type: str, device_id: str) -> Dict[str, object]:
@@ -54,23 +44,11 @@ def run_45v(csv_path: str, model_id: str, plate_type: str, device_id: str) -> Di
         "outputDir": out_dir,
     }
     try:
-        resp = requests.post(url, data=json.dumps(body), headers={"Content-Type": "application/json"}, timeout=20)
+        data = post_json(url, body, timeout_s=20)
         try:
-            print(f"[calib]  -> status={resp.status_code}")
+            print("[calib]  -> status=200")
         except Exception:
             pass
-        if resp.status_code // 100 != 2:
-            try:
-                err = resp.json()
-                msg = err.get("message") or resp.text
-            except Exception:
-                msg = resp.text
-            try:
-                print(f"[calib]  error: {msg}")
-            except Exception:
-                pass
-            return {"error": f"http_{resp.status_code}: {msg}"}
-        data = resp.json() or {}
         out_csv = data.get("outputPath") or data.get("path")
         try:
             print(f"[calib]  outputPath={out_csv}")
