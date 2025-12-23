@@ -92,7 +92,9 @@ class TempTestController(QtCore.QObject):
 
         # Forward service signals
         self.testing.processing_status.connect(self.processing_status.emit)
-        # self.testing.processing_status.connect(self._on_processing_status) # Disable auto-reload for now
+        # When processing completes, reload current test details so new processed runs appear.
+        # This does NOT auto-select a run (analysis still requires explicit selection).
+        self.testing.processing_status.connect(self._on_processing_status)
         
         self._worker = None # Keep reference to prevent GC
 

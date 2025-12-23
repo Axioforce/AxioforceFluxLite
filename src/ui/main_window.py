@@ -207,6 +207,12 @@ class MainWindow(QtWidgets.QMainWindow):
         temp_panel.plot_stages_requested.connect(temp_ctrl.plot_stage_detection)
         temp_ctrl.plot_ready.connect(self._on_temp_plot_ready)
 
+        # Populate the temperature testing device list on startup (no auto-selection).
+        try:
+            QtCore.QTimer.singleShot(250, temp_ctrl.refresh_devices)
+        except Exception:
+            pass
+
         # Heatmap / Calibration Signals
         cal_ctrl = self.controller.calibration
         
