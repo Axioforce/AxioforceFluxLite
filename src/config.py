@@ -159,6 +159,12 @@ TEMP_SLOPE_SMOOTHING_WINDOW: int = 5
 TEMP_WARMUP_SKIP_MS: int = 20000  # Skip first 20 seconds of data
 TEMP_COP_MAX_DISPLACEMENT_MM: float = 50.0  # Max distance COP can move within a valid segment
 
+# Temperature Testing: "room temp" baseline range for bias-controlled grading.
+# Used to pick baseline tests for a device whose per-cell bias will be learned from
+# temp-correction OFF processing, then applied as adjusted targets for scoring.
+TEMP_BASELINE_ROOM_TEMP_MIN_F: float = 71.0
+TEMP_BASELINE_ROOM_TEMP_MAX_F: float = 77.0
+
 # Discrete Temp Testing: default scalar temperature coefficients (all-tests coefs)
 # These can be overridden via environment variables for quick iteration.
 DISCRETE_TEMP_COEF_X: float = float(os.environ.get("DISCRETE_TEMP_COEF_X", "0.004"))

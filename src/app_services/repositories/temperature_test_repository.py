@@ -5,7 +5,7 @@ import json
 import os
 import random
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 from ...project_paths import data_dir
 
@@ -38,6 +38,89 @@ class TemperatureTestRepository:
         for path in files:
             self._ensure_meta_avg_temperature(path)
         return files
+
+    def list_temperature_room_baseline_tests(
+        self,
+        device_id: str,
+        *,
+        min_temp_f: float,
+        max_temp_f: float,
+    ) -> List[Dict[str, object]]:
+        """
+        List "room temp" baseline raw tests for a device.
+
+        Returns entries:
+          { "csv_path": str, "meta_path": str, "temp_f": float | None, "meta": dict }
+        """
+        out: List[Dict[str, object]] = []
+        for csv_path in self.list_temperature_tests(device_id):
+            meta = self.load_meta_for_csv(csv_path) or {}
+            temp_f = self.extract_temperature_f(meta)
+            if temp_f is None:
+                continue
+            if float(min_temp_f) <= float(temp_f) <= float(max_temp_f):
+                out.append(
+                    {
+                        "csv_path": csv_path,
+                        "meta_path": self._meta_path_for_csv(csv_path),
+                        "temp_f": float(temp_f),
+                        "meta": dict(meta),
+                    }
+                )
+        return out
+
+    def load_meta_for_csv(self, csv_path: str) -> Optional[Dict[str, object]]:
+        meta_path = self._meta_path_for_csv(csv_path)
+        if not os.path.isfile(meta_path):
+            return None
+        try:
+            with open(meta_path, "r", encoding="utf-8") as mf:
+                data = json.load(mf)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            return None
+        return None
+
+    def extract_temperature_f(self, meta: Dict[str, object]) -> Optional[float]:
+        """
+        Best-effort temperature extraction from a temp test meta dict.
+        Matches UI conventions: room_temperature_f / room_temp_f / ambient_temp_f / avg_temp.
+        """
+        for key in ("room_temperature_f", "room_temp_f", "ambient_temp_f", "avg_temp"):
+            value = (meta or {}).get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def bias_cache_path(self, device_id: str) -> str:
+        base_dir = data_dir("temp_testing")
+        device_dir = os.path.join(base_dir, str(device_id))
+        return os.path.join(device_dir, "temp-baseline-bias.json")
+
+    def load_bias_cache(self, device_id: str) -> Optional[Dict[str, object]]:
+        path = self.bias_cache_path(device_id)
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            return None
+        return None
+
+    def save_bias_cache(self, device_id: str, payload: Dict[str, object]) -> str:
+        path = self.bias_cache_path(device_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+        return path
 
     def list_temperature_devices(self) -> List[str]:
         """List available devices (subdirectories) in temp_testing folder."""
@@ -252,6 +335,37 @@ class TemperatureTestRepository:
             }
         )
         meta["processed"] = legacy
+
+        os.makedirs(os.path.dirname(meta_path), exist_ok=True)
+        with open(meta_path, "w", encoding="utf-8") as mf:
+            json.dump(meta, mf, indent=2, sort_keys=True)
+
+    def update_meta_with_baseline_only(
+        self,
+        meta_path: str,
+        *,
+        trimmed_csv: str,
+        processed_off: str,
+    ) -> None:
+        """
+        Persist only the 'temp correction off' baseline processing result in the meta file.
+        This is used by bias-controlled grading baseline generation, where we don't want to
+        create a 'temp correction on' variant.
+        """
+        meta: Dict[str, object] = {}
+        if os.path.isfile(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as mf:
+                    meta = json.load(mf) or {}
+            except Exception:
+                meta = {}
+
+        now_ms = int(time.time() * 1000)
+        meta["processed_baseline"] = {
+            "trimmed_csv": os.path.basename(str(trimmed_csv)),
+            "processed_off": os.path.basename(str(processed_off)),
+            "updated_at_ms": now_ms,
+        }
 
         os.makedirs(os.path.dirname(meta_path), exist_ok=True)
         with open(meta_path, "w", encoding="utf-8") as mf:

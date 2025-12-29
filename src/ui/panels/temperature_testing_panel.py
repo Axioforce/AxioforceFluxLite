@@ -7,6 +7,8 @@ from typing import Optional
 
 from PySide6 import QtCore, QtWidgets
 
+from ..widgets.temp_testing_metrics_widget import TempTestingMetricsWidget
+
 
 class ProcessedRunItemWidget(QtWidgets.QWidget):
     delete_requested = QtCore.Signal(str)
@@ -64,6 +66,7 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
     processed_selected = QtCore.Signal(object)  # dict with slopes/paths
     stage_changed = QtCore.Signal(str)
     plot_stages_requested = QtCore.Signal()  # Request matplotlib stage visualization
+    grading_mode_changed = QtCore.Signal(str)  # "Absolute" | "Bias Controlled"
 
     def __init__(self, controller: object = None, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -179,38 +182,23 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         self.btn_plot_stages.setFixedWidth(60)
         self.btn_plot_stages.setToolTip("Show matplotlib visualization of stage detection windows")
         controls_layout.addWidget(self.btn_plot_stages)
+
+        controls_layout.addWidget(QtWidgets.QLabel("Grading:"))
+        self.grading_combo = QtWidgets.QComboBox()
+        self.grading_combo.addItems(["Absolute", "Bias Controlled"])
+        self.grading_combo.setToolTip(
+            "Absolute: grade vs truth targets. Bias Controlled: grade vs room-temp baseline behavior."
+        )
+        controls_layout.addWidget(self.grading_combo)
         controls_layout.addStretch(1)
         
         middle_layout.addWidget(controls_widget, 0)
 
-        # Right column: metrics compare
-        right_box = QtWidgets.QGroupBox("Metrics (Baseline vs Selected)")
-        right_layout = QtWidgets.QGridLayout(right_box)
-        self.lbl_base_cnt = QtWidgets.QLabel("—")
-        self.lbl_base_mean = QtWidgets.QLabel("—")
-        self.lbl_base_med = QtWidgets.QLabel("—")
-        self.lbl_base_max = QtWidgets.QLabel("—")
-        self.lbl_sel_cnt = QtWidgets.QLabel("—")
-        self.lbl_sel_mean = QtWidgets.QLabel("—")
-        self.lbl_sel_med = QtWidgets.QLabel("—")
-        self.lbl_sel_max = QtWidgets.QLabel("—")
-        right_layout.addWidget(QtWidgets.QLabel("Baseline Count:"), 0, 0)
-        right_layout.addWidget(self.lbl_base_cnt, 0, 1)
-        right_layout.addWidget(QtWidgets.QLabel("Baseline Mean%:"), 1, 0)
-        right_layout.addWidget(self.lbl_base_mean, 1, 1)
-        right_layout.addWidget(QtWidgets.QLabel("Baseline Median%:"), 2, 0)
-        right_layout.addWidget(self.lbl_base_med, 2, 1)
-        right_layout.addWidget(QtWidgets.QLabel("Baseline Max%:"), 3, 0)
-        right_layout.addWidget(self.lbl_base_max, 3, 1)
-        right_layout.addWidget(QtWidgets.QLabel("Selected Count:"), 4, 0)
-        right_layout.addWidget(self.lbl_sel_cnt, 4, 1)
-        right_layout.addWidget(QtWidgets.QLabel("Selected Mean%:"), 5, 0)
-        right_layout.addWidget(self.lbl_sel_mean, 5, 1)
-        right_layout.addWidget(QtWidgets.QLabel("Selected Median%:"), 6, 0)
-        right_layout.addWidget(self.lbl_sel_med, 6, 1)
-        right_layout.addWidget(QtWidgets.QLabel("Selected Max%:"), 7, 0)
-        right_layout.addWidget(self.lbl_sel_max, 7, 1)
-        right_layout.setRowStretch(8, 1)
+        # Right column: metrics (reworked)
+        right_box = QtWidgets.QGroupBox("Metrics")
+        right_layout = QtWidgets.QVBoxLayout(right_box)
+        self.metrics_widget = TempTestingMetricsWidget()
+        right_layout.addWidget(self.metrics_widget, 1)
 
         root.addWidget(left_wrap, 1)
         root.addWidget(middle_box, 1)
@@ -230,6 +218,7 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         self.processed_list.currentItemChanged.connect(self._emit_processed_changed)
         self.stage_combo.currentTextChanged.connect(lambda s: self.stage_changed.emit(str(s)))
         self.btn_plot_stages.clicked.connect(lambda: self.plot_stages_requested.emit())
+        self.grading_combo.currentTextChanged.connect(lambda s: self.grading_mode_changed.emit(str(s)))
 
         self._processing_timer = QtCore.QTimer(self)
         self._processing_timer.setInterval(120)
@@ -253,10 +242,105 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             self.controller.test_meta_loaded.connect(self._on_test_meta_loaded)
             self.controller.processing_status.connect(self._on_processing_status)
             self.controller.analysis_status.connect(self._on_analysis_status)
+            try:
+                self.controller.bias_status.connect(self._on_bias_status)
+            except Exception:
+                pass
             self.test_changed.connect(self.controller.load_test_details)
+
+            # Big picture: run coefs across plate type
+            try:
+                self.metrics_widget.btn_run_plate_type.clicked.connect(self._on_run_plate_type_clicked)
+            except Exception:
+                pass
+            try:
+                self.controller.rollup_ready.connect(self._on_rollup_ready)
+            except Exception:
+                pass
             
             # IMPORTANT: Do NOT auto-select and auto-run analysis on app startup.
             # We still allow explicit user-driven refresh via the Refresh button.
+        self._bias_available = False
+        self.set_bias_mode_available(False, "")
+
+    def grading_mode(self) -> str:
+        text = str(self.grading_combo.currentText() or "Absolute").strip().lower()
+        return "bias" if text.startswith("bias") else "absolute"
+
+    def set_bias_mode_available(self, available: bool, message: str = "") -> None:
+        """
+        Enable/disable the 'Bias Controlled' grading option.
+        When disabling, forces selection back to Absolute.
+        """
+        self._bias_available = bool(available)
+        try:
+            model = self.grading_combo.model()
+            item = model.item(1) if model is not None else None  # index 1 = Bias Controlled
+            if item is not None:
+                item.setEnabled(bool(available))
+        except Exception:
+            pass
+
+        if not available:
+            try:
+                self.grading_combo.blockSignals(True)
+                self.grading_combo.setCurrentIndex(0)
+            finally:
+                try:
+                    self.grading_combo.blockSignals(False)
+                except Exception:
+                    pass
+
+        if message:
+            try:
+                QtWidgets.QMessageBox.warning(self, "Bias-Controlled Grading", str(message))
+            except Exception:
+                pass
+
+    def _on_bias_status(self, payload: dict) -> None:
+        payload = payload or {}
+        available = bool(payload.get("available"))
+        message = str(payload.get("message") or "")
+        self.set_bias_mode_available(available, message)
+
+    def _on_run_plate_type_clicked(self) -> None:
+        """
+        Run the current coefficient settings across all devices/tests for this plate type.
+        """
+        if not self.controller:
+            return
+        try:
+            mode_text = str(self.mode_combo.currentText() or "Legacy").strip().lower()
+            mode = "scalar" if mode_text.startswith("scalar") else "legacy"
+            x, y, z = self.slopes()
+            coefs = {"x": float(x), "y": float(y), "z": float(z)}
+            self.metrics_widget.set_big_picture_status("Running batch rollup…")
+            self.controller.run_coefs_across_plate_type(coefs, mode)
+        except Exception as exc:
+            try:
+                QtWidgets.QMessageBox.warning(self, "Batch Rollup", str(exc))
+            except Exception:
+                pass
+
+    def _on_rollup_ready(self, payload: dict) -> None:
+        payload = payload or {}
+        ok = bool(payload.get("ok"))
+        msg = str(payload.get("message") or "")
+        errs = list(payload.get("errors") or [])
+        if ok:
+            self.metrics_widget.set_big_picture_status(msg or "Batch rollup complete")
+            try:
+                top3 = self.controller.top3_for_current_plate_type() if self.controller else []
+                self.metrics_widget.set_top3(list(top3 or []))
+            except Exception:
+                pass
+        else:
+            details = "\n".join([msg] + [f"- {e}" for e in errs if e])
+            self.metrics_widget.set_big_picture_status("Batch rollup failed")
+            try:
+                QtWidgets.QMessageBox.warning(self, "Batch Rollup", details or "Batch rollup failed.")
+            except Exception:
+                pass
 
     def set_devices(self, devices: list[str]) -> None:
         self.device_combo.blockSignals(True)
@@ -381,65 +465,33 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             return "bw"
         return "All"
 
-    def set_analysis_metrics(self, payload: dict) -> None:
-        """Update the metrics labels from analysis results."""
-        if not payload:
-            self._clear_metrics()
-            return
-        
-        stage_key = self.current_stage()
-        baseline = payload.get("baseline", {})
-        selected = payload.get("selected", {})
-        
-        base_stats = self._compute_stage_stats(baseline, stage_key)
-        sel_stats = self._compute_stage_stats(selected, stage_key)
-        
-        # Update baseline labels
-        self.lbl_base_cnt.setText(str(base_stats.get("count", 0)))
-        self.lbl_base_mean.setText(f"{base_stats.get('mean_pct', 0.0):.2f}%")
-        self.lbl_base_med.setText(f"{base_stats.get('median_pct', 0.0):.2f}%")
-        self.lbl_base_max.setText(f"{base_stats.get('max_pct', 0.0):.2f}%")
-        
-        # Update selected labels
-        self.lbl_sel_cnt.setText(str(sel_stats.get("count", 0)))
-        self.lbl_sel_mean.setText(f"{sel_stats.get('mean_pct', 0.0):.2f}%")
-        self.lbl_sel_med.setText(f"{sel_stats.get('median_pct', 0.0):.2f}%")
-        self.lbl_sel_max.setText(f"{sel_stats.get('max_pct', 0.0):.2f}%")
-
-    def _compute_stage_stats(self, data: dict, stage_key: str) -> dict:
-        """Compute aggregate stats for a stage or all stages."""
-        stages = data.get("stages", {})
-        pcts: list[float] = []
-        
-        if stage_key == "All":
-            # Gather all cells from all stages
-            for stage_data in stages.values():
-                for cell in stage_data.get("cells", []):
-                    pcts.append(abs(float(cell.get("signed_pct", 0.0))))
-        else:
-            stage_data = stages.get(stage_key, {})
-            for cell in stage_data.get("cells", []):
-                pcts.append(abs(float(cell.get("signed_pct", 0.0))))
-        
-        if not pcts:
-            return {"count": 0, "mean_pct": 0.0, "median_pct": 0.0, "max_pct": 0.0}
-        
-        pcts_sorted = sorted(pcts)
-        n = len(pcts_sorted)
-        median = pcts_sorted[n // 2] if n % 2 == 1 else (pcts_sorted[n // 2 - 1] + pcts_sorted[n // 2]) / 2.0
-        
-        return {
-            "count": n,
-            "mean_pct": sum(pcts) / n,
-            "median_pct": median,
-            "max_pct": max(pcts),
-        }
-
-    def _clear_metrics(self) -> None:
-        """Reset all metrics labels to default."""
-        for lbl in (self.lbl_base_cnt, self.lbl_base_mean, self.lbl_base_med, self.lbl_base_max,
-                    self.lbl_sel_cnt, self.lbl_sel_mean, self.lbl_sel_med, self.lbl_sel_max):
-            lbl.setText("—")
+    def set_analysis_metrics(
+        self,
+        payload: dict,
+        *,
+        device_type: str = "06",
+        body_weight_n: float = 0.0,
+        bias_cache: Optional[dict] = None,
+        bias_map_all=None,
+        grading_mode: str = "absolute",
+    ) -> None:
+        """
+        Update the metrics widget from analysis results.
+        """
+        try:
+            self.metrics_widget.set_bias_cache(bias_cache)
+            self.metrics_widget.set_run_metrics(
+                payload,
+                device_type=str(device_type or "06"),
+                body_weight_n=float(body_weight_n or 0.0),
+                bias_map_all=bias_map_all,
+                grading_mode=str(grading_mode or "absolute"),
+            )
+        except Exception:
+            try:
+                self.metrics_widget.clear()
+            except Exception:
+                pass
 
     def _on_mode_changed(self, text: str) -> None:
         prefix = "Scalar" if text == "Scalar" else "Slope"

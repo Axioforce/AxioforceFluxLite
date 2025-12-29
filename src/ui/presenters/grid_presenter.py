@@ -76,7 +76,9 @@ class GridPresenter:
         data: Dict[str, Any], # 'baseline' or 'selected' dict from analysis
         stage_key: str,
         device_type: str,
-        body_weight_n: float
+        body_weight_n: float,
+        *,
+        bias_map: Any = None,
     ) -> List[CellViewModel]:
         """
         Compute display data for cells from analysis data (baseline or selected).
@@ -91,14 +93,26 @@ class GridPresenter:
             if not stage_info:
                 continue
                 
-            target_n = float(stage_info.get("target_n", 0.0))
+            base_target_n = float(stage_info.get("target_n", 0.0))
             threshold_n = config.get_passing_threshold(sk, device_type, body_weight_n)
             
             for cell in stage_info.get("cells", []):
                 r = int(cell.get("row", 0))
                 c = int(cell.get("col", 0))
-                signed_pct = float(cell.get("signed_pct", 0.0))
                 mean_n = float(cell.get("mean_n", 0.0))
+
+                # Bias-controlled grading adjusts the target per cell; thresholds remain unchanged.
+                target_n = base_target_n
+                if bias_map is not None:
+                    try:
+                        bias_pct = float(bias_map[r][c])
+                        target_n = base_target_n * (1.0 + bias_pct)
+                    except Exception:
+                        target_n = base_target_n
+
+                signed_pct = 0.0
+                if target_n:
+                    signed_pct = (mean_n - target_n) / target_n * 100.0
                 
                 # Compute error ratio
                 error_n = abs(mean_n - target_n)

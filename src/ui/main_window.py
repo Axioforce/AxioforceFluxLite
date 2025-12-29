@@ -203,6 +203,8 @@ class MainWindow(QtWidgets.QMainWindow):
         temp_ctrl.grid_display_ready.connect(self._on_temp_grid_display_ready)
         # Re-render when stage changes
         temp_panel.stage_changed.connect(self._on_temp_stage_changed)
+        # Re-render when grading mode changes (Absolute vs Bias Controlled)
+        temp_panel.grading_mode_changed.connect(self._on_temp_grading_mode_changed)
         # Plot button - goes through controller, then back to main thread for matplotlib
         temp_panel.plot_stages_requested.connect(temp_ctrl.plot_stage_detection)
         temp_ctrl.plot_ready.connect(self._on_temp_plot_ready)
@@ -628,7 +630,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._temp_analysis_payload = payload
         # Update metrics panel
         try:
-            self.controls.temperature_testing_panel.set_analysis_metrics(payload)
+            grid = dict((payload or {}).get("grid") or {})
+            meta = dict((payload or {}).get("meta") or {})
+            self.controls.temperature_testing_panel.set_analysis_metrics(
+                payload,
+                device_type=str(grid.get("device_type", "06")),
+                body_weight_n=float(meta.get("body_weight_n") or 0.0),
+                bias_cache=self.controller.temp_test.bias_cache(),
+                bias_map_all=self.controller.temp_test.bias_map(),
+                grading_mode=self.controller.temp_test.grading_mode(),
+            )
         except Exception:
             pass
         # Request grid display preparation from controller
@@ -638,7 +649,38 @@ class MainWindow(QtWidgets.QMainWindow):
         """Re-render grids when stage filter changes."""
         if self._temp_analysis_payload:
             try:
-                self.controls.temperature_testing_panel.set_analysis_metrics(self._temp_analysis_payload)
+                grid = dict((self._temp_analysis_payload or {}).get("grid") or {})
+                meta = dict((self._temp_analysis_payload or {}).get("meta") or {})
+                self.controls.temperature_testing_panel.set_analysis_metrics(
+                    self._temp_analysis_payload,
+                    device_type=str(grid.get("device_type", "06")),
+                    body_weight_n=float(meta.get("body_weight_n") or 0.0),
+                    bias_cache=self.controller.temp_test.bias_cache(),
+                    bias_map_all=self.controller.temp_test.bias_map(),
+                    grading_mode=self.controller.temp_test.grading_mode(),
+                )
+            except Exception:
+                pass
+            self._request_temp_grid_update()
+
+    def _on_temp_grading_mode_changed(self, mode: str) -> None:
+        """Re-render grids when grading mode changes."""
+        try:
+            self.controller.temp_test.set_grading_mode(mode)
+        except Exception:
+            pass
+        if self._temp_analysis_payload:
+            try:
+                grid = dict((self._temp_analysis_payload or {}).get("grid") or {})
+                meta = dict((self._temp_analysis_payload or {}).get("meta") or {})
+                self.controls.temperature_testing_panel.set_analysis_metrics(
+                    self._temp_analysis_payload,
+                    device_type=str(grid.get("device_type", "06")),
+                    body_weight_n=float(meta.get("body_weight_n") or 0.0),
+                    bias_cache=self.controller.temp_test.bias_cache(),
+                    bias_map_all=self.controller.temp_test.bias_map(),
+                    grading_mode=self.controller.temp_test.grading_mode(),
+                )
             except Exception:
                 pass
             self._request_temp_grid_update()

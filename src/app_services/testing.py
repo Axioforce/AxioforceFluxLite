@@ -10,6 +10,8 @@ from .session_manager import SessionManager
 from .repositories.test_file_repository import TestFileRepository
 from .analysis.temperature_analyzer import TemperatureAnalyzer
 from .discrete_temp_session_service import DiscreteTempSessionService
+from .temperature_baseline_bias_service import TemperatureBaselineBiasService
+from .temperature_coef_rollup_service import TemperatureCoefRollupService
 from .temperature_processing_service import TemperatureProcessingService
 from ..domain.models import TestSession, TestResult, TestThresholds
 
@@ -36,6 +38,12 @@ class TestingService(QtCore.QObject):
         self.session_manager = SessionManager()
         self._discrete = DiscreteTempSessionService()
         self._temp_processing = TemperatureProcessingService(repo=self.repo, hardware=self._hardware)
+        self._temp_bias = TemperatureBaselineBiasService(
+            repo=self.repo, analyzer=self.analyzer, processing=self._temp_processing
+        )
+        self._temp_rollup = TemperatureCoefRollupService(
+            repo=self.repo, analyzer=self.analyzer, processing=self._temp_processing, bias=self._temp_bias
+        )
 
         # Connect SessionManager signals to Facade signals
         self.session_manager.session_started.connect(self.session_started.emit)
@@ -141,4 +149,38 @@ class TestingService(QtCore.QObject):
             mode=mode,
             status_cb=self.processing_status.emit,
         )
+
+    def compute_temperature_bias_for_device(
+        self,
+        device_id: str,
+        *,
+        min_temp_f: float | None = None,
+        max_temp_f: float | None = None,
+    ) -> Dict[str, object]:
+        """
+        Compute and store per-cell baseline bias for bias-controlled temperature grading.
+        """
+        return self._temp_bias.compute_and_store_bias_for_device(
+            device_id=device_id,
+            min_temp_f=min_temp_f,
+            max_temp_f=max_temp_f,
+            status_cb=self.processing_status.emit,
+        )
+
+    def run_temperature_coefs_across_plate_type(
+        self,
+        *,
+        plate_type: str,
+        coefs: dict,
+        mode: str,
+    ) -> Dict[str, object]:
+        return self._temp_rollup.run_coefs_across_plate_type(
+            plate_type=plate_type,
+            coefs=coefs,
+            mode=mode,
+            status_cb=self.processing_status.emit,
+        )
+
+    def top3_temperature_coefs_for_plate_type(self, plate_type: str) -> List[Dict[str, object]]:
+        return self._temp_rollup.top3_for_plate_type(plate_type)
 

@@ -49,6 +49,23 @@ class TemperatureAnalysisWorker(QtCore.QThread):
         except Exception as exc:
             self.error.emit(str(exc))
 
+class BiasComputeWorker(QtCore.QThread):
+    """Background worker for per-device room-temp baseline bias computation."""
+
+    result_ready = QtCore.Signal(dict)
+
+    def __init__(self, service: TestingService, device_id: str):
+        super().__init__()
+        self.service = service
+        self.device_id = str(device_id or "").strip()
+
+    def run(self) -> None:
+        try:
+            res = self.service.compute_temperature_bias_for_device(self.device_id)
+            self.result_ready.emit(dict(res or {}))
+        except Exception as exc:
+            self.result_ready.emit({"ok": False, "message": str(exc), "errors": [str(exc)]})
+
 class TempTestController(QtCore.QObject):
     """
     Controller for the Temperature Testing UI.
@@ -67,6 +84,10 @@ class TempTestController(QtCore.QObject):
     grid_display_ready = QtCore.Signal(dict)
     # Plot request: dict with baseline_path, selected_path, body_weight_n
     plot_ready = QtCore.Signal(dict)
+    # Bias status: {available: bool, message: str}
+    bias_status = QtCore.Signal(dict)
+    # Plate-type batch status (big picture)
+    rollup_ready = QtCore.Signal(dict)
 
     def __init__(self, testing_service: TestingService, hardware_service: HardwareService):
         super().__init__()
@@ -86,6 +107,12 @@ class TempTestController(QtCore.QObject):
         self._cached_baseline_path: Optional[str] = None
         self._cached_baseline_result: Optional[Dict[str, object]] = None
         self._last_analysis_payload: Optional[Dict[str, object]] = None
+        self._bias_cache: Optional[Dict[str, object]] = None
+        self._grading_mode: str = "absolute"  # "absolute" | "bias"
+        self._pending_bias_recompute: bool = False
+        self._last_processing_device_id: Optional[str] = None
+        self._bias_worker: Optional[BiasComputeWorker] = None
+        self._rollup_worker: Optional[QtCore.QThread] = None
 
         # Clear any retained state
         self._last_analysis_payload = None
@@ -121,6 +148,8 @@ class TempTestController(QtCore.QObject):
         if not device_id or not csv_path:
             self.processing_status.emit({"status": "error", "message": "Please select a device and a test file."})
             return
+        self._pending_bias_recompute = True
+        self._last_processing_device_id = str(device_id)
             
         import os
         folder = payload.get("folder") or os.path.dirname(csv_path)
@@ -165,6 +194,22 @@ class TempTestController(QtCore.QObject):
         stage_names = ["All", "45 lb DB", "Body Weight"]
         self.stages_loaded.emit(stage_names)
         self.test_meta_loaded.emit(details.get("meta", {}))
+
+        # Refresh bias cache for this device (enables/disables bias-controlled toggle).
+        try:
+            device_id = str(self._current_meta.get("device_id") or "").strip()
+            if not device_id:
+                device_id = os.path.basename(os.path.dirname(str(csv_path or ""))).strip()
+            self._refresh_bias_cache(device_id)
+        except Exception:
+            self._bias_cache = None
+            self.bias_status.emit({"available": False, "message": ""})
+
+        # Best-effort: refresh big-picture top3 for current plate type.
+        try:
+            self.rollup_ready.emit({"ok": True, "message": ""})
+        except Exception:
+            pass
 
     def select_processed_run(self, entry: dict) -> None:
         path = str((entry or {}).get("path") or "").strip()
@@ -218,6 +263,159 @@ class TempTestController(QtCore.QObject):
         if not self._current_test_csv:
             return
         QtCore.QTimer.singleShot(0, lambda: self.load_test_details(self._current_test_csv))
+
+        # After the user presses Process, recompute per-device room-temp bias.
+        if self._pending_bias_recompute and self._last_processing_device_id:
+            self._pending_bias_recompute = False
+            self._start_bias_compute(self._last_processing_device_id)
+
+    def _start_bias_compute(self, device_id: str) -> None:
+        if self._bias_worker and self._bias_worker.isRunning():
+            return
+        dev = str(device_id or "").strip()
+        if not dev:
+            return
+        self._bias_worker = BiasComputeWorker(self.testing, dev)
+        self._bias_worker.finished.connect(lambda: setattr(self, "_bias_worker", None))
+        self._bias_worker.result_ready.connect(self._on_bias_compute_result)
+        self._bias_worker.start()
+
+    def _on_bias_compute_result(self, result: dict) -> None:
+        ok = bool((result or {}).get("ok"))
+        if ok:
+            # Reload cache from disk for consistency.
+            try:
+                self._refresh_bias_cache(str((result.get("payload") or {}).get("device_id") or self._last_processing_device_id or ""))
+            except Exception:
+                self._bias_cache = None
+                self.bias_status.emit({"available": False, "message": ""})
+                return
+            self.bias_status.emit({"available": True, "message": ""})
+            return
+
+        # Failure: disable bias-controlled mode and provide details.
+        errs = list((result or {}).get("errors") or [])
+        msg = str((result or {}).get("message") or "Bias-controlled grading disabled.")
+        details = "\n".join([msg] + [f"- {e}" for e in errs if e])
+        self._bias_cache = None
+        self.bias_status.emit({"available": False, "message": details})
+
+    def _refresh_bias_cache(self, device_id: str) -> None:
+        dev = str(device_id or "").strip()
+        if not dev:
+            self._bias_cache = None
+            self.bias_status.emit({"available": False, "message": ""})
+            return
+        data = None
+        try:
+            data = self.testing.repo.load_temperature_bias_cache(dev)
+        except Exception:
+            data = None
+        if not isinstance(data, dict):
+            self._bias_cache = None
+            self.bias_status.emit({"available": False, "message": ""})
+            return
+        bias = data.get("bias")
+        rows = data.get("rows")
+        cols = data.get("cols")
+        if not isinstance(bias, list) or not isinstance(rows, int) or not isinstance(cols, int):
+            self._bias_cache = None
+            self.bias_status.emit({"available": False, "message": ""})
+            return
+        if len(bias) != rows or any((not isinstance(r, list) or len(r) != cols) for r in bias):
+            self._bias_cache = None
+            self.bias_status.emit({"available": False, "message": ""})
+            return
+        self._bias_cache = data
+        self.bias_status.emit({"available": True, "message": ""})
+
+    def set_grading_mode(self, mode: str) -> None:
+        mode_lc = str(mode or "").strip().lower()
+        self._grading_mode = "bias" if mode_lc.startswith("bias") else "absolute"
+
+    def grading_mode(self) -> str:
+        return self._grading_mode
+
+    def bias_map(self) -> Optional[list]:
+        if not isinstance(self._bias_cache, dict):
+            return None
+        bias = self._bias_cache.get("bias_all")
+        if isinstance(bias, list):
+            return bias
+        legacy = self._bias_cache.get("bias")
+        return legacy if isinstance(legacy, list) else None
+
+    def bias_map_db(self) -> Optional[list]:
+        if not isinstance(self._bias_cache, dict):
+            return None
+        bias = self._bias_cache.get("bias_db")
+        return bias if isinstance(bias, list) else None
+
+    def bias_map_bw(self) -> Optional[list]:
+        if not isinstance(self._bias_cache, dict):
+            return None
+        bias = self._bias_cache.get("bias_bw")
+        return bias if isinstance(bias, list) else None
+
+    def bias_cache(self) -> Optional[dict]:
+        return dict(self._bias_cache or {}) if isinstance(self._bias_cache, dict) else None
+
+    def current_plate_type(self) -> str:
+        """
+        Plate type derived from device_id (e.g., '06' from '06.00000025').
+        """
+        dev = str((self._current_meta or {}).get("device_id") or "").strip()
+        if dev:
+            return dev.split(".", 1)[0].strip()
+        return ""
+
+    def top3_for_current_plate_type(self) -> list[dict]:
+        pt = self.current_plate_type()
+        if not pt:
+            return []
+        try:
+            rows = self.testing.top3_temperature_coefs_for_plate_type(pt)
+            return list(rows or [])
+        except Exception:
+            return []
+
+    def run_coefs_across_plate_type(self, coefs: dict, mode: str) -> None:
+        """
+        Batch-run a coefficient set across all devices/tests for the current plate type.
+        """
+        plate_type = self.current_plate_type()
+        if not plate_type:
+            self.processing_status.emit({"status": "error", "message": "Missing plate type (no device selected)."})
+            return
+
+        if self._rollup_worker and self._rollup_worker.isRunning():
+            self.processing_status.emit({"status": "error", "message": "Batch rollup already running"})
+            return
+
+        class _RollupWorker(QtCore.QThread):
+            result_ready = QtCore.Signal(dict)
+
+            def __init__(self, service: TestingService, plate_type: str, coefs: dict, mode: str):
+                super().__init__()
+                self.service = service
+                self.plate_type = plate_type
+                self.coefs = dict(coefs or {})
+                self.mode = str(mode or "legacy")
+
+            def run(self) -> None:
+                try:
+                    res = self.service.run_temperature_coefs_across_plate_type(
+                        plate_type=self.plate_type, coefs=self.coefs, mode=self.mode
+                    )
+                    self.result_ready.emit(dict(res or {}))
+                except Exception as exc:
+                    self.result_ready.emit({"ok": False, "message": str(exc), "errors": [str(exc)]})
+
+        worker = _RollupWorker(self.testing, plate_type, coefs, mode)
+        self._rollup_worker = worker
+        worker.finished.connect(lambda: setattr(self, "_rollup_worker", None))
+        worker.result_ready.connect(self.rollup_ready.emit)
+        worker.start()
 
     def _on_analysis_result(self, payload: dict) -> None:
         # Update cache if needed
@@ -280,9 +478,11 @@ class TempTestController(QtCore.QObject):
         baseline = payload.get("baseline", {})
         selected = payload.get("selected", {})
 
+        bias = self.bias_map() if self._grading_mode == "bias" else None
+
         # Compute view models
-        baseline_vms = self.presenter.compute_analysis_cells(baseline, stage_key, device_type, body_weight_n)
-        selected_vms = self.presenter.compute_analysis_cells(selected, stage_key, device_type, body_weight_n)
+        baseline_vms = self.presenter.compute_analysis_cells(baseline, stage_key, device_type, body_weight_n, bias_map=bias)
+        selected_vms = self.presenter.compute_analysis_cells(selected, stage_key, device_type, body_weight_n, bias_map=bias)
 
         # Convert to dicts for view compatibility (for now)
         # Passing 'color' (QColor) instead of 'color_bin'

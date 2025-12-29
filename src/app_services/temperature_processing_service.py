@@ -103,6 +103,71 @@ class TemperatureProcessingService:
         except Exception as e:
             emit({"status": "error", "message": str(e)})
 
+    def ensure_temp_off_processed(
+        self,
+        *,
+        folder: str,
+        device_id: str,
+        csv_path: str,
+        room_temp_f: float = 72.0,
+        status_cb: Callable[[dict], None] | None = None,
+    ) -> str:
+        """
+        Ensure the "temp correction OFF" processed CSV exists for a given raw temp test.
+
+        Unlike `run_temperature_processing`, this does NOT produce a "temp correction ON"
+        variant. It is intended for building per-device room-temp baseline bias.
+
+        Returns the full path to the processed-off CSV.
+        """
+        def emit(payload: dict) -> None:
+            if status_cb is None:
+                return
+            try:
+                status_cb(dict(payload or {}))
+            except Exception:
+                pass
+
+        if not os.path.isfile(csv_path):
+            raise FileNotFoundError(csv_path)
+        if not self._hardware:
+            raise RuntimeError("Hardware service unavailable for temperature correction")
+
+        paths = self._repo.derive_temperature_paths(csv_path, device_id, mode="legacy")
+
+        if os.path.isfile(paths["trimmed"]):
+            trimmed_path = paths["trimmed"]
+        else:
+            emit({"status": "running", "message": "Slimming baseline CSV to 50Hz...", "progress": 5})
+            trimmed_path = self._repo.downsample_csv_to_50hz(csv_path, paths["trimmed"])
+
+        processed_off_path = os.path.join(folder, paths["processed_off_name"])
+        if not os.path.isfile(processed_off_path):
+            emit({"status": "running", "message": "Processing baseline (temp correction off)...", "progress": 25})
+            self._call_backend_process_csv(
+                input_csv_path=trimmed_path,
+                device_id=device_id,
+                output_folder=folder,
+                output_filename=paths["processed_off_name"],
+                use_temperature_correction=False,
+                room_temp_f=room_temp_f,
+                slopes=None,
+                mode="legacy",
+            )
+
+        # Record baseline output in meta for discoverability in the UI and for future reuse.
+        try:
+            self._repo.update_meta_with_baseline_only(
+                paths["meta"],
+                trimmed_csv=trimmed_path,
+                processed_off=processed_off_path,
+            )
+        except Exception:
+            # Meta updates are best-effort; baseline processing result is still valid.
+            pass
+
+        return processed_off_path
+
     def _call_backend_process_csv(
         self,
         *,

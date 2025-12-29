@@ -87,6 +87,40 @@ class TemperatureAnalyzer:
             "selected": selected,
         }
 
+    def analyze_single_processed_csv(
+        self,
+        csv_path: str,
+        meta: Optional[Dict[str, object]] = None,
+    ) -> Dict[str, object]:
+        """
+        Analyze a single processed CSV and return stage/cell metrics.
+
+        This is used for room-temp baseline bias learning (processed temp-correction OFF),
+        where we need stable-window cell means per stage, but don't need a baseline-vs-selected
+        comparison.
+        """
+        meta = dict(meta or {})
+        device_type = GeometryService.infer_device_type(meta)
+        rows, cols = GeometryService.get_grid_dimensions(device_type)
+        stage_configs = self._stage_configs_for_meta(meta)
+        analyzed = self._analyze_single_processed_csv(
+            csv_path,
+            stage_configs,
+            rows,
+            cols,
+            device_type,
+        )
+        return {
+            "grid": {"rows": rows, "cols": cols, "device_type": device_type},
+            "meta": {
+                "device_id": meta.get("device_id"),
+                "model_id": meta.get("model_id"),
+                "body_weight_n": meta.get("body_weight_n"),
+            },
+            "stage_order": [cfg["key"] for cfg in stage_configs],
+            "data": analyzed,
+        }
+
     def _stage_configs_for_meta(self, meta: Dict[str, object]) -> List[Dict[str, object]]:
         configs: List[Dict[str, object]] = []
         min_duration = int(getattr(config, "TEMP_STAGE_MIN_DURATION_MS", 2000))
