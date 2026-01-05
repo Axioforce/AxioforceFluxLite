@@ -109,3 +109,4 @@ class CalibrationController(QtCore.QObject):
         self.status_updated.emit("Generation Complete")
         self._worker = None
 
+
