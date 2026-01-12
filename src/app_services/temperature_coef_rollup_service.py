@@ -389,7 +389,7 @@ class TemperatureCoefRollupService:
                 all_temps.extend(list(temps))
                 eligible_runs.extend(dev_runs)
 
-            if eligible_devices < 2:
+            if eligible_devices < 1:
                 continue
 
             mean_abs_vals: List[float] = []
