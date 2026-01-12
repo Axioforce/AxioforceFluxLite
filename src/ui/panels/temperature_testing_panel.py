@@ -115,46 +115,44 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         self.test_list.installEventFilter(self)
         self.test_list.viewport().installEventFilter(self)
 
-        # Slopes
+        # Scalar temperature coefficients
         slopes_row = 2
-        
-        # Processing Mode
-        self.mode_combo = QtWidgets.QComboBox()
-        self.mode_combo.addItems(["Legacy", "Scalar"])
-        settings_layout.addWidget(QtWidgets.QLabel("Mode:"), slopes_row, 0)
-        settings_layout.addWidget(self.mode_combo, slopes_row, 1)
-        slopes_row += 1
 
         self.spin_x = QtWidgets.QDoubleSpinBox()
         self.spin_y = QtWidgets.QDoubleSpinBox()
         self.spin_z = QtWidgets.QDoubleSpinBox()
         for sp in (self.spin_x, self.spin_y, self.spin_z):
             sp.setRange(-1000.0, 1000.0)
-            sp.setDecimals(4)
-            # Default to legacy-friendly increments; Scalar mode will override to finer steps.
-            sp.setSingleStep(0.1)
-            sp.setValue(3.0)
+            # Scalar coefficients are small; make entry practical.
+            sp.setDecimals(6)
+            sp.setSingleStep(0.0001)
+            sp.setValue(0.002)
         
-        self.lbl_slope_x = QtWidgets.QLabel("Slope X:")
+        self.lbl_slope_x = QtWidgets.QLabel("Coef X:")
         settings_layout.addWidget(self.lbl_slope_x, slopes_row + 0, 0)
         settings_layout.addWidget(self.spin_x, slopes_row + 0, 1)
         
-        self.lbl_slope_y = QtWidgets.QLabel("Slope Y:")
+        self.lbl_slope_y = QtWidgets.QLabel("Coef Y:")
         settings_layout.addWidget(self.lbl_slope_y, slopes_row + 1, 0)
         settings_layout.addWidget(self.spin_y, slopes_row + 1, 1)
         
-        self.lbl_slope_z = QtWidgets.QLabel("Slope Z:")
+        self.lbl_slope_z = QtWidgets.QLabel("Coef Z:")
         settings_layout.addWidget(self.lbl_slope_z, slopes_row + 2, 0)
         settings_layout.addWidget(self.spin_z, slopes_row + 2, 1)
 
         # Run button
         self.btn_run = QtWidgets.QPushButton("Process")
+        self.btn_run_plate_type = QtWidgets.QPushButton("Run current coefs across plate type")
+        self.btn_run_plate_type.setToolTip(
+            "Runs the current coefficients across all devices of this plate type for all tests with meta, generating missing outputs."
+        )
 
         # Left column (single settings pane)
         left_col = QtWidgets.QVBoxLayout()
         left_col.setSpacing(8)
         left_col.addWidget(settings_box, 1)
         left_col.addWidget(self.btn_run)
+        left_col.addWidget(self.btn_run_plate_type)
         left_wrap = QtWidgets.QWidget()
         left_wrap.setLayout(left_col)
 
@@ -211,9 +209,9 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             pass
 
         self.device_combo.currentTextChanged.connect(self._on_device_changed)
-        self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
         self.btn_refresh.clicked.connect(self._on_refresh_clicked)
         self.btn_run.clicked.connect(self._on_run_clicked)
+        self.btn_run_plate_type.clicked.connect(self._on_run_plate_type_clicked)
         self.test_list.currentItemChanged.connect(self._emit_test_changed)
         self.processed_list.currentItemChanged.connect(self._emit_processed_changed)
         self.stage_combo.currentTextChanged.connect(lambda s: self.stage_changed.emit(str(s)))
@@ -247,10 +245,9 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             except Exception:
                 pass
             self.test_changed.connect(self.controller.load_test_details)
-
-            # Big picture: run coefs across plate type
+            # Big picture: reset plate-type top3 (clear rollup cache)
             try:
-                self.metrics_widget.btn_run_plate_type.clicked.connect(self._on_run_plate_type_clicked)
+                self.metrics_widget.btn_reset_top3.clicked.connect(self._on_reset_top3_clicked)
             except Exception:
                 pass
             try:
@@ -310,17 +307,51 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         if not self.controller:
             return
         try:
-            mode_text = str(self.mode_combo.currentText() or "Legacy").strip().lower()
-            mode = "scalar" if mode_text.startswith("scalar") else "legacy"
             x, y, z = self.slopes()
             coefs = {"x": float(x), "y": float(y), "z": float(z)}
             self.metrics_widget.set_big_picture_status("Running batch rollup…")
-            self.controller.run_coefs_across_plate_type(coefs, mode)
+            self.controller.run_coefs_across_plate_type(coefs, "scalar")
         except Exception as exc:
             try:
                 QtWidgets.QMessageBox.warning(self, "Batch Rollup", str(exc))
             except Exception:
                 pass
+
+    def _on_reset_top3_clicked(self) -> None:
+        """
+        Clear the stored plate-type rollup that feeds the Top-3 list.
+        This can be expensive to regenerate, so we always confirm.
+        """
+        if not self.controller:
+            return
+
+        pt = ""
+        try:
+            pt = str(self.controller.current_plate_type() or "").strip()
+        except Exception:
+            pt = ""
+
+        title = "Confirm Reset"
+        msg = (
+            "This will clear the stored plate-type rollup used to compute the Top 3 coef combos.\n\n"
+            "Regenerating it can take a lot of compute.\n\n"
+            f"Plate type: {pt or '—'}"
+        )
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            title,
+            msg,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        try:
+            self.metrics_widget.set_big_picture_status("Clearing rollup…")
+        except Exception:
+            pass
+        self.controller.reset_rollup_for_current_plate_type(backup=True)
 
     def _on_rollup_ready(self, payload: dict) -> None:
         payload = payload or {}
@@ -421,12 +452,11 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
                 continue
             label = e.get("label") or e.get("path") or ""
             mode = str(e.get("mode") or "").capitalize()
-            if mode and mode != "Legacy":
+            if mode == "Legacy":
+                # Scalar is the default/normal mode; only tag legacy runs so they stand out.
                 label = f"{label} [{mode}]"
             elif not mode:
-                # Fallback check if slopes look like scalar? 
-                # Or just assume Legacy if missing, as per requirement "If no such meta data exists... we can assume legacy for display"
-                # So we don't append anything for Legacy.
+                # If no meta exists, assume legacy (backwards compatibility) and avoid tagging.
                 pass
                 
             path = str(e.get("path") or "")
@@ -493,20 +523,6 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             except Exception:
                 pass
 
-    def _on_mode_changed(self, text: str) -> None:
-        prefix = "Scalar" if text == "Scalar" else "Slope"
-        self.lbl_slope_x.setText(f"{prefix} X:")
-        self.lbl_slope_y.setText(f"{prefix} Y:")
-        self.lbl_slope_z.setText(f"{prefix} Z:")
-        
-        # Make scalar entry practical (0.0001 granularity); keep legacy mode coarse.
-        step = 0.0001 if text == "Scalar" else 0.1
-        for sp in (self.spin_x, self.spin_y, self.spin_z):
-            try:
-                sp.setSingleStep(step)
-            except Exception:
-                pass
-
     def _on_delete_processed_requested(self, file_path: str) -> None:
         if not file_path:
             return
@@ -523,9 +539,8 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
                 self.controller.delete_processed_run(file_path)
 
     def _on_run_clicked(self) -> None:
-        mode = self.mode_combo.currentText().lower()
         payload = {
-            "mode": mode,
+            "mode": "scalar",
             "device_id": self.device_combo.currentText().strip(),
             "csv_path": self.selected_test(),
             "slopes": {"x": float(self.spin_x.value()), "y": float(self.spin_y.value()), "z": float(self.spin_z.value())},

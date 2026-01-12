@@ -385,7 +385,7 @@ class TemperatureTestRepository:
 
         def _fmt(val: float) -> str:
             # Keep scalar mode readable; also preserve precision for small legacy values.
-            decimals = 3 if (mode_lc == "scalar" or abs(val) < 0.1) else 2
+            decimals = 4 if (mode_lc == "scalar" or abs(val) < 0.1) else 2
             return f"{val:.{decimals}f}"
 
         x = float((slopes or {}).get("x", 0.0))

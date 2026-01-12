@@ -165,6 +165,10 @@ TEMP_COP_MAX_DISPLACEMENT_MM: float = 50.0  # Max distance COP can move within a
 TEMP_BASELINE_ROOM_TEMP_MIN_F: float = 71.0
 TEMP_BASELINE_ROOM_TEMP_MAX_F: float = 77.0
 
+# Temperature Testing: "ideal" room temperature reference used by temperature correction logic.
+# This should NOT be the measured test temperature; it's the reference/anchor temperature.
+TEMP_IDEAL_ROOM_TEMP_F: float = 76.0
+
 # Discrete Temp Testing: default scalar temperature coefficients (all-tests coefs)
 # These can be overridden via environment variables for quick iteration.
 DISCRETE_TEMP_COEF_X: float = float(os.environ.get("DISCRETE_TEMP_COEF_X", "0.004"))

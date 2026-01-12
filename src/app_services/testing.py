@@ -184,3 +184,9 @@ class TestingService(QtCore.QObject):
     def top3_temperature_coefs_for_plate_type(self, plate_type: str) -> List[Dict[str, object]]:
         return self._temp_rollup.top3_for_plate_type(plate_type)
 
+    def reset_temperature_coef_rollup(self, plate_type: str, *, backup: bool = True) -> Dict[str, object]:
+        """
+        Clear the stored plate-type coefficient rollup (used for the "Top 3 Coef Combos" view).
+        """
+        return self._temp_rollup.reset_rollup(plate_type, backup=bool(backup))
+

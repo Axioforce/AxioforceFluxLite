@@ -76,6 +76,42 @@ class TemperatureCoefRollupService:
             json.dump(payload, h, indent=2, sort_keys=True)
         return path
 
+    def reset_rollup(self, plate_type: str, *, backup: bool = True) -> Dict[str, object]:
+        """
+        Clear the stored rollup for a plate type (this indirectly resets the UI "Top 3").
+
+        By default we create a timestamped backup next to the original file to avoid
+        accidental loss of compute.
+        """
+        pt = str(plate_type or "").strip()
+        if not pt:
+            return {"ok": False, "message": "Missing plate type", "rollup_path": None, "backup_path": None}
+
+        path = self.rollup_path(pt)
+        if not os.path.isfile(path):
+            return {"ok": True, "message": f"No rollup found for type {pt} (already reset)", "rollup_path": path, "backup_path": None}
+
+        backup_path = None
+        if backup:
+            backup_path = f"{path}.bak.{int(time.time() * 1000)}"
+            try:
+                os.replace(path, backup_path)
+            except Exception:
+                # Fallback: best-effort copy + delete
+                try:
+                    with open(path, "rb") as src, open(backup_path, "wb") as dst:
+                        dst.write(src.read())
+                    os.remove(path)
+                except Exception as exc:
+                    return {"ok": False, "message": f"Failed to backup/remove rollup: {exc}", "rollup_path": path, "backup_path": backup_path}
+        else:
+            try:
+                os.remove(path)
+            except Exception as exc:
+                return {"ok": False, "message": f"Failed to delete rollup: {exc}", "rollup_path": path, "backup_path": None}
+
+        return {"ok": True, "message": f"Cleared rollup cache for type {pt}", "rollup_path": path, "backup_path": backup_path}
+
     def run_coefs_across_plate_type(
         self,
         *,
@@ -147,7 +183,8 @@ class TemperatureCoefRollupService:
                     temp_f = None
 
                 folder = os.path.dirname(raw_csv)
-                room_temp_f = float(temp_f) if temp_f is not None else float(meta.get("room_temperature_f") or 72.0)
+                # IMPORTANT: room_temp_f is the *ideal reference temp*, not the test's measured temp.
+                room_temp_f = float(getattr(config, "TEMP_IDEAL_ROOM_TEMP_F", 76.0))
 
                 emit(
                     {
@@ -157,46 +194,71 @@ class TemperatureCoefRollupService:
                     }
                 )
 
+                # If this coef set already exists for this test, skip processing and just analyze it.
                 try:
-                    # Ensure baseline off exists; run full processing to create the on-variant for this coef set.
-                    self._processing.run_temperature_processing(
-                        folder=folder,
-                        device_id=device_id,
-                        csv_path=raw_csv,
-                        slopes=coefs,
-                        room_temp_f=room_temp_f,
-                        mode=str(mode or "legacy"),
-                        status_cb=status_cb,
-                    )
-                except Exception as exc:
-                    errors.append(f"{device_id}: failed processing {os.path.basename(raw_csv)}: {exc}")
-                    continue
+                    details_existing = self._repo.get_temperature_test_details(raw_csv)
+                    proc_runs_existing = list(details_existing.get("processed_runs") or [])
+                except Exception:
+                    proc_runs_existing = []
 
-                # Resolve processed paths from meta (authoritative).
-                details = self._repo.get_temperature_test_details(raw_csv)
-                proc_runs = list(details.get("processed_runs") or [])
                 baseline_path = ""
-                for r in proc_runs:
-                    if r.get("is_baseline"):
-                        baseline_path = str(r.get("path") or "")
-                        break
                 selected_path = ""
-                for r in proc_runs:
+                for r in proc_runs_existing:
+                    if r.get("is_baseline") and not baseline_path:
+                        baseline_path = str(r.get("path") or "")
+                        continue
                     if r.get("is_baseline"):
                         continue
                     if _coef_key(str(r.get("mode") or "legacy"), dict(r.get("slopes") or {})) == coef_key:
                         selected_path = str(r.get("path") or "")
                         break
-                if not baseline_path or not selected_path:
-                    errors.append(f"{device_id}: missing processed paths after processing: {os.path.basename(raw_csv)}")
-                    continue
 
-                # Analyze baseline(off) vs selected(on).
-                try:
-                    payload = self._analyzer.analyze_temperature_processed_runs(baseline_path, selected_path, meta)
-                except Exception as exc:
-                    errors.append(f"{device_id}: analyze failed {os.path.basename(raw_csv)}: {exc}")
-                    continue
+                if baseline_path and selected_path and os.path.isfile(baseline_path) and os.path.isfile(selected_path):
+                    try:
+                        payload = self._analyzer.analyze_temperature_processed_runs(baseline_path, selected_path, meta)
+                    except Exception as exc:
+                        errors.append(f"{device_id}: analyze failed {os.path.basename(raw_csv)}: {exc}")
+                        continue
+                else:
+                    try:
+                        # Ensure baseline off exists; run full processing to create the on-variant for this coef set.
+                        self._processing.run_temperature_processing(
+                            folder=folder,
+                            device_id=device_id,
+                            csv_path=raw_csv,
+                            slopes=coefs,
+                            room_temp_f=room_temp_f,
+                            mode=str(mode or "legacy"),
+                            status_cb=status_cb,
+                        )
+                    except Exception as exc:
+                        errors.append(f"{device_id}: failed processing {os.path.basename(raw_csv)}: {exc}")
+                        continue
+
+                    # Resolve processed paths from meta (authoritative).
+                    details = self._repo.get_temperature_test_details(raw_csv)
+                    proc_runs = list(details.get("processed_runs") or [])
+                    for r in proc_runs:
+                        if r.get("is_baseline"):
+                            baseline_path = str(r.get("path") or "")
+                            break
+                    for r in proc_runs:
+                        if r.get("is_baseline"):
+                            continue
+                        if _coef_key(str(r.get("mode") or "legacy"), dict(r.get("slopes") or {})) == coef_key:
+                            selected_path = str(r.get("path") or "")
+                            break
+                    if not baseline_path or not selected_path:
+                        errors.append(f"{device_id}: missing processed paths after processing: {os.path.basename(raw_csv)}")
+                        continue
+
+                    # Analyze baseline(off) vs selected(on).
+                    try:
+                        payload = self._analyzer.analyze_temperature_processed_runs(baseline_path, selected_path, meta)
+                    except Exception as exc:
+                        errors.append(f"{device_id}: analyze failed {os.path.basename(raw_csv)}: {exc}")
+                        continue
+                    # end else (processing path)
 
                 grid = dict(payload.get("grid") or {})
                 device_type = str(grid.get("device_type") or pt)

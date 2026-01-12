@@ -10,7 +10,7 @@ from ..presenters.grid_presenter import GridPresenter
 
 class ProcessingWorker(QtCore.QThread):
     """Worker thread for running temperature processing in the background."""
-    def __init__(self, service: TestingService, folder: str, device_id: str, csv_path: str, slopes: dict, room_temp_f: float, mode: str = "legacy"):
+    def __init__(self, service: TestingService, folder: str, device_id: str, csv_path: str, slopes: dict, room_temp_f: float, mode: str = "scalar"):
         super().__init__()
         self.service = service
         self.folder = folder
@@ -142,8 +142,8 @@ class TempTestController(QtCore.QObject):
         device_id = payload.get("device_id")
         csv_path = payload.get("csv_path")
         slopes = payload.get("slopes", {})
-        room_temp_f = float(payload.get("room_temperature_f", 76.0))
-        mode = str(payload.get("mode", "legacy"))
+        room_temp_f = float(payload.get("room_temperature_f", config.TEMP_IDEAL_ROOM_TEMP_F))
+        mode = str(payload.get("mode", "scalar"))
         
         if not device_id or not csv_path:
             self.processing_status.emit({"status": "error", "message": "Please select a device and a test file."})
@@ -416,6 +416,24 @@ class TempTestController(QtCore.QObject):
         worker.finished.connect(lambda: setattr(self, "_rollup_worker", None))
         worker.result_ready.connect(self.rollup_ready.emit)
         worker.start()
+
+    def reset_rollup_for_current_plate_type(self, *, backup: bool = True) -> None:
+        """
+        Clear the plate-type coefficient rollup (this resets the Big Picture Top-3 display).
+        """
+        plate_type = self.current_plate_type()
+        if not plate_type:
+            self.processing_status.emit({"status": "error", "message": "Missing plate type (no device selected)."})
+            return
+        try:
+            res = self.testing.reset_temperature_coef_rollup(plate_type, backup=bool(backup))
+        except Exception as exc:
+            res = {"ok": False, "message": str(exc), "errors": [str(exc)]}
+        # Reuse rollup_ready channel so the panel refreshes top3 consistently.
+        try:
+            self.rollup_ready.emit(dict(res or {}))
+        except Exception:
+            pass
 
     def _on_analysis_result(self, payload: dict) -> None:
         # Update cache if needed

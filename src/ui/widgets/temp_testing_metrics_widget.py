@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, Optional, Tuple
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from ... import config
 
@@ -36,6 +36,40 @@ def _pass_rate(count_pass: int, count_total: int) -> str:
     if count_total <= 0:
         return "—"
     return f"{100.0 * float(count_pass) / float(count_total):.1f}%"
+
+
+def _compact_coef_label(label: str) -> str:
+    """
+    Convert stored coef labels/keys like:
+      "legacy:x=3.000000,y=2.500000,z=0.800000"
+    into:
+      "3,2.5,0.8"
+    """
+    s = str(label or "").strip()
+    if not s:
+        return "—"
+    try:
+        # Drop "mode:" prefix if present.
+        if ":" in s:
+            s = s.split(":", 1)[1]
+        parts = {}
+        for p in s.split(","):
+            p = p.strip()
+            if "=" not in p:
+                continue
+            k, v = p.split("=", 1)
+            k = k.strip().lower()
+            parts[k] = float(v)
+        xs = []
+        for k in ("x", "y", "z"):
+            v = float(parts.get(k, 0.0))
+            out = f"{v:.6f}".rstrip("0").rstrip(".")
+            if out == "-0":
+                out = "0"
+            xs.append(out)
+        return ",".join(xs)
+    except Exception:
+        return str(label)
 
 
 class TempTestingMetricsWidget(QtWidgets.QWidget):
@@ -113,7 +147,7 @@ class TempTestingMetricsWidget(QtWidgets.QWidget):
         current_layout.addWidget(bias_box)
         current_layout.addWidget(run_box)
 
-        root.addWidget(current_box, 1)
+        # We'll place Current View and Big Picture side-by-side to save vertical space.
 
         # --- Big picture ---
         big_box = QtWidgets.QGroupBox("Big Picture (Plate Type)")
@@ -123,11 +157,11 @@ class TempTestingMetricsWidget(QtWidgets.QWidget):
         self.lbl_big_status = QtWidgets.QLabel("—")
         big_layout.addWidget(self.lbl_big_status)
 
-        self.btn_run_plate_type = QtWidgets.QPushButton("Run current coefs across plate type")
-        self.btn_run_plate_type.setToolTip(
-            "Runs the current coefficients across all devices of this plate type for all tests with meta, generating missing outputs."
+        self.btn_reset_top3 = QtWidgets.QPushButton("Reset top 3 (clear plate-type rollup)")
+        self.btn_reset_top3.setToolTip(
+            "Clears the stored plate-type rollup used to compute the Top 3 list. This does not delete raw tests, only the rollup cache."
         )
-        big_layout.addWidget(self.btn_run_plate_type)
+        big_layout.addWidget(self.btn_reset_top3)
 
         # Simple top-3 display (placeholders for now; controller will fill these)
         top_box = QtWidgets.QGroupBox("Top 3 Coef Combos (Bias Controlled)")
@@ -157,7 +191,14 @@ class TempTestingMetricsWidget(QtWidgets.QWidget):
             self._top_rows.append((coef, score, signed, std, cov))
 
         big_layout.addWidget(top_box)
-        root.addWidget(big_box, 0)
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(current_box)
+        splitter.addWidget(big_box)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+
+        root.addWidget(splitter, 1)
 
     def clear(self) -> None:
         for lbls in self._bias_labels.values():
@@ -197,7 +238,7 @@ class TempTestingMetricsWidget(QtWidgets.QWidget):
                 cov.setText("—")
                 continue
             r = rows[idx] or {}
-            coef.setText(str(r.get("coef_label") or "—"))
+            coef.setText(_compact_coef_label(str(r.get("coef_label") or r.get("coef_key") or "")))
             score.setText(f"{float(r.get('score_mean_abs') or 0.0):.2f}%")
             signed.setText(f"{float(r.get('mean_signed') or 0.0):+.2f}%")
             std.setText(f"{float(r.get('std_signed') or 0.0):.2f}%")
