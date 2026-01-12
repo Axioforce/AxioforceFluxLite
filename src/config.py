@@ -96,6 +96,11 @@ THRESHOLDS_DB_N_BY_MODEL = {
     "11": 6.0,
 }
 
+# Canonical target load for the "45 lb DB" stage (in Newtons).
+# NOTE: This is intentionally NOT equal to (45 * 4.44822). We use a stabilizer and target
+# a slightly higher effective load for live/temperature testing consistency.
+DUMBBELL_45LB_TARGET_N: float = 206.3
+
 # Bodyweight tolerance percentages (fraction of body weight), per model id
 # These supersede fixed-N BW tolerances for pass/fail; UI still displays N (rounded)
 # 06 → 1.0%, 07 → 1.5%, 08 → 2.0%, 11 → 1.5% (identical to 07)

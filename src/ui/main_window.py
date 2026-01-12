@@ -2739,7 +2739,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Build 6 phases: DB/BW repeated 3x at center
         import math
-        lb_to_n = 4.44822
         names = [
             "45 lb DB (1/3)",
             "Body Weight (1/3)",
@@ -2749,11 +2748,11 @@ class MainWindow(QtWidgets.QMainWindow):
             "Body Weight (3/3)",
         ]
         targets = [
-            45 * lb_to_n,
+            float(config.DUMBBELL_45LB_TARGET_N),
             bw_n,
-            45 * lb_to_n,
+            float(config.DUMBBELL_45LB_TARGET_N),
             bw_n,
-            45 * lb_to_n,
+            float(config.DUMBBELL_45LB_TARGET_N),
             bw_n,
         ]
         stage_idx = 1
@@ -2965,11 +2964,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Build stages
         import math
-        lb_to_n = 4.44822
         if is_temp_test:
             # Temperature Test: two phases total — 45 lb DB and two-leg Body Weight
             names = ["45 lb DB", "Body Weight"]
-            targets = [45 * lb_to_n, bw_n]
+            targets = [float(config.DUMBBELL_45LB_TARGET_N), bw_n]
             stage_idx = 1
             for i in range(len(names)):
                 stage = LiveTestStage(index=stage_idx, name=names[i], location="A", target_n=targets[i], total_cells=rows * cols)
@@ -2980,7 +2978,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 stage_idx += 1
         else:
             # Default: 6 stages (A/B) x (DB, BW, BW-one-foot)
-            targets = [45 * lb_to_n, bw_n, bw_n]  # DB, BW, BW-one-foot (full BW)
+            targets = [float(config.DUMBBELL_45LB_TARGET_N), bw_n, bw_n]  # DB, BW, BW-one-foot (full BW)
             names = ["45 lb DB", "Body Weight", "Body Weight One Foot"]
             stage_idx = 1
             for location in ("A", "B"):
@@ -4201,7 +4199,7 @@ class MainWindow(QtWidgets.QMainWindow):
                  pass
                  
         targets = {
-            "45 lb": 200.0,  # Approx 45 lbs in N
+            "45 lb": float(config.DUMBBELL_45LB_TARGET_N),
             "Body Weight": bw_val
         }
         
@@ -4559,10 +4557,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.canvas_right.show_live_grid(int(rows), int(cols))
                 # Targets and tolerance for this stage
                 def _targets_for(stage_name: str) -> tuple[float, float]:
-                    lb_to_n = 4.44822
                     is_db = (stage_name.lower().find("db") >= 0)
                     if is_db:
-                        target = 45.0 * lb_to_n
+                        target = float(config.DUMBBELL_45LB_TARGET_N)
                         tol_n = float(getattr(config, "THRESHOLDS_DB_N_BY_MODEL", {}).get(dev_type, 6.0))
                     else:
                         try:
