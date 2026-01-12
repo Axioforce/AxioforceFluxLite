@@ -148,7 +148,13 @@ def get_passing_threshold(stage_key: str, device_type: str, body_weight_n: float
     return 10.0  # Fallback
 
 # Temperature analysis constants (tunable)
-TEMP_DB_TARGET_N: float = 45.0 * 4.44822  # 45 lb dumbbell in Newtons
+# Canonical stabilizer dumbbell "45 lb" load used by temperature/discrete-temp testing.
+# NOTE: This is intentionally NOT computed from 45 * lbf_to_newtons because the stabilizer
+# makes the effective load slightly heavier in practice.
+STABILIZER_45LB_WEIGHT_N: float = 206.3
+
+# Backwards-compatible alias: many call sites refer to this as the DB (dumbbell) target.
+TEMP_DB_TARGET_N: float = STABILIZER_45LB_WEIGHT_N
 TEMP_DB_TOL_N: float = 100.0
 TEMP_BW_TOL_N: float = 200.0
 TEMP_STAGE_MIN_DURATION_MS: int = 2000

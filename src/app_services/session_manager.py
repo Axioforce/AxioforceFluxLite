@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Optional, Tuple, List
 from PySide6 import QtCore
 
+from .. import config
 from ..domain.testing import TestSession, TestStage, TestResult, TestThresholds
 from .geometry import GeometryService
 
@@ -60,7 +61,7 @@ class SessionManager(QtCore.QObject):
         # Initialize stages (default logic)
         stages = []
         # Stage 0: 45 lb DB
-        stages.append(TestStage(0, "45 lb DB", "A", 200.0, rows * cols)) # Target approx 200N (45lbs)
+        stages.append(TestStage(0, "45 lb DB", "A", float(config.TEMP_DB_TARGET_N), rows * cols))
         # Stage 1: Body Weight
         stages.append(TestStage(1, "Body Weight", "A", body_weight_n, rows * cols))
         

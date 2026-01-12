@@ -81,7 +81,13 @@ class TemperatureBaselineBiasService:
         cols: Optional[int] = None
         device_type: Optional[str] = None
 
-        db_truth = float(getattr(config, "TEMP_DB_TARGET_N", 45.0 * 4.44822))
+        db_truth = float(
+            getattr(
+                config,
+                "TEMP_DB_TARGET_N",
+                getattr(config, "STABILIZER_45LB_WEIGHT_N", 206.3),
+            )
+        )
 
         for idx, entry in enumerate(baselines):
             raw_csv = str(entry.get("csv_path") or "")

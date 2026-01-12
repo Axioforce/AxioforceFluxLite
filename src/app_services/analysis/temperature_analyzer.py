@@ -128,7 +128,13 @@ class TemperatureAnalyzer:
         window_tol = int(getattr(config, "TEMP_ANALYSIS_WINDOW_TOL_MS", 200))
         min_force = float(getattr(config, "TEMP_MIN_FORCE_N", 100.0))
 
-        db_target = float(getattr(config, "TEMP_DB_TARGET_N", 45.0 * 4.44822))
+        db_target = float(
+            getattr(
+                config,
+                "TEMP_DB_TARGET_N",
+                getattr(config, "STABILIZER_45LB_WEIGHT_N", 206.3),
+            )
+        )
         db_tol = float(getattr(config, "TEMP_DB_TOL_N", 100.0))
         if db_target > 0.0 and db_tol > 0.0:
             configs.append(
