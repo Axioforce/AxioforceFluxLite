@@ -140,19 +140,26 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         settings_layout.addWidget(self.lbl_slope_z, slopes_row + 2, 0)
         settings_layout.addWidget(self.spin_z, slopes_row + 2, 1)
 
-        # Run button
+        # Run buttons
         self.btn_run = QtWidgets.QPushButton("Process")
         self.btn_run_plate_type = QtWidgets.QPushButton("Run current coefs across plate type")
         self.btn_run_plate_type.setToolTip(
             "Runs the current coefficients across all devices of this plate type for all tests with meta, generating missing outputs."
         )
+        self.btn_add_tests = QtWidgets.QPushButton("Add Tests")
 
         # Left column (single settings pane)
         left_col = QtWidgets.QVBoxLayout()
         left_col.setSpacing(8)
         left_col.addWidget(settings_box, 1)
-        left_col.addWidget(self.btn_run)
-        left_col.addWidget(self.btn_run_plate_type)
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.setSpacing(6)
+        btn_row.addWidget(self.btn_run, 1)
+        btn_row.addWidget(self.btn_run_plate_type, 1)
+        btn_row_wrap = QtWidgets.QWidget()
+        btn_row_wrap.setLayout(btn_row)
+        left_col.addWidget(btn_row_wrap)
+        left_col.addWidget(self.btn_add_tests)
         left_wrap = QtWidgets.QWidget()
         left_wrap.setLayout(left_col)
 
@@ -212,6 +219,7 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         self.btn_refresh.clicked.connect(self._on_refresh_clicked)
         self.btn_run.clicked.connect(self._on_run_clicked)
         self.btn_run_plate_type.clicked.connect(self._on_run_plate_type_clicked)
+        self.btn_add_tests.clicked.connect(self._on_add_tests_clicked)
         self.test_list.currentItemChanged.connect(self._emit_test_changed)
         self.processed_list.currentItemChanged.connect(self._emit_processed_changed)
         self.stage_combo.currentTextChanged.connect(lambda s: self.stage_changed.emit(str(s)))
@@ -250,8 +258,33 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
                 self.metrics_widget.btn_reset_top3.clicked.connect(self._on_reset_top3_clicked)
             except Exception:
                 pass
+            # Big picture: auto-search
+            try:
+                self.metrics_widget.btn_auto_search.clicked.connect(self._on_auto_search_clicked)
+            except Exception:
+                pass
             try:
                 self.controller.rollup_ready.connect(self._on_rollup_ready)
+            except Exception:
+                pass
+            try:
+                self.controller.auto_search_status.connect(self._on_auto_search_status)
+            except Exception:
+                pass
+            try:
+                self.metrics_widget.top3_sort_changed.connect(self._on_top3_sort_changed)
+            except Exception:
+                pass
+            try:
+                self.controller.import_ready.connect(self._on_import_ready)
+            except Exception:
+                pass
+            try:
+                self.controller.auto_update_status.connect(self._on_auto_update_status)
+            except Exception:
+                pass
+            try:
+                self.controller.auto_update_done.connect(self._on_auto_update_done)
             except Exception:
                 pass
             
@@ -259,6 +292,8 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             # We still allow explicit user-driven refresh via the Refresh button.
         self._bias_available = False
         self.set_bias_mode_available(False, "")
+        self._current_device_id = ""
+        self._current_plate_type = ""
 
     def grading_mode(self) -> str:
         text = str(self.grading_combo.currentText() or "Absolute").strip().lower()
@@ -299,6 +334,12 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         available = bool(payload.get("available"))
         message = str(payload.get("message") or "")
         self.set_bias_mode_available(available, message)
+        # Update bias baseline health table when cache is available.
+        if available and self.controller:
+            try:
+                self.metrics_widget.set_bias_cache(self.controller.bias_cache())
+            except Exception:
+                pass
 
     def _on_run_plate_type_clicked(self) -> None:
         """
@@ -353,6 +394,44 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             pass
         self.controller.reset_rollup_for_current_plate_type(backup=True)
 
+    def _on_auto_search_clicked(self) -> None:
+        """
+        Run auto-search for the current plate type.
+        """
+        if not self.controller:
+            return
+        mode = "unified"
+        try:
+            text = str(self.metrics_widget.auto_search_combo.currentText() or "").strip().lower()
+            if text.startswith("unified"):
+                mode = "unified"
+        except Exception:
+            mode = "unified"
+        try:
+            self.metrics_widget.btn_auto_search.setEnabled(False)
+        except Exception:
+            pass
+        try:
+            self.metrics_widget.set_big_picture_status("Auto search running…")
+        except Exception:
+            pass
+        self.controller.run_auto_search_for_current_plate_type(search_mode=mode, mode="scalar")
+
+    def _on_auto_search_status(self, payload: dict) -> None:
+        payload = payload or {}
+        status = str(payload.get("status") or "").lower()
+        msg = str(payload.get("message") or "")
+        if msg:
+            try:
+                self.metrics_widget.set_big_picture_status(msg)
+            except Exception:
+                pass
+        if status in ("completed", "error"):
+            try:
+                self.metrics_widget.btn_auto_search.setEnabled(True)
+            except Exception:
+                pass
+
     def _on_rollup_ready(self, payload: dict) -> None:
         payload = payload or {}
         ok = bool(payload.get("ok"))
@@ -361,8 +440,7 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         if ok:
             self.metrics_widget.set_big_picture_status(msg or "Batch rollup complete")
             try:
-                top3 = self.controller.top3_for_current_plate_type() if self.controller else []
-                self.metrics_widget.set_top3(list(top3 or []))
+                self._refresh_big_picture()
             except Exception:
                 pass
         else:
@@ -550,6 +628,126 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
         else:
             self.run_requested.emit(payload)
 
+    def _on_add_tests_clicked(self) -> None:
+        if not self.controller:
+            return
+        files, _filter = QtWidgets.QFileDialog.getOpenFileNames(
+            self,
+            "Add Temperature Tests",
+            "",
+            "Temperature Raw (temp-raw-*.csv;*.meta.json);;CSV Files (*.csv);;Meta JSON (*.meta.json);;All Files (*.*)",
+        )
+        files = list(files or [])
+        if not files:
+            return
+        self.metrics_widget.set_big_picture_status(f"Importing {len(files)} file(s)…")
+        self.controller.import_temperature_tests(files)
+
+    def _on_import_ready(self, payload: dict) -> None:
+        payload = payload or {}
+        imported = int(payload.get("imported") or 0)
+        skipped = int(payload.get("skipped") or 0)
+        errors = list(payload.get("errors") or [])
+        affected_devices = list(payload.get("affected_devices") or [])
+        affected_plate_types = list(payload.get("affected_plate_types") or [])
+
+        summary = f"Imported: {imported}\nSkipped (already exists): {skipped}"
+        if errors:
+            summary = summary + "\n\nErrors:\n" + "\n".join([f"- {e}" for e in errors if e])
+
+        try:
+            QtWidgets.QMessageBox.information(self, "Add Tests", summary)
+        except Exception:
+            pass
+
+        if imported <= 0:
+            self.metrics_widget.set_big_picture_status("Import complete")
+            return
+
+        # Refresh device list/tests since temp_testing folders may have changed.
+        try:
+            self.controller.refresh_devices()
+        except Exception:
+            pass
+        try:
+            if self._current_device_id:
+                self.controller.refresh_tests(self._current_device_id)
+        except Exception:
+            pass
+
+        # Ask for auto-update metrics.
+        title = "Auto Update Metrics"
+        msg = (
+            "Import complete.\n\n"
+            "Run auto-update metrics now?\n\n"
+            "- Resets plate-type rollups\n"
+            "- Recomputes bias caches from room-temp baselines\n"
+            "- Runs unified auto-search for each affected plate type\n\n"
+            f"Affected plate types: {', '.join(affected_plate_types) if affected_plate_types else '—'}"
+        )
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            title,
+            msg,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            self.metrics_widget.set_big_picture_status("Import complete (no auto-update)")
+            # Still refresh big picture with whatever exists now.
+            try:
+                self._refresh_big_picture()
+            except Exception:
+                pass
+            return
+
+        # Kick off auto-update (implemented next step).
+        self.metrics_widget.set_big_picture_status("Auto-update queued…")
+        try:
+            self.controller.run_auto_update_metrics(affected_plate_types, affected_devices)
+        except Exception as exc:
+            try:
+                QtWidgets.QMessageBox.warning(self, "Auto Update Metrics", str(exc))
+            except Exception:
+                pass
+
+    def _on_auto_update_status(self, payload: dict) -> None:
+        payload = payload or {}
+        msg = str(payload.get("message") or "")
+        if msg:
+            try:
+                self.metrics_widget.set_big_picture_status(msg)
+            except Exception:
+                pass
+
+    def _on_auto_update_done(self, payload: dict) -> None:
+        payload = payload or {}
+        ok = bool(payload.get("ok"))
+        msg = str(payload.get("message") or "")
+        errs = list(payload.get("errors") or [])
+        if msg:
+            try:
+                self.metrics_widget.set_big_picture_status(msg)
+            except Exception:
+                pass
+        if not ok and errs:
+            details = "\n".join([msg] + [f"- {e}" for e in errs if e])
+            try:
+                QtWidgets.QMessageBox.warning(self, "Auto Update Metrics", details or "Auto-update failed.")
+            except Exception:
+                pass
+        # Refresh Big Picture + bias cache for current device after auto-update.
+        try:
+            self._refresh_big_picture()
+        except Exception:
+            pass
+        try:
+            if self.controller and self._current_device_id:
+                loaded = bool(self.controller.load_bias_cache_for_device(self._current_device_id))
+                self.metrics_widget.set_bias_cache(self.controller.bias_cache() if loaded else None)
+        except Exception:
+            pass
+
     def _on_refresh_clicked(self) -> None:
         if self.controller:
             # Refresh the device list first (safe, does not trigger analysis).
@@ -581,6 +779,11 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
 
     def _on_device_changed(self, text: str) -> None:
         device = str(text or "").strip()
+        self._current_device_id = device
+        try:
+            self._current_plate_type = str(self.controller.plate_type_from_device_id(device) if self.controller else "")
+        except Exception:
+            self._current_plate_type = ""
         self.device_selected.emit(device)
         if not device:
             try:
@@ -596,6 +799,48 @@ class TemperatureTestingPanel(QtWidgets.QWidget):
             return
         if self.controller:
             self.controller.refresh_tests(device)
+            # Refresh Big Picture + Bias baseline health immediately on device selection.
+            try:
+                self._refresh_big_picture()
+            except Exception:
+                pass
+            try:
+                loaded = bool(self.controller.load_bias_cache_for_device(device))
+                self.metrics_widget.set_bias_cache(self.controller.bias_cache() if loaded else None)
+                if not loaded:
+                    title = "Bias Baseline Health"
+                    msg = "No bias cache found for this device.\n\nCompute bias now?"
+                    reply = QtWidgets.QMessageBox.question(
+                        self,
+                        title,
+                        msg,
+                        QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                        QtWidgets.QMessageBox.No,
+                    )
+                    if reply == QtWidgets.QMessageBox.Yes:
+                        self.metrics_widget.set_big_picture_status("Computing bias baseline…")
+                        self.controller.compute_bias_for_device(device)
+            except Exception:
+                pass
+
+    def _refresh_big_picture(self) -> None:
+        if not self.controller:
+            return
+        pt = str(self._current_plate_type or "").strip()
+        if not pt:
+            self.metrics_widget.set_top3([], [])
+            return
+        data = self.controller.top3_for_plate_type(pt)
+        rows_abs = list((data or {}).get("mean_abs") or [])
+        rows_signed = list((data or {}).get("signed_abs") or [])
+        self.metrics_widget.set_top3(rows_abs, rows_signed)
+
+    def _on_top3_sort_changed(self, _mode: str) -> None:
+        # Widget re-renders immediately; ensure its cached lists are fresh for current plate type.
+        try:
+            self._refresh_big_picture()
+        except Exception:
+            pass
 
     def _on_test_meta_loaded(self, meta: dict) -> None:
         if not isinstance(meta, dict):

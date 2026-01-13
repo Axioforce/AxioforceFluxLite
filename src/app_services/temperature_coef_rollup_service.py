@@ -11,6 +11,9 @@ from .analysis.temperature_analyzer import TemperatureAnalyzer
 from .repositories.test_file_repository import TestFileRepository
 from .temperature_baseline_bias_service import TemperatureBaselineBiasService
 from .temperature_processing_service import TemperatureProcessingService
+from .temperature_coef_rollup.aggregation import aggregate_mean_signed_for_coef_key, top3_rows_for_plate_type
+from .temperature_coef_rollup.coef_key import parse_coef_key
+from .temperature_coef_rollup.scoring import score_run_against_bias
 
 
 def _plate_type_from_device_id(device_id: str) -> str:
@@ -49,6 +52,9 @@ class TemperatureCoefRollupService:
         self._analyzer = analyzer
         self._processing = processing
         self._bias = bias
+
+    def coef_key(self, mode: str, coefs: dict) -> str:
+        return _coef_key(mode, coefs)
 
     def rollup_path(self, plate_type: str) -> str:
         base = os.path.join(data_dir("analysis"), "temp_coef_rollup")
@@ -148,6 +154,15 @@ class TemperatureCoefRollupService:
         rollup = self.load_rollup(pt)
         runs: List[Dict[str, object]] = list(rollup.get("runs") or [])
         errors: List[str] = []
+        # Keyed by (coef_key, device_id, raw_csv) for dedupe/overwrite.
+        existing_idx: Dict[tuple, int] = {}
+        for i, r in enumerate(runs):
+            try:
+                key = (str(r.get("coef_key") or ""), str(r.get("device_id") or ""), str(r.get("raw_csv") or ""))
+            except Exception:
+                continue
+            if key[0] and key[1] and key[2]:
+                existing_idx[key] = i
 
         emit({"status": "running", "message": f"Batch run {coef_key} across type {pt} ({len(devices)} devices)...", "progress": 1})
 
@@ -263,73 +278,48 @@ class TemperatureCoefRollupService:
                 grid = dict(payload.get("grid") or {})
                 device_type = str(grid.get("device_type") or pt)
                 body_weight_n = float((payload.get("meta") or {}).get("body_weight_n") or 0.0)
+                baseline_scores = {
+                    k: score_run_against_bias(
+                        run_data=payload.get("baseline") or {},
+                        stage_key=k,
+                        device_type=device_type,
+                        body_weight_n=body_weight_n,
+                        bias_map=bias_map,
+                    )
+                    for k in ("all", "db", "bw")
+                }
+                selected_scores = {
+                    k: score_run_against_bias(
+                        run_data=payload.get("selected") or {},
+                        stage_key=k,
+                        device_type=device_type,
+                        body_weight_n=body_weight_n,
+                        bias_map=bias_map,
+                    )
+                    for k in ("all", "db", "bw")
+                }
 
-                def _score(run_data: dict, stage_key: str) -> dict:
-                    stages = (run_data or {}).get("stages") or {}
-                    keys = list(stages.keys()) if stage_key == "all" else [stage_key]
-                    abs_pcts: List[float] = []
-                    signed_pcts: List[float] = []
-                    pass_count = 0
-                    total = 0
-                    for sk in keys:
-                        stage = stages.get(sk) or {}
-                        base_target = float(stage.get("target_n") or 0.0)
-                        threshold = float(config.get_passing_threshold(sk, device_type, body_weight_n))
-                        for cell in stage.get("cells", []) or []:
-                            try:
-                                rr = int(cell.get("row", 0))
-                                cc = int(cell.get("col", 0))
-                                mean_n = float(cell.get("mean_n", 0.0))
-                            except Exception:
-                                continue
-                            target = base_target
-                            try:
-                                target = base_target * (1.0 + float(bias_map[rr][cc]))
-                            except Exception:
-                                target = base_target
-                            if not target:
-                                continue
-                            signed = (mean_n - target) / target * 100.0
-                            abs_pcts.append(abs(signed))
-                            signed_pcts.append(signed)
-                            total += 1
-                            err_ratio = abs(mean_n - target) / threshold if threshold > 0 else 999.0
-                            if err_ratio <= float(config.COLOR_BIN_MULTIPLIERS.get("light_green", 1.0)):
-                                pass_count += 1
-                    if not abs_pcts:
-                        return {"n": 0}
-                    mean_abs = sum(abs_pcts) / float(len(abs_pcts))
-                    mean_signed = sum(signed_pcts) / float(len(signed_pcts))
-                    var = sum((x - mean_signed) ** 2 for x in signed_pcts) / float(max(1, len(signed_pcts) - 1))
-                    std_signed = float(var) ** 0.5
-                    return {
-                        "n": len(abs_pcts),
-                        "mean_abs": mean_abs,
-                        "mean_signed": mean_signed,
-                        "std_signed": std_signed,
-                        "pass_rate": (100.0 * pass_count / total) if total else None,
-                    }
-
-                baseline_scores = {k: _score(payload.get("baseline") or {}, k) for k in ("all", "db", "bw")}
-                selected_scores = {k: _score(payload.get("selected") or {}, k) for k in ("all", "db", "bw")}
-
-                runs.append(
-                    {
-                        "plate_type": pt,
-                        "device_id": device_id,
-                        "device_type": device_type,
-                        "coef_key": coef_key,
-                        "mode": str(mode or "legacy"),
-                        "coefs": {"x": float(coefs.get("x", 0.0)), "y": float(coefs.get("y", 0.0)), "z": float(coefs.get("z", 0.0))},
-                        "raw_csv": raw_csv,
-                        "temp_f": temp_f,
-                        "baseline_csv": baseline_path,
-                        "selected_csv": selected_path,
-                        "baseline": baseline_scores,
-                        "selected": selected_scores,
-                        "recorded_at_ms": int(time.time() * 1000),
-                    }
-                )
+                row = {
+                    "plate_type": pt,
+                    "device_id": device_id,
+                    "device_type": device_type,
+                    "coef_key": coef_key,
+                    "mode": str(mode or "legacy"),
+                    "coefs": {"x": float(coefs.get("x", 0.0)), "y": float(coefs.get("y", 0.0)), "z": float(coefs.get("z", 0.0))},
+                    "raw_csv": raw_csv,
+                    "temp_f": temp_f,
+                    "baseline_csv": baseline_path,
+                    "selected_csv": selected_path,
+                    "baseline": baseline_scores,
+                    "selected": selected_scores,
+                    "recorded_at_ms": int(time.time() * 1000),
+                }
+                k_existing = (coef_key, device_id, raw_csv)
+                if k_existing in existing_idx:
+                    runs[existing_idx[k_existing]] = row
+                else:
+                    existing_idx[k_existing] = len(runs)
+                    runs.append(row)
 
         rollup["version"] = 1
         rollup["plate_type"] = pt
@@ -342,7 +332,7 @@ class TemperatureCoefRollupService:
             msg = f"{msg} (with errors)"
         return {"ok": True, "message": msg, "rollup_path": path, "errors": errors}
 
-    def top3_for_plate_type(self, plate_type: str) -> List[Dict[str, object]]:
+    def top3_for_plate_type(self, plate_type: str, *, sort_by: str = "mean_abs") -> List[Dict[str, object]]:
         """
         Compute top-3 coefficient combos for a plate type using bias-controlled scoring only.
 
@@ -355,86 +345,85 @@ class TemperatureCoefRollupService:
         pt = str(plate_type or "").strip()
         rollup = self.load_rollup(pt)
         runs = list(rollup.get("runs") or [])
+        return top3_rows_for_plate_type(runs=runs, sort_by=str(sort_by or "mean_abs"))
 
-        # Group by coef_key -> device -> list of runs
-        by_coef: Dict[str, Dict[str, List[dict]]] = {}
+    def aggregate_selected_all_mean_signed(self, plate_type: str, *, coef_key: str) -> Optional[dict]:
+        """
+        Aggregate the rollup's selected/all mean_signed for a specific coef_key.
+        Uses the same eligibility logic as top-3 selection.
+        """
+        pt = str(plate_type or "").strip()
+        if not pt:
+            return None
+        rollup = self.load_rollup(pt)
+        runs = list(rollup.get("runs") or [])
+        return aggregate_mean_signed_for_coef_key(runs=runs, coef_key=str(coef_key or ""))
+
+    def list_existing_unified_candidates(
+        self,
+        plate_type: str,
+        *,
+        mode: str = "scalar",
+        min_coef: float = 0.0,
+        max_coef: float = 0.01,
+        tol: float = 1e-9,
+    ) -> List[Dict[str, object]]:
+        """
+        Return pre-run unified candidates (x=y=z) that already exist in the rollup, along with
+        their aggregate selected/all mean_signed (eligibility rules applied).
+        """
+        pt = str(plate_type or "").strip()
+        if not pt:
+            return []
+        m = str(mode or "scalar").strip().lower()
+        rollup = self.load_rollup(pt)
+        runs = list(rollup.get("runs") or [])
+
+        # Collect unique coef_keys for this mode that appear in the rollup.
+        keys = set()
         for r in runs:
             try:
                 ck = str(r.get("coef_key") or "")
-                dev = str(r.get("device_id") or "")
             except Exception:
                 continue
-            if not ck or not dev:
+            if not ck:
                 continue
-            by_coef.setdefault(ck, {}).setdefault(dev, []).append(r)
-
-        rows: List[Dict[str, object]] = []
-        for ck, by_dev in by_coef.items():
-            eligible_runs: List[dict] = []
-            eligible_devices = 0
-            all_temps: List[float] = []
-            for dev, dev_runs in by_dev.items():
-                temps = set()
-                for rr in dev_runs:
-                    tf = rr.get("temp_f")
-                    if tf is None:
-                        continue
-                    try:
-                        temps.add(float(tf))
-                    except Exception:
-                        continue
-                if len(temps) < 2:
-                    continue
-                eligible_devices += 1
-                all_temps.extend(list(temps))
-                eligible_runs.extend(dev_runs)
-
-            if eligible_devices < 1:
+            parsed = parse_coef_key(ck)
+            if not isinstance(parsed, dict):
                 continue
-
-            mean_abs_vals: List[float] = []
-            mean_signed_vals: List[float] = []
-            std_signed_vals: List[float] = []
-            for rr in eligible_runs:
-                sel = (rr.get("selected") or {}).get("all") or {}
-                try:
-                    mean_abs_vals.append(float(sel.get("mean_abs")))
-                except Exception:
-                    pass
-                try:
-                    mean_signed_vals.append(float(sel.get("mean_signed")))
-                except Exception:
-                    pass
-                try:
-                    std_signed_vals.append(float(sel.get("std_signed")))
-                except Exception:
-                    pass
-
-            if not mean_abs_vals:
+            if str(parsed.get("mode") or "").strip().lower() != m:
                 continue
+            x = float(parsed.get("x") or 0.0)
+            y = float(parsed.get("y") or 0.0)
+            z = float(parsed.get("z") or 0.0)
+            if abs(x - y) > tol or abs(x - z) > tol:
+                continue
+            if x < float(min_coef) - tol or x > float(max_coef) + tol:
+                continue
+            keys.add(ck)
 
-            score_mean_abs = sum(mean_abs_vals) / float(len(mean_abs_vals))
-            mean_signed = sum(mean_signed_vals) / float(len(mean_signed_vals)) if mean_signed_vals else 0.0
-            std_signed = sum(std_signed_vals) / float(len(std_signed_vals)) if std_signed_vals else 0.0
-            coverage = f"{eligible_devices} devices, {len(eligible_runs)} tests"
-            if all_temps:
-                try:
-                    coverage = f"{coverage}, temps {min(all_temps):.1f}–{max(all_temps):.1f}°F"
-                except Exception:
-                    pass
-
-            rows.append(
+        out: List[Dict[str, object]] = []
+        for ck in sorted(keys):
+            parsed = parse_coef_key(ck) or {}
+            coef = float(parsed.get("x") or 0.0)
+            agg = self.aggregate_selected_all_mean_signed(pt, coef_key=ck)
+            if not isinstance(agg, dict):
+                continue
+            try:
+                ms = float(agg.get("mean_signed"))
+            except Exception:
+                continue
+            out.append(
                 {
+                    "coef": coef,
                     "coef_key": ck,
-                    "coef_label": ck,
-                    "score_mean_abs": score_mean_abs,
-                    "mean_signed": mean_signed,
-                    "std_signed": std_signed,
-                    "coverage": coverage,
+                    "mean_signed": ms,
+                    "coverage": str(agg.get("coverage") or ""),
                 }
             )
 
-        rows.sort(key=lambda r: float(r.get("score_mean_abs") or 1e9))
-        return rows[:3]
+        # Sort by coef ascending for bracket scanning.
+        out.sort(key=lambda r: float(r.get("coef") or 0.0))
+        return out
 
 

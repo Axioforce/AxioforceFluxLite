@@ -73,6 +73,7 @@ def _compact_coef_label(label: str) -> str:
 
 
 class TempTestingMetricsWidget(QtWidgets.QWidget):
+    top3_sort_changed = QtCore.Signal(str)  # "mean_abs" | "signed_abs"
     """
     Metrics UI for the Temperature Testing tab.
 
@@ -157,11 +158,18 @@ class TempTestingMetricsWidget(QtWidgets.QWidget):
         self.lbl_big_status = QtWidgets.QLabel("—")
         big_layout.addWidget(self.lbl_big_status)
 
-        self.btn_reset_top3 = QtWidgets.QPushButton("Reset top 3 (clear plate-type rollup)")
-        self.btn_reset_top3.setToolTip(
-            "Clears the stored plate-type rollup used to compute the Top 3 list. This does not delete raw tests, only the rollup cache."
-        )
-        big_layout.addWidget(self.btn_reset_top3)
+        # Auto search controls
+        auto_row = QtWidgets.QHBoxLayout()
+        auto_row.setSpacing(6)
+        auto_row.addWidget(QtWidgets.QLabel("Auto Search:"), 0)
+        self.auto_search_combo = QtWidgets.QComboBox()
+        self.auto_search_combo.addItems(["Unified"])
+        self.auto_search_combo.setToolTip("Automated coefficient search (currently: unified X=Y=Z).")
+        auto_row.addWidget(self.auto_search_combo, 1)
+        self.btn_auto_search = QtWidgets.QPushButton("Run")
+        self.btn_auto_search.setToolTip("Run auto search for the current plate type and store results in the rollup.")
+        auto_row.addWidget(self.btn_auto_search, 0)
+        big_layout.addLayout(auto_row)
 
         # Simple top-3 display (placeholders for now; controller will fill these)
         top_box = QtWidgets.QGroupBox("Top 3 Coef Combos (Bias Controlled)")
@@ -170,8 +178,23 @@ class TempTestingMetricsWidget(QtWidgets.QWidget):
         top_layout.setVerticalSpacing(4)
         top_layout.addWidget(QtWidgets.QLabel("#"), 0, 0)
         top_layout.addWidget(QtWidgets.QLabel("Coef"), 0, 1)
-        top_layout.addWidget(QtWidgets.QLabel("Score (mean abs %)"), 0, 2)
-        top_layout.addWidget(QtWidgets.QLabel("Signed %"), 0, 3)
+        self._top3_sort_mode = "mean_abs"
+        self._top3_mean_abs_rows: list[dict] = []
+        self._top3_signed_abs_rows: list[dict] = []
+
+        def _mk_header_btn(text: str) -> QtWidgets.QPushButton:
+            b = QtWidgets.QPushButton(text)
+            b.setFlat(True)
+            b.setCursor(QtCore.Qt.PointingHandCursor)
+            b.setStyleSheet("QPushButton{padding:0px;text-align:left;}")
+            return b
+
+        self._hdr_mean_abs = _mk_header_btn("Score (mean abs %)")
+        self._hdr_signed = _mk_header_btn("Signed %")
+        self._hdr_mean_abs.clicked.connect(lambda: self._set_top3_sort_mode("mean_abs"))
+        self._hdr_signed.clicked.connect(lambda: self._set_top3_sort_mode("signed_abs"))
+        top_layout.addWidget(self._hdr_mean_abs, 0, 2)
+        top_layout.addWidget(self._hdr_signed, 0, 3)
         top_layout.addWidget(QtWidgets.QLabel("Std %"), 0, 4)
         top_layout.addWidget(QtWidgets.QLabel("Coverage"), 0, 5)
 
@@ -191,6 +214,14 @@ class TempTestingMetricsWidget(QtWidgets.QWidget):
             self._top_rows.append((coef, score, signed, std, cov))
 
         big_layout.addWidget(top_box)
+
+        self.btn_reset_top3 = QtWidgets.QPushButton("Reset top 3 (clear plate-type rollup)")
+        self.btn_reset_top3.setToolTip(
+            "Clears the stored plate-type rollup used to compute the Top 3 list. This does not delete raw tests, only the rollup cache."
+        )
+        big_layout.addWidget(self.btn_reset_top3)
+
+        self._update_top3_header_styles()
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.addWidget(current_box)
@@ -224,10 +255,43 @@ class TempTestingMetricsWidget(QtWidgets.QWidget):
         except Exception:
             pass
 
-    def set_top3(self, rows: list[dict]) -> None:
+    def set_top3(self, rows_mean_abs: list[dict], rows_signed_abs: list[dict]) -> None:
         """
-        rows: list of { coef_label, score_mean_abs, mean_signed, std_signed, coverage }
+        rows_*: list of { coef_label, score_mean_abs, mean_signed, std_signed, coverage }
         """
+        self._top3_mean_abs_rows = list(rows_mean_abs or [])
+        self._top3_signed_abs_rows = list(rows_signed_abs or [])
+        self._render_top3()
+
+    def _set_top3_sort_mode(self, mode: str) -> None:
+        mode = str(mode or "mean_abs").strip().lower()
+        if mode not in ("mean_abs", "signed_abs"):
+            mode = "mean_abs"
+        if getattr(self, "_top3_sort_mode", "mean_abs") == mode:
+            return
+        self._top3_sort_mode = mode
+        self._update_top3_header_styles()
+        try:
+            self.top3_sort_changed.emit(mode)
+        except Exception:
+            pass
+        self._render_top3()
+
+    def top3_sort_mode(self) -> str:
+        return str(getattr(self, "_top3_sort_mode", "mean_abs") or "mean_abs")
+
+    def _update_top3_header_styles(self) -> None:
+        mode = self.top3_sort_mode()
+        def _style(active: bool) -> str:
+            return "QPushButton{font-weight:%s; padding:0px; text-align:left;}" % ("700" if active else "400")
+        try:
+            self._hdr_mean_abs.setStyleSheet(_style(mode == "mean_abs"))
+            self._hdr_signed.setStyleSheet(_style(mode == "signed_abs"))
+        except Exception:
+            pass
+
+    def _render_top3(self) -> None:
+        rows = self._top3_mean_abs_rows if self.top3_sort_mode() == "mean_abs" else self._top3_signed_abs_rows
         for idx, widgets in enumerate(getattr(self, "_top_rows", [])):
             coef, score, signed, std, cov = widgets
             if idx >= len(rows):

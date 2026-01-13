@@ -1,0 +1,3976 @@
+{
+  "plate_type": "06",
+  "runs": [
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 0.7514724780197168,
+          "mean_signed": 0.5638413777299269,
+          "n": 18,
+          "pass_rate": 83.33333333333333,
+          "std_signed": 0.7756240504644464
+        },
+        "bw": {
+          "mean_abs": 0.6867717336053915,
+          "mean_signed": 0.5851835695876282,
+          "n": 9,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 0.6847240905038392
+        },
+        "db": {
+          "mean_abs": 0.8161732224340422,
+          "mean_signed": 0.5424991858722256,
+          "n": 9,
+          "pass_rate": 100.0,
+          "std_signed": 0.8991732247258551
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251120-150300.csv",
+      "coef_key": "scalar:x=0.002000,y=0.002000,z=0.002000",
+      "coefs": {
+        "x": 0.002,
+        "y": 0.002,
+        "z": 0.002
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251120-150300.csv",
+      "recorded_at_ms": 1768258560554,
+      "selected": {
+        "all": {
+          "mean_abs": 2.2428920074468817,
+          "mean_signed": -2.2428920074468817,
+          "n": 18,
+          "pass_rate": 27.77777777777778,
+          "std_signed": 0.8563962679661271
+        },
+        "bw": {
+          "mean_abs": 2.5087770347623595,
+          "mean_signed": -2.5087770347623595,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 0.6577735135759921
+        },
+        "db": {
+          "mean_abs": 1.9770069801314034,
+          "mean_signed": -1.9770069801314034,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 0.9832479615768652
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.002_0.002_0.002-06.0000000c-20251120-150300.csv",
+      "temp_f": 61.49350943396227
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 2.8441209157206546,
+          "mean_signed": 2.8441209157206546,
+          "n": 18,
+          "pass_rate": 16.666666666666668,
+          "std_signed": 1.4528362483780366
+        },
+        "bw": {
+          "mean_abs": 2.223259162274492,
+          "mean_signed": 2.223259162274492,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.1152176670684033
+        },
+        "db": {
+          "mean_abs": 3.464982669166817,
+          "mean_signed": 3.464982669166817,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 1.5408736375278935
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251124-130139.csv",
+      "coef_key": "scalar:x=0.002000,y=0.002000,z=0.002000",
+      "coefs": {
+        "x": 0.002,
+        "y": 0.002,
+        "z": 0.002
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251124-130139.csv",
+      "recorded_at_ms": 1768258560914,
+      "selected": {
+        "all": {
+          "mean_abs": 1.2815840191293064,
+          "mean_signed": -0.7546683930675319,
+          "n": 18,
+          "pass_rate": 61.111111111111114,
+          "std_signed": 1.5108898875942578
+        },
+        "bw": {
+          "mean_abs": 1.671982399128637,
+          "mean_signed": -1.671982399128637,
+          "n": 9,
+          "pass_rate": 33.333333333333336,
+          "std_signed": 1.0495166378533882
+        },
+        "db": {
+          "mean_abs": 0.8911856391299757,
+          "mean_signed": 0.1626456129935733,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.362403627942801
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.002_0.002_0.002-06.0000000c-20251124-130139.csv",
+      "temp_f": 57.7924571428571
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 7.477821249908273,
+          "mean_signed": 7.477821249908273,
+          "n": 17,
+          "pass_rate": 0.0,
+          "std_signed": 2.6480917949844827
+        },
+        "bw": {
+          "mean_abs": 6.410536622381602,
+          "mean_signed": 6.410536622381602,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.949795510860534
+        },
+        "db": {
+          "mean_abs": 8.678516455875778,
+          "mean_signed": 8.678516455875778,
+          "n": 8,
+          "pass_rate": 0.0,
+          "std_signed": 2.9276856314158457
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251126-190324.csv",
+      "coef_key": "scalar:x=0.002000,y=0.002000,z=0.002000",
+      "coefs": {
+        "x": 0.002,
+        "y": 0.002,
+        "z": 0.002
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251126-190324.csv",
+      "recorded_at_ms": 1768258561309,
+      "selected": {
+        "all": {
+          "mean_abs": 1.8261009098642669,
+          "mean_signed": -0.05028195516387655,
+          "n": 17,
+          "pass_rate": 47.05882352941177,
+          "std_signed": 2.4770571506577155
+        },
+        "bw": {
+          "mean_abs": 1.5006150029368035,
+          "mean_signed": -1.4360995273239343,
+          "n": 9,
+          "pass_rate": 33.333333333333336,
+          "std_signed": 0.9758583135423589
+        },
+        "db": {
+          "mean_abs": 2.192272555157663,
+          "mean_signed": 1.5087628135161886,
+          "n": 8,
+          "pass_rate": 62.5,
+          "std_signed": 2.772961816267854
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.002_0.002_0.002-06.0000000c-20251126-190324.csv",
+      "temp_f": 43.3742
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 0.9588998068877691,
+          "mean_signed": -0.8626511653323097,
+          "n": 17,
+          "pass_rate": 82.3529411764706,
+          "std_signed": 0.8057517752519424
+        },
+        "bw": {
+          "mean_abs": 0.8438631880677491,
+          "mean_signed": -0.7499915316946869,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 0.6890997887895108
+        },
+        "db": {
+          "mean_abs": 1.0883160030602916,
+          "mean_signed": -0.9893932531746352,
+          "n": 8,
+          "pass_rate": 87.5,
+          "std_signed": 0.9521530811617874
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251229-111107.csv",
+      "coef_key": "scalar:x=0.002000,y=0.002000,z=0.002000",
+      "coefs": {
+        "x": 0.002,
+        "y": 0.002,
+        "z": 0.002
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251229-111107.csv",
+      "recorded_at_ms": 1768258561642,
+      "selected": {
+        "all": {
+          "mean_abs": 1.1349504985200642,
+          "mean_signed": -1.1013440638112746,
+          "n": 17,
+          "pass_rate": 64.70588235294117,
+          "std_signed": 0.8451988759935604
+        },
+        "bw": {
+          "mean_abs": 1.04251838435907,
+          "mean_signed": -1.003394024045958,
+          "n": 9,
+          "pass_rate": 44.44444444444444,
+          "std_signed": 0.7346304856458238
+        },
+        "db": {
+          "mean_abs": 1.238936626951183,
+          "mean_signed": -1.2115378585472558,
+          "n": 8,
+          "pass_rate": 87.5,
+          "std_signed": 0.9949036826586298
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.002_0.002_0.002-06.0000000c-20251229-111107.csv",
+      "temp_f": 74.093
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.225030824434847,
+          "mean_signed": 0.8283090886988783,
+          "n": 18,
+          "pass_rate": 72.22222222222223,
+          "std_signed": 1.6167336723517198
+        },
+        "bw": {
+          "mean_abs": 0.4993528107926356,
+          "mean_signed": -0.2926217968526864,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 0.6934156154788046
+        },
+        "db": {
+          "mean_abs": 1.9507088380770585,
+          "mean_signed": 1.949239974250443,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.4988212624738508
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20260105-115931.csv",
+      "coef_key": "scalar:x=0.002000,y=0.002000,z=0.002000",
+      "coefs": {
+        "x": 0.002,
+        "y": 0.002,
+        "z": 0.002
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20260105-115931.csv",
+      "recorded_at_ms": 1768258561986,
+      "selected": {
+        "all": {
+          "mean_abs": 1.1900168296640246,
+          "mean_signed": 0.747181747601013,
+          "n": 18,
+          "pass_rate": 72.22222222222223,
+          "std_signed": 1.5854445257710144
+        },
+        "bw": {
+          "mean_abs": 0.5082017692067576,
+          "mean_signed": -0.35439771166512785,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 0.6905379732566312
+        },
+        "db": {
+          "mean_abs": 1.8718318901212914,
+          "mean_signed": 1.848761206867154,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.4609265391178636
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.002_0.002_0.002-06.0000000c-20260105-115931.csv",
+      "temp_f": 74.8832
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 5.741755725958639,
+          "mean_signed": 5.702167189265121,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 2.446295943611202
+        },
+        "bw": {
+          "mean_abs": 7.052728236981864,
+          "mean_signed": 7.052728236981864,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.3681129145039885
+        },
+        "db": {
+          "mean_abs": 4.430783214935415,
+          "mean_signed": 4.351606141548379,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 2.596344766776708
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251124-130741.csv",
+      "coef_key": "scalar:x=0.002000,y=0.002000,z=0.002000",
+      "coefs": {
+        "x": 0.002,
+        "y": 0.002,
+        "z": 0.002
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251124-130741.csv",
+      "recorded_at_ms": 1768258562734,
+      "selected": {
+        "all": {
+          "mean_abs": 2.0256124002303384,
+          "mean_signed": 1.3387157692922067,
+          "n": 18,
+          "pass_rate": 33.333333333333336,
+          "std_signed": 1.8425186270942981
+        },
+        "bw": {
+          "mean_abs": 2.088352871563461,
+          "mean_signed": 2.088352871563461,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.0710458447031708
+        },
+        "db": {
+          "mean_abs": 1.962871928897216,
+          "mean_signed": 0.5890786670209524,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 2.1914765401078267
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.002_0.002_0.002-06.00000025-20251124-130741.csv",
+      "temp_f": 56.71415929203539
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 8.839923727887797,
+          "mean_signed": 8.839923727887797,
+          "n": 18,
+          "pass_rate": 0.0,
+          "std_signed": 2.2648209540289175
+        },
+        "bw": {
+          "mean_abs": 10.303698552579549,
+          "mean_signed": 10.303698552579549,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.143896926424743
+        },
+        "db": {
+          "mean_abs": 7.376148903196044,
+          "mean_signed": 7.376148903196044,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 2.1841638707766218
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251126-191429.csv",
+      "coef_key": "scalar:x=0.002000,y=0.002000,z=0.002000",
+      "coefs": {
+        "x": 0.002,
+        "y": 0.002,
+        "z": 0.002
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251126-191429.csv",
+      "recorded_at_ms": 1768258563022,
+      "selected": {
+        "all": {
+          "mean_abs": 1.4912156218233514,
+          "mean_signed": 0.7120809150645573,
+          "n": 18,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 1.7699428238290935
+        },
+        "bw": {
+          "mean_abs": 1.160167851843077,
+          "mean_signed": 0.9889252240648578,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.0708819183315141
+        },
+        "db": {
+          "mean_abs": 1.8222633918036262,
+          "mean_signed": 0.4352366060642569,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 2.3103566998374228
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.002_0.002_0.002-06.00000025-20251126-191429.csv",
+      "temp_f": 42.312200000000004
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 3.1110150778813663,
+          "mean_signed": -0.6010819217143242,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 3.46355040751695
+        },
+        "bw": {
+          "mean_abs": 2.509933156167042,
+          "mean_signed": 2.509933156167042,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.2570342398957877
+        },
+        "db": {
+          "mean_abs": 3.71209699959569,
+          "mean_signed": -3.71209699959569,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.4612724302524596
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251223-170231.csv",
+      "coef_key": "scalar:x=0.002000,y=0.002000,z=0.002000",
+      "coefs": {
+        "x": 0.002,
+        "y": 0.002,
+        "z": 0.002
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251223-170231.csv",
+      "recorded_at_ms": 1768258563339,
+      "selected": {
+        "all": {
+          "mean_abs": 3.0752118679543003,
+          "mean_signed": -0.8336715168514617,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 3.407328187418966
+        },
+        "bw": {
+          "mean_abs": 2.241540351102839,
+          "mean_signed": 2.241540351102839,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.1228676360397065
+        },
+        "db": {
+          "mean_abs": 3.9088833848057627,
+          "mean_signed": -3.9088833848057627,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.4601666424679076
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.002_0.002_0.002-06.00000025-20251223-170231.csv",
+      "temp_f": 73.45305263157888
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.5090043576926626,
+          "mean_signed": 0.6010819217143212,
+          "n": 18,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.661406317092639
+        },
+        "bw": {
+          "mean_abs": 1.584381648594748,
+          "mean_signed": 1.571936378637651,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 0.8944453783991684
+        },
+        "db": {
+          "mean_abs": 1.4336270667905773,
+          "mean_signed": -0.36977253520900877,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.7160381369983229
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20260105-120607.csv",
+      "coef_key": "scalar:x=0.002000,y=0.002000,z=0.002000",
+      "coefs": {
+        "x": 0.002,
+        "y": 0.002,
+        "z": 0.002
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20260105-120607.csv",
+      "recorded_at_ms": 1768258563648,
+      "selected": {
+        "all": {
+          "mean_abs": 1.5328064593759627,
+          "mean_signed": 0.48426466619585096,
+          "n": 18,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.7022017749099825
+        },
+        "bw": {
+          "mean_abs": 1.4641543599133706,
+          "mean_signed": 1.448163074822119,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 0.8048804957507139
+        },
+        "db": {
+          "mean_abs": 1.6014585588385548,
+          "mean_signed": -0.47963374243041723,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.8490160067030905
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.002_0.002_0.002-06.00000025-20260105-120607.csv",
+      "temp_f": 74.15132
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 0.7514724780197168,
+          "mean_signed": 0.5638413777299269,
+          "n": 18,
+          "pass_rate": 83.33333333333333,
+          "std_signed": 0.7756240504644464
+        },
+        "bw": {
+          "mean_abs": 0.6867717336053915,
+          "mean_signed": 0.5851835695876282,
+          "n": 9,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 0.6847240905038392
+        },
+        "db": {
+          "mean_abs": 0.8161732224340422,
+          "mean_signed": 0.5424991858722256,
+          "n": 9,
+          "pass_rate": 100.0,
+          "std_signed": 0.8991732247258551
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251120-150300.csv",
+      "coef_key": "scalar:x=0.001000,y=0.001000,z=0.001000",
+      "coefs": {
+        "x": 0.001,
+        "y": 0.001,
+        "z": 0.001
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251120-150300.csv",
+      "recorded_at_ms": 1768258556562,
+      "selected": {
+        "all": {
+          "mean_abs": 0.9270609443098041,
+          "mean_signed": -0.8430216202401526,
+          "n": 18,
+          "pass_rate": 72.22222222222223,
+          "std_signed": 0.8010777577889038
+        },
+        "bw": {
+          "mean_abs": 0.9680282441480023,
+          "mean_signed": -0.9680282441480023,
+          "n": 9,
+          "pass_rate": 44.44444444444444,
+          "std_signed": 0.6599599128797844
+        },
+        "db": {
+          "mean_abs": 0.886093644471606,
+          "mean_signed": -0.7180149963323029,
+          "n": 9,
+          "pass_rate": 100.0,
+          "std_signed": 0.9449654925689234
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.001_0.001_0.001-06.0000000c-20251120-150300.csv",
+      "temp_f": 61.49350943396227
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 2.8441209157206546,
+          "mean_signed": 2.8441209157206546,
+          "n": 18,
+          "pass_rate": 16.666666666666668,
+          "std_signed": 1.4528362483780366
+        },
+        "bw": {
+          "mean_abs": 2.223259162274492,
+          "mean_signed": 2.223259162274492,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.1152176670684033
+        },
+        "db": {
+          "mean_abs": 3.464982669166817,
+          "mean_signed": 3.464982669166817,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 1.5408736375278935
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251124-130139.csv",
+      "coef_key": "scalar:x=0.001000,y=0.001000,z=0.001000",
+      "coefs": {
+        "x": 0.001,
+        "y": 0.001,
+        "z": 0.001
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251124-130139.csv",
+      "recorded_at_ms": 1768258556939,
+      "selected": {
+        "all": {
+          "mean_abs": 1.3610524285629186,
+          "mean_signed": 1.0453550946855519,
+          "n": 18,
+          "pass_rate": 72.22222222222223,
+          "std_signed": 1.4632210863309405
+        },
+        "bw": {
+          "mean_abs": 0.9103961377513323,
+          "mean_signed": 0.27900146999659875,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.0746723535385325
+        },
+        "db": {
+          "mean_abs": 1.8117087193745052,
+          "mean_signed": 1.8117087193745052,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.439902078363704
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.001_0.001_0.001-06.0000000c-20251124-130139.csv",
+      "temp_f": 57.7924571428571
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 7.477821249908273,
+          "mean_signed": 7.477821249908273,
+          "n": 17,
+          "pass_rate": 0.0,
+          "std_signed": 2.6480917949844827
+        },
+        "bw": {
+          "mean_abs": 6.410536622381602,
+          "mean_signed": 6.410536622381602,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.949795510860534
+        },
+        "db": {
+          "mean_abs": 8.678516455875778,
+          "mean_signed": 8.678516455875778,
+          "n": 8,
+          "pass_rate": 0.0,
+          "std_signed": 2.9276856314158457
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251126-190324.csv",
+      "coef_key": "scalar:x=0.001000,y=0.001000,z=0.001000",
+      "coefs": {
+        "x": 0.001,
+        "y": 0.001,
+        "z": 0.001
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251126-190324.csv",
+      "recorded_at_ms": 1768258557354,
+      "selected": {
+        "all": {
+          "mean_abs": 3.658713084354778,
+          "mean_signed": 3.658713084354778,
+          "n": 17,
+          "pass_rate": 11.764705882352942,
+          "std_signed": 2.5155058057645885
+        },
+        "bw": {
+          "mean_abs": 2.396664471481609,
+          "mean_signed": 2.396664471481609,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.3328808947068003
+        },
+        "db": {
+          "mean_abs": 5.078517773837093,
+          "mean_signed": 5.078517773837093,
+          "n": 8,
+          "pass_rate": 12.5,
+          "std_signed": 2.8427872726821883
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.001_0.001_0.001-06.0000000c-20251126-190324.csv",
+      "temp_f": 43.3742
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 0.9588998068877691,
+          "mean_signed": -0.8626511653323097,
+          "n": 17,
+          "pass_rate": 82.3529411764706,
+          "std_signed": 0.8057517752519424
+        },
+        "bw": {
+          "mean_abs": 0.8438631880677491,
+          "mean_signed": -0.7499915316946869,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 0.6890997887895108
+        },
+        "db": {
+          "mean_abs": 1.0883160030602916,
+          "mean_signed": -0.9893932531746352,
+          "n": 8,
+          "pass_rate": 87.5,
+          "std_signed": 0.9521530811617874
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251229-111107.csv",
+      "coef_key": "scalar:x=0.001000,y=0.001000,z=0.001000",
+      "coefs": {
+        "x": 0.001,
+        "y": 0.001,
+        "z": 0.001
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251229-111107.csv",
+      "recorded_at_ms": 1768258557694,
+      "selected": {
+        "all": {
+          "mean_abs": 1.0445944150504385,
+          "mean_signed": -0.9818737175273652,
+          "n": 17,
+          "pass_rate": 76.47058823529412,
+          "std_signed": 0.8247476528480393
+        },
+        "bw": {
+          "mean_abs": 0.9430431559257276,
+          "mean_signed": -0.8767112031333382,
+          "n": 9,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 0.7108955390747305
+        },
+        "db": {
+          "mean_abs": 1.1588395815657384,
+          "mean_signed": -1.1001815462206455,
+          "n": 8,
+          "pass_rate": 87.5,
+          "std_signed": 0.9731284591239574
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.001_0.001_0.001-06.0000000c-20251229-111107.csv",
+      "temp_f": 74.093
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.225030824434847,
+          "mean_signed": 0.8283090886988783,
+          "n": 18,
+          "pass_rate": 72.22222222222223,
+          "std_signed": 1.6167336723517198
+        },
+        "bw": {
+          "mean_abs": 0.4993528107926356,
+          "mean_signed": -0.2926217968526864,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 0.6934156154788046
+        },
+        "db": {
+          "mean_abs": 1.9507088380770585,
+          "mean_signed": 1.949239974250443,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.4988212624738508
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20260105-115931.csv",
+      "coef_key": "scalar:x=0.001000,y=0.001000,z=0.001000",
+      "coefs": {
+        "x": 0.001,
+        "y": 0.001,
+        "z": 0.001
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20260105-115931.csv",
+      "recorded_at_ms": 1768258558033,
+      "selected": {
+        "all": {
+          "mean_abs": 1.2075366362706714,
+          "mean_signed": 0.7877758890927675,
+          "n": 18,
+          "pass_rate": 72.22222222222223,
+          "std_signed": 1.6006643863036856
+        },
+        "bw": {
+          "mean_abs": 0.5037859530726394,
+          "mean_signed": -0.3235274301942242,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 0.6904212489705223
+        },
+        "db": {
+          "mean_abs": 1.9112873194687034,
+          "mean_signed": 1.8990792083797592,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.4795601921004664
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.001_0.001_0.001-06.0000000c-20260105-115931.csv",
+      "temp_f": 74.8832
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 5.741755725958639,
+          "mean_signed": 5.702167189265121,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 2.446295943611202
+        },
+        "bw": {
+          "mean_abs": 7.052728236981864,
+          "mean_signed": 7.052728236981864,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.3681129145039885
+        },
+        "db": {
+          "mean_abs": 4.430783214935415,
+          "mean_signed": 4.351606141548379,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 2.596344766776708
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251124-130741.csv",
+      "coef_key": "scalar:x=0.001000,y=0.001000,z=0.001000",
+      "coefs": {
+        "x": 0.001,
+        "y": 0.001,
+        "z": 0.001
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251124-130741.csv",
+      "recorded_at_ms": 1768258558855,
+      "selected": {
+        "all": {
+          "mean_abs": 3.837401987411677,
+          "mean_signed": 3.5074361532043428,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 2.132376752200119
+        },
+        "bw": {
+          "mean_abs": 4.559448608147119,
+          "mean_signed": 4.559448608147119,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.2189190493187263
+        },
+        "db": {
+          "mean_abs": 3.1153553666762357,
+          "mean_signed": 2.4554236982615665,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 2.3846453494120023
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.001_0.001_0.001-06.00000025-20251124-130741.csv",
+      "temp_f": 56.71415929203539
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 8.839923727887797,
+          "mean_signed": 8.839923727887797,
+          "n": 18,
+          "pass_rate": 0.0,
+          "std_signed": 2.2648209540289175
+        },
+        "bw": {
+          "mean_abs": 10.303698552579549,
+          "mean_signed": 10.303698552579549,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.143896926424743
+        },
+        "db": {
+          "mean_abs": 7.376148903196044,
+          "mean_signed": 7.376148903196044,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 2.1841638707766218
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251126-191429.csv",
+      "coef_key": "scalar:x=0.001000,y=0.001000,z=0.001000",
+      "coefs": {
+        "x": 0.001,
+        "y": 0.001,
+        "z": 0.001
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251126-191429.csv",
+      "recorded_at_ms": 1768258559181,
+      "selected": {
+        "all": {
+          "mean_abs": 4.757959123110668,
+          "mean_signed": 4.757959123110668,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.9161101955718485
+        },
+        "bw": {
+          "mean_abs": 5.635641827198158,
+          "mean_signed": 5.635641827198158,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.084393235654922
+        },
+        "db": {
+          "mean_abs": 3.8802764190231778,
+          "mean_signed": 3.8802764190231778,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 2.2119554851848138
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.001_0.001_0.001-06.00000025-20251126-191429.csv",
+      "temp_f": 42.312200000000004
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 3.1110150778813663,
+          "mean_signed": -0.6010819217143242,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 3.46355040751695
+        },
+        "bw": {
+          "mean_abs": 2.509933156167042,
+          "mean_signed": 2.509933156167042,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.2570342398957877
+        },
+        "db": {
+          "mean_abs": 3.71209699959569,
+          "mean_signed": -3.71209699959569,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.4612724302524596
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251223-170231.csv",
+      "coef_key": "scalar:x=0.001000,y=0.001000,z=0.001000",
+      "coefs": {
+        "x": 0.001,
+        "y": 0.001,
+        "z": 0.001
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251223-170231.csv",
+      "recorded_at_ms": 1768258559497,
+      "selected": {
+        "all": {
+          "mean_abs": 3.0930493057182407,
+          "mean_signed": -0.7173798447218466,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 3.4344258036971067
+        },
+        "bw": {
+          "mean_abs": 2.3756694609963938,
+          "mean_signed": 2.3756694609963938,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.1887181715524604
+        },
+        "db": {
+          "mean_abs": 3.810429150440087,
+          "mean_signed": -3.810429150440087,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.4581748416600713
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.001_0.001_0.001-06.00000025-20251223-170231.csv",
+      "temp_f": 73.45305263157888
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.5090043576926626,
+          "mean_signed": 0.6010819217143212,
+          "n": 18,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.661406317092639
+        },
+        "bw": {
+          "mean_abs": 1.584381648594748,
+          "mean_signed": 1.571936378637651,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 0.8944453783991684
+        },
+        "db": {
+          "mean_abs": 1.4336270667905773,
+          "mean_signed": -0.36977253520900877,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.7160381369983229
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20260105-120607.csv",
+      "coef_key": "scalar:x=0.001000,y=0.001000,z=0.001000",
+      "coefs": {
+        "x": 0.001,
+        "y": 0.001,
+        "z": 0.001
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20260105-120607.csv",
+      "recorded_at_ms": 1768258559804,
+      "selected": {
+        "all": {
+          "mean_abs": 1.5209176229583046,
+          "mean_signed": 0.5426312238190176,
+          "n": 18,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.6797569092149682
+        },
+        "bw": {
+          "mean_abs": 1.5242528560597948,
+          "mean_signed": 1.5100050931110598,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 0.8462392350694404
+        },
+        "db": {
+          "mean_abs": 1.5175823898568144,
+          "mean_signed": -0.42474264547302465,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.7816189709563273
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.001_0.001_0.001-06.00000025-20260105-120607.csv",
+      "temp_f": 74.15132
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 0.7514724780197168,
+          "mean_signed": 0.5638413777299269,
+          "n": 18,
+          "pass_rate": 83.33333333333333,
+          "std_signed": 0.7756240504644464
+        },
+        "bw": {
+          "mean_abs": 0.6867717336053915,
+          "mean_signed": 0.5851835695876282,
+          "n": 9,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 0.6847240905038392
+        },
+        "db": {
+          "mean_abs": 0.8161732224340422,
+          "mean_signed": 0.5424991858722256,
+          "n": 9,
+          "pass_rate": 100.0,
+          "std_signed": 0.8991732247258551
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251120-150300.csv",
+      "coef_key": "scalar:x=0.001500,y=0.001500,z=0.001500",
+      "coefs": {
+        "x": 0.0015,
+        "y": 0.0015,
+        "z": 0.0015
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251120-150300.csv",
+      "recorded_at_ms": 1768258564400,
+      "selected": {
+        "all": {
+          "mean_abs": 1.5436021785693603,
+          "mean_signed": -1.5436021785693603,
+          "n": 18,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 0.8263116159500137
+        },
+        "bw": {
+          "mean_abs": 1.7390726258262932,
+          "mean_signed": -1.7390726258262932,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 0.6575649986725759
+        },
+        "db": {
+          "mean_abs": 1.3481317313124273,
+          "mean_signed": -1.3481317313124273,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 0.9656962986472322
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0015_0.0015_0.0015-06.0000000c-20251120-150300.csv",
+      "temp_f": 61.49350943396227
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 2.8441209157206546,
+          "mean_signed": 2.8441209157206546,
+          "n": 18,
+          "pass_rate": 16.666666666666668,
+          "std_signed": 1.4528362483780366
+        },
+        "bw": {
+          "mean_abs": 2.223259162274492,
+          "mean_signed": 2.223259162274492,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.1152176670684033
+        },
+        "db": {
+          "mean_abs": 3.464982669166817,
+          "mean_signed": 3.464982669166817,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 1.5408736375278935
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251124-130139.csv",
+      "coef_key": "scalar:x=0.001500,y=0.001500,z=0.001500",
+      "coefs": {
+        "x": 0.0015,
+        "y": 0.0015,
+        "z": 0.0015
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251124-130139.csv",
+      "recorded_at_ms": 1768258564755,
+      "selected": {
+        "all": {
+          "mean_abs": 1.0395351442293501,
+          "mean_signed": 0.14620312758845008,
+          "n": 18,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 1.4818838714919507
+        },
+        "bw": {
+          "mean_abs": 0.979981075791264,
+          "mean_signed": -0.6960003283865106,
+          "n": 9,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 1.0582428924922989
+        },
+        "db": {
+          "mean_abs": 1.0990892126674365,
+          "mean_signed": 0.9884065835634108,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.3966528150949316
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0015_0.0015_0.0015-06.0000000c-20251124-130139.csv",
+      "temp_f": 57.7924571428571
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 7.477821249908273,
+          "mean_signed": 7.477821249908273,
+          "n": 17,
+          "pass_rate": 0.0,
+          "std_signed": 2.6480917949844827
+        },
+        "bw": {
+          "mean_abs": 6.410536622381602,
+          "mean_signed": 6.410536622381602,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.949795510860534
+        },
+        "db": {
+          "mean_abs": 8.678516455875778,
+          "mean_signed": 8.678516455875778,
+          "n": 8,
+          "pass_rate": 0.0,
+          "std_signed": 2.9276856314158457
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251126-190324.csv",
+      "coef_key": "scalar:x=0.001500,y=0.001500,z=0.001500",
+      "coefs": {
+        "x": 0.0015,
+        "y": 0.0015,
+        "z": 0.0015
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251126-190324.csv",
+      "recorded_at_ms": 1768258565149,
+      "selected": {
+        "all": {
+          "mean_abs": 2.00049859578502,
+          "mean_signed": 1.796458753374484,
+          "n": 17,
+          "pass_rate": 70.58823529411765,
+          "std_signed": 2.485896842761713
+        },
+        "bw": {
+          "mean_abs": 0.8542881859766216,
+          "mean_signed": 0.4688795947567206,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 1.1148622211894335
+        },
+        "db": {
+          "mean_abs": 3.2899853068194678,
+          "mean_signed": 3.2899853068194678,
+          "n": 8,
+          "pass_rate": 62.5,
+          "std_signed": 2.8087724135905434
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0015_0.0015_0.0015-06.0000000c-20251126-190324.csv",
+      "temp_f": 43.3742
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 0.9588998068877691,
+          "mean_signed": -0.8626511653323097,
+          "n": 17,
+          "pass_rate": 82.3529411764706,
+          "std_signed": 0.8057517752519424
+        },
+        "bw": {
+          "mean_abs": 0.8438631880677491,
+          "mean_signed": -0.7499915316946869,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 0.6890997887895108
+        },
+        "db": {
+          "mean_abs": 1.0883160030602916,
+          "mean_signed": -0.9893932531746352,
+          "n": 8,
+          "pass_rate": 87.5,
+          "std_signed": 0.9521530811617874
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251229-111107.csv",
+      "coef_key": "scalar:x=0.001500,y=0.001500,z=0.001500",
+      "coefs": {
+        "x": 0.0015,
+        "y": 0.0015,
+        "z": 0.0015
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251229-111107.csv",
+      "recorded_at_ms": 1768258565480,
+      "selected": {
+        "all": {
+          "mean_abs": 1.0875897396040959,
+          "mean_signed": -1.0415784309824456,
+          "n": 17,
+          "pass_rate": 64.70588235294117,
+          "std_signed": 0.8348072088726929
+        },
+        "bw": {
+          "mean_abs": 0.9927483698364118,
+          "mean_signed": -0.9400457311186964,
+          "n": 9,
+          "pass_rate": 44.44444444444444,
+          "std_signed": 0.7225466807908216
+        },
+        "db": {
+          "mean_abs": 1.1942862805927403,
+          "mean_signed": -1.1558027183291633,
+          "n": 8,
+          "pass_rate": 87.5,
+          "std_signed": 0.983920878320498
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0015_0.0015_0.0015-06.0000000c-20251229-111107.csv",
+      "temp_f": 74.093
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.225030824434847,
+          "mean_signed": 0.8283090886988783,
+          "n": 18,
+          "pass_rate": 72.22222222222223,
+          "std_signed": 1.6167336723517198
+        },
+        "bw": {
+          "mean_abs": 0.4993528107926356,
+          "mean_signed": -0.2926217968526864,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 0.6934156154788046
+        },
+        "db": {
+          "mean_abs": 1.9507088380770585,
+          "mean_signed": 1.949239974250443,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.4988212624738508
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20260105-115931.csv",
+      "coef_key": "scalar:x=0.001500,y=0.001500,z=0.001500",
+      "coefs": {
+        "x": 0.0015,
+        "y": 0.0015,
+        "z": 0.0015
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20260105-115931.csv",
+      "recorded_at_ms": 1768258565819,
+      "selected": {
+        "all": {
+          "mean_abs": 1.198780370302621,
+          "mean_signed": 0.7674857614910463,
+          "n": 18,
+          "pass_rate": 72.22222222222223,
+          "std_signed": 1.5929466213430186
+        },
+        "bw": {
+          "mean_abs": 0.505996206629238,
+          "mean_signed": -0.33896646255643526,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 0.6900908455604994
+        },
+        "db": {
+          "mean_abs": 1.8915645339760043,
+          "mean_signed": 1.8739379855385279,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.470165021299224
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0015_0.0015_0.0015-06.0000000c-20260105-115931.csv",
+      "temp_f": 74.8832
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 5.741755725958639,
+          "mean_signed": 5.702167189265121,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 2.446295943611202
+        },
+        "bw": {
+          "mean_abs": 7.052728236981864,
+          "mean_signed": 7.052728236981864,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.3681129145039885
+        },
+        "db": {
+          "mean_abs": 4.430783214935415,
+          "mean_signed": 4.351606141548379,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 2.596344766776708
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251124-130741.csv",
+      "coef_key": "scalar:x=0.001500,y=0.001500,z=0.001500",
+      "coefs": {
+        "x": 0.0015,
+        "y": 0.0015,
+        "z": 0.0015
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251124-130741.csv",
+      "recorded_at_ms": 1768258566557,
+      "selected": {
+        "all": {
+          "mean_abs": 2.928741376907432,
+          "mean_signed": 2.4200304760884355,
+          "n": 18,
+          "pass_rate": 38.888888888888886,
+          "std_signed": 1.982750787044823
+        },
+        "bw": {
+          "mean_abs": 3.3207795487268017,
+          "mean_signed": 3.3207795487268017,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.1441249647089453
+        },
+        "db": {
+          "mean_abs": 2.536703205088062,
+          "mean_signed": 1.5192814034500695,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 2.2846130987416386
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0015_0.0015_0.0015-06.00000025-20251124-130741.csv",
+      "temp_f": 56.71415929203539
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 8.839923727887797,
+          "mean_signed": 8.839923727887797,
+          "n": 18,
+          "pass_rate": 0.0,
+          "std_signed": 2.2648209540289175
+        },
+        "bw": {
+          "mean_abs": 10.303698552579549,
+          "mean_signed": 10.303698552579549,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.143896926424743
+        },
+        "db": {
+          "mean_abs": 7.376148903196044,
+          "mean_signed": 7.376148903196044,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 2.1841638707766218
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251126-191429.csv",
+      "coef_key": "scalar:x=0.001500,y=0.001500,z=0.001500",
+      "coefs": {
+        "x": 0.0015,
+        "y": 0.0015,
+        "z": 0.0015
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251126-191429.csv",
+      "recorded_at_ms": 1768258566866,
+      "selected": {
+        "all": {
+          "mean_abs": 2.853386291381131,
+          "mean_signed": 2.730751768469742,
+          "n": 18,
+          "pass_rate": 27.77777777777778,
+          "std_signed": 1.8124121071548767
+        },
+        "bw": {
+          "mean_abs": 3.310507729582489,
+          "mean_signed": 3.310507729582489,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.0706867847799502
+        },
+        "db": {
+          "mean_abs": 2.3962648531797734,
+          "mean_signed": 2.1509958073569955,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 2.253363400450082
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0015_0.0015_0.0015-06.00000025-20251126-191429.csv",
+      "temp_f": 42.312200000000004
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 3.1110150778813663,
+          "mean_signed": -0.6010819217143242,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 3.46355040751695
+        },
+        "bw": {
+          "mean_abs": 2.509933156167042,
+          "mean_signed": 2.509933156167042,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.2570342398957877
+        },
+        "db": {
+          "mean_abs": 3.71209699959569,
+          "mean_signed": -3.71209699959569,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.4612724302524596
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251223-170231.csv",
+      "coef_key": "scalar:x=0.001500,y=0.001500,z=0.001500",
+      "coefs": {
+        "x": 0.0015,
+        "y": 0.0015,
+        "z": 0.0015
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251223-170231.csv",
+      "recorded_at_ms": 1768258567187,
+      "selected": {
+        "all": {
+          "mean_abs": 3.084115910386922,
+          "mean_signed": -0.7755274940361573,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 3.4206223039719688
+        },
+        "bw": {
+          "mean_abs": 2.3085884163507644,
+          "mean_signed": 2.3085884163507644,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.155462549475936
+        },
+        "db": {
+          "mean_abs": 3.8596434044230796,
+          "mean_signed": -3.8596434044230796,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.4585327124697753
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0015_0.0015_0.0015-06.00000025-20251223-170231.csv",
+      "temp_f": 73.45305263157888
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.5090043576926626,
+          "mean_signed": 0.6010819217143212,
+          "n": 18,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.661406317092639
+        },
+        "bw": {
+          "mean_abs": 1.584381648594748,
+          "mean_signed": 1.571936378637651,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 0.8944453783991684
+        },
+        "db": {
+          "mean_abs": 1.4336270667905773,
+          "mean_signed": -0.36977253520900877,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.7160381369983229
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20260105-120607.csv",
+      "coef_key": "scalar:x=0.001500,y=0.001500,z=0.001500",
+      "coefs": {
+        "x": 0.0015,
+        "y": 0.0015,
+        "z": 0.0015
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20260105-120607.csv",
+      "recorded_at_ms": 1768258567499,
+      "selected": {
+        "all": {
+          "mean_abs": 1.5268649249003619,
+          "mean_signed": 0.5134380285926394,
+          "n": 18,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.6904765752760689
+        },
+        "bw": {
+          "mean_abs": 1.4941992084178561,
+          "mean_signed": 1.4790727289803138,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 0.8246355036858549
+        },
+        "db": {
+          "mean_abs": 1.559530641382868,
+          "mean_signed": -0.45219667179503503,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.8151030074863086
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0015_0.0015_0.0015-06.00000025-20260105-120607.csv",
+      "temp_f": 74.15132
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.4951794679846435,
+          "mean_signed": 0.5556361780648932,
+          "n": 18,
+          "pass_rate": 50.0,
+          "std_signed": 1.7256115220505437
+        },
+        "bw": {
+          "mean_abs": 0.9395471686360115,
+          "mean_signed": -0.9395394112034892,
+          "n": 9,
+          "pass_rate": 44.44444444444444,
+          "std_signed": 0.6779002297078586
+        },
+        "db": {
+          "mean_abs": 2.0508117673332755,
+          "mean_signed": 2.0508117673332755,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 0.9155057744680255
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251120-150300.csv",
+      "coef_key": "scalar:x=0.001700,y=0.001700,z=0.001700",
+      "coefs": {
+        "x": 0.0017,
+        "y": 0.0017,
+        "z": 0.0017
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251120-150300.csv",
+      "recorded_at_ms": 1767734861151,
+      "selected": {
+        "all": {
+          "mean_abs": 2.1923559961755164,
+          "mean_signed": -1.8277230611322812,
+          "n": 18,
+          "pass_rate": 50.0,
+          "std_signed": 1.9328475606491708
+        },
+        "bw": {
+          "mean_abs": 3.531785358154717,
+          "mean_signed": -3.531785358154717,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 0.65134231251317
+        },
+        "db": {
+          "mean_abs": 0.8529266341963153,
+          "mean_signed": -0.1236607641098456,
+          "n": 9,
+          "pass_rate": 100.0,
+          "std_signed": 0.9904172538042854
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0017_0.0017_0.0017-06.0000000c-20251120-150300.csv",
+      "temp_f": 61.49350943396227
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 3.028883294641875,
+          "mean_signed": 2.845470208441929,
+          "n": 18,
+          "pass_rate": 27.77777777777778,
+          "std_signed": 2.5938717060626173
+        },
+        "bw": {
+          "mean_abs": 1.040576542275054,
+          "mean_signed": 0.6737503698751625,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.1051631825054296
+        },
+        "db": {
+          "mean_abs": 5.017190047008696,
+          "mean_signed": 5.017190047008696,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.5697613257252951
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251124-130139.csv",
+      "coef_key": "scalar:x=0.001700,y=0.001700,z=0.001700",
+      "coefs": {
+        "x": 0.0017,
+        "y": 0.0017,
+        "z": 0.0017
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251124-130139.csv",
+      "recorded_at_ms": 1767734862092,
+      "selected": {
+        "all": {
+          "mean_abs": 2.3772481912391052,
+          "mean_signed": -0.20859523635163707,
+          "n": 18,
+          "pass_rate": 33.333333333333336,
+          "std_signed": 2.725758717420866
+        },
+        "bw": {
+          "mean_abs": 2.5858434275907425,
+          "mean_signed": -2.5858434275907425,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.0440959948198159
+        },
+        "db": {
+          "mean_abs": 2.1686529548874685,
+          "mean_signed": 2.1686529548874685,
+          "n": 9,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 1.4080694698081468
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0017_0.0017_0.0017-06.0000000c-20251124-130139.csv",
+      "temp_f": 57.7924571428571
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 7.39052224072432,
+          "mean_signed": 7.39052224072432,
+          "n": 17,
+          "pass_rate": 0.0,
+          "std_signed": 3.7097387514709372
+        },
+        "bw": {
+          "mean_abs": 4.797576793941727,
+          "mean_signed": 4.797576793941727,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.9257392337528096
+        },
+        "db": {
+          "mean_abs": 10.307585868354739,
+          "mean_signed": 10.307585868354739,
+          "n": 8,
+          "pass_rate": 0.0,
+          "std_signed": 2.9747133457156982
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251126-190324.csv",
+      "coef_key": "scalar:x=0.001700,y=0.001700,z=0.001700",
+      "coefs": {
+        "x": 0.0017,
+        "y": 0.0017,
+        "z": 0.0017
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251126-190324.csv",
+      "recorded_at_ms": 1767734868174,
+      "selected": {
+        "all": {
+          "mean_abs": 2.8938283425272786,
+          "mean_signed": 0.9782930870818424,
+          "n": 17,
+          "pass_rate": 35.294117647058826,
+          "std_signed": 3.6541066507569133
+        },
+        "bw": {
+          "mean_abs": 1.8091166301429118,
+          "mean_signed": -1.8091166301429118,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 1.0381793146856784
+        },
+        "db": {
+          "mean_abs": 4.114129018959691,
+          "mean_signed": 4.114129018959691,
+          "n": 8,
+          "pass_rate": 50.0,
+          "std_signed": 2.83908395708908
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0017_0.0017_0.0017-06.0000000c-20251126-190324.csv",
+      "temp_f": 43.3742
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.6190219158468717,
+          "mean_signed": -0.9607410834788427,
+          "n": 17,
+          "pass_rate": 47.05882352941177,
+          "std_signed": 1.625950631785837
+        },
+        "bw": {
+          "mean_abs": 2.254457691186802,
+          "mean_signed": -2.254457691186802,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 0.6848960181511486
+        },
+        "db": {
+          "mean_abs": 0.9041566685894505,
+          "mean_signed": 0.4946901001926112,
+          "n": 8,
+          "pass_rate": 100.0,
+          "std_signed": 0.9663793601362168
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251229-111107.csv",
+      "coef_key": "scalar:x=0.001700,y=0.001700,z=0.001700",
+      "coefs": {
+        "x": 0.0017,
+        "y": 0.0017,
+        "z": 0.0017
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251229-111107.csv",
+      "recorded_at_ms": 1767734873549,
+      "selected": {
+        "all": {
+          "mean_abs": 1.6964872647611884,
+          "mean_signed": -1.163169007075799,
+          "n": 17,
+          "pass_rate": 47.05882352941177,
+          "std_signed": 1.652816893876463
+        },
+        "bw": {
+          "mean_abs": 2.4665822323871023,
+          "mean_signed": -2.4665822323871023,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 0.7223653912127175
+        },
+        "db": {
+          "mean_abs": 0.8301304261820355,
+          "mean_signed": 0.30317087139941695,
+          "n": 8,
+          "pass_rate": 100.0,
+          "std_signed": 1.0030787927076168
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0017_0.0017_0.0017-06.0000000c-20251229-111107.csv",
+      "temp_f": 74.093
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 2.6412835316400005,
+          "mean_signed": 0.8372628200109725,
+          "n": 18,
+          "pass_rate": 16.666666666666668,
+          "std_signed": 2.9478476894149277
+        },
+        "bw": {
+          "mean_abs": 1.8040207116290279,
+          "mean_signed": -1.8040207116290279,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 0.6891532134231205
+        },
+        "db": {
+          "mean_abs": 3.478546351650973,
+          "mean_signed": 3.478546351650973,
+          "n": 9,
+          "pass_rate": 33.333333333333336,
+          "std_signed": 1.5146133287910635
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20260105-115931.csv",
+      "coef_key": "scalar:x=0.001700,y=0.001700,z=0.001700",
+      "coefs": {
+        "x": 0.0017,
+        "y": 0.0017,
+        "z": 0.0017
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20260105-115931.csv",
+      "recorded_at_ms": 1767734879014,
+      "selected": {
+        "all": {
+          "mean_abs": 2.6238201624817337,
+          "mean_signed": 0.7680793877781212,
+          "n": 18,
+          "pass_rate": 16.666666666666668,
+          "std_signed": 2.923053106729915
+        },
+        "bw": {
+          "mean_abs": 1.8557407747036128,
+          "mean_signed": -1.8557407747036128,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 0.6863329019820509
+        },
+        "db": {
+          "mean_abs": 3.391899550259855,
+          "mean_signed": 3.391899550259855,
+          "n": 9,
+          "pass_rate": 33.333333333333336,
+          "std_signed": 1.4817163895045407
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0017_0.0017_0.0017-06.0000000c-20260105-115931.csv",
+      "temp_f": 74.8832
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 5.714432827628821,
+          "mean_signed": 5.714432827628821,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 2.0516210275051265
+        },
+        "bw": {
+          "mean_abs": 5.470787913278688,
+          "mean_signed": 5.470787913278688,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.3559005259268773
+        },
+        "db": {
+          "mean_abs": 5.958077741978953,
+          "mean_signed": 5.958077741978953,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 2.640531887746617
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251124-130741.csv",
+      "coef_key": "scalar:x=0.001700,y=0.001700,z=0.001700",
+      "coefs": {
+        "x": 0.0017,
+        "y": 0.0017,
+        "z": 0.0017
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251124-130741.csv",
+      "recorded_at_ms": 1767734885852,
+      "selected": {
+        "all": {
+          "mean_abs": 2.315655252566575,
+          "mean_signed": 2.005748564941003,
+          "n": 18,
+          "pass_rate": 27.77777777777778,
+          "std_signed": 1.8830513541222826
+        },
+        "bw": {
+          "mean_abs": 1.4311352008515086,
+          "mean_signed": 1.3077093701487097,
+          "n": 9,
+          "pass_rate": 33.333333333333336,
+          "std_signed": 1.1057366039252887
+        },
+        "db": {
+          "mean_abs": 3.2001753042816414,
+          "mean_signed": 2.7037877597332964,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 2.2838595738895373
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0017_0.0017_0.0017-06.00000025-20251124-130741.csv",
+      "temp_f": 56.71415929203539
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 8.85136578065408,
+          "mean_signed": 8.85136578065408,
+          "n": 18,
+          "pass_rate": 0.0,
+          "std_signed": 1.71700476723951
+        },
+        "bw": {
+          "mean_abs": 8.673616906455553,
+          "mean_signed": 8.673616906455553,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.1260833346845203
+        },
+        "db": {
+          "mean_abs": 9.029114654852606,
+          "mean_signed": 9.029114654852606,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 2.2193630270879976
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251126-191429.csv",
+      "coef_key": "scalar:x=0.001700,y=0.001700,z=0.001700",
+      "coefs": {
+        "x": 0.0017,
+        "y": 0.0017,
+        "z": 0.0017
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251126-191429.csv",
+      "recorded_at_ms": 1767734890912,
+      "selected": {
+        "all": {
+          "mean_abs": 2.083661024477228,
+          "mean_signed": 1.9466121128266285,
+          "n": 18,
+          "pass_rate": 50.0,
+          "std_signed": 2.062878906815797
+        },
+        "bw": {
+          "mean_abs": 1.0682599331305689,
+          "mean_signed": 0.8684546761546816,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.0501186749152385
+        },
+        "db": {
+          "mean_abs": 3.099062115823887,
+          "mean_signed": 3.024769549498575,
+          "n": 9,
+          "pass_rate": 44.44444444444444,
+          "std_signed": 2.307524740695911
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0017_0.0017_0.0017-06.00000025-20251126-191429.csv",
+      "temp_f": 42.312200000000004
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.7042043426735283,
+          "mean_signed": -0.6173835354915718,
+          "n": 18,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 2.1254141223350547
+        },
+        "bw": {
+          "mean_abs": 1.1784332686898298,
+          "mean_signed": 0.995208345674083,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.2542615804518549
+        },
+        "db": {
+          "mean_abs": 2.2299754166572265,
+          "mean_signed": -2.2299754166572265,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 1.4748739354160219
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251223-170231.csv",
+      "coef_key": "scalar:x=0.001700,y=0.001700,z=0.001700",
+      "coefs": {
+        "x": 0.0017,
+        "y": 0.0017,
+        "z": 0.0017
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251223-170231.csv",
+      "recorded_at_ms": 1767734896210,
+      "selected": {
+        "all": {
+          "mean_abs": 1.688492738484388,
+          "mean_signed": -0.8147017514718028,
+          "n": 18,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 2.0718381549419087
+        },
+        "bw": {
+          "mean_abs": 0.977184427381396,
+          "mean_signed": 0.7703975466437744,
+          "n": 9,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 1.1412444753276811
+        },
+        "db": {
+          "mean_abs": 2.3998010495873796,
+          "mean_signed": -2.3998010495873796,
+          "n": 9,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 1.4717123970462953
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0017_0.0017_0.0017-06.00000025-20251223-170231.csv",
+      "temp_f": 73.45305263157888
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.045668308804621,
+          "mean_signed": 0.6173835354915653,
+          "n": 18,
+          "pass_rate": 83.33333333333333,
+          "std_signed": 1.4504881542218833
+        },
+        "bw": {
+          "mean_abs": 0.6473778026019349,
+          "mean_signed": 0.07102178052957048,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 0.8964883501163408
+        },
+        "db": {
+          "mean_abs": 1.4439588150073068,
+          "mean_signed": 1.1637452904535601,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.7307454372270792
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20260105-120607.csv",
+      "coef_key": "scalar:x=0.001700,y=0.001700,z=0.001700",
+      "coefs": {
+        "x": 0.0017,
+        "y": 0.0017,
+        "z": 0.0017
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20260105-120607.csv",
+      "recorded_at_ms": 1767734901337,
+      "selected": {
+        "all": {
+          "mean_abs": 1.0422412417202116,
+          "mean_signed": 0.5181102722447103,
+          "n": 18,
+          "pass_rate": 83.33333333333333,
+          "std_signed": 1.4961952170401598
+        },
+        "bw": {
+          "mean_abs": 0.5852263369753902,
+          "mean_signed": -0.03267014495832597,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 0.8190817533076745
+        },
+        "db": {
+          "mean_abs": 1.4992561464650334,
+          "mean_signed": 1.0688906894477466,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.8448773534792418
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0017_0.0017_0.0017-06.00000025-20260105-120607.csv",
+      "temp_f": 74.15132
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 0.7514724780197168,
+          "mean_signed": 0.5638413777299269,
+          "n": 18,
+          "pass_rate": 83.33333333333333,
+          "std_signed": 0.7756240504644464
+        },
+        "bw": {
+          "mean_abs": 0.6867717336053915,
+          "mean_signed": 0.5851835695876282,
+          "n": 9,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 0.6847240905038392
+        },
+        "db": {
+          "mean_abs": 0.8161732224340422,
+          "mean_signed": 0.5424991858722256,
+          "n": 9,
+          "pass_rate": 100.0,
+          "std_signed": 0.8991732247258551
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251120-150300.csv",
+      "coef_key": "scalar:x=0.001800,y=0.001800,z=0.001800",
+      "coefs": {
+        "x": 0.0018000000000000002,
+        "y": 0.0018000000000000002,
+        "z": 0.0018000000000000002
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251120-150300.csv",
+      "recorded_at_ms": 1768258568257,
+      "selected": {
+        "all": {
+          "mean_abs": 1.9632177218513094,
+          "mean_signed": -1.9632177218513094,
+          "n": 18,
+          "pass_rate": 33.333333333333336,
+          "std_signed": 0.8439412971141483
+        },
+        "bw": {
+          "mean_abs": 2.200905331982439,
+          "mean_signed": -2.200905331982439,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 0.6575840630557014
+        },
+        "db": {
+          "mean_abs": 1.7255301117201798,
+          "mean_signed": -1.7255301117201798,
+          "n": 9,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 0.9767148970217764
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0018_0.0018_0.0018-06.0000000c-20251120-150300.csv",
+      "temp_f": 61.49350943396227
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 2.8441209157206546,
+          "mean_signed": 2.8441209157206546,
+          "n": 18,
+          "pass_rate": 16.666666666666668,
+          "std_signed": 1.4528362483780366
+        },
+        "bw": {
+          "mean_abs": 2.223259162274492,
+          "mean_signed": 2.223259162274492,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.1152176670684033
+        },
+        "db": {
+          "mean_abs": 3.464982669166817,
+          "mean_signed": 3.464982669166817,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 1.5408736375278935
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251124-130139.csv",
+      "coef_key": "scalar:x=0.001800,y=0.001800,z=0.001800",
+      "coefs": {
+        "x": 0.0018000000000000002,
+        "y": 0.0018000000000000002,
+        "z": 0.0018000000000000002
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251124-130139.csv",
+      "recorded_at_ms": 1768258568616,
+      "selected": {
+        "all": {
+          "mean_abs": 1.097992271465233,
+          "mean_signed": -0.394168471881282,
+          "n": 18,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 1.4981032094346276
+        },
+        "bw": {
+          "mean_abs": 1.3390837218864253,
+          "mean_signed": -1.2817149436874782,
+          "n": 9,
+          "pass_rate": 44.44444444444444,
+          "std_signed": 1.0519392173130355
+        },
+        "db": {
+          "mean_abs": 0.8569008210440413,
+          "mean_signed": 0.49337799992491405,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.3748371992512904
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0018_0.0018_0.0018-06.0000000c-20251124-130139.csv",
+      "temp_f": 57.7924571428571
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 7.477821249908273,
+          "mean_signed": 7.477821249908273,
+          "n": 17,
+          "pass_rate": 0.0,
+          "std_signed": 2.6480917949844827
+        },
+        "bw": {
+          "mean_abs": 6.410536622381602,
+          "mean_signed": 6.410536622381602,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.949795510860534
+        },
+        "db": {
+          "mean_abs": 8.678516455875778,
+          "mean_signed": 8.678516455875778,
+          "n": 8,
+          "pass_rate": 0.0,
+          "std_signed": 2.9276856314158457
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251126-190324.csv",
+      "coef_key": "scalar:x=0.001800,y=0.001800,z=0.001800",
+      "coefs": {
+        "x": 0.0018000000000000002,
+        "y": 0.0018000000000000002,
+        "z": 0.0018000000000000002
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251126-190324.csv",
+      "recorded_at_ms": 1768258569017,
+      "selected": {
+        "all": {
+          "mean_abs": 1.6563127935335222,
+          "mean_signed": 0.6852226883876426,
+          "n": 17,
+          "pass_rate": 58.8235294117647,
+          "std_signed": 2.4784233504978217
+        },
+        "bw": {
+          "mean_abs": 1.0430278316775108,
+          "mean_signed": -0.6788953455972497,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.019802216972959
+        },
+        "db": {
+          "mean_abs": 2.346258375621535,
+          "mean_signed": 2.2198554766206464,
+          "n": 8,
+          "pass_rate": 62.5,
+          "std_signed": 2.78704144008348
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0018_0.0018_0.0018-06.0000000c-20251126-190324.csv",
+      "temp_f": 43.3742
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 0.9588998068877691,
+          "mean_signed": -0.8626511653323097,
+          "n": 17,
+          "pass_rate": 82.3529411764706,
+          "std_signed": 0.8057517752519424
+        },
+        "bw": {
+          "mean_abs": 0.8438631880677491,
+          "mean_signed": -0.7499915316946869,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 0.6890997887895108
+        },
+        "db": {
+          "mean_abs": 1.0883160030602916,
+          "mean_signed": -0.9893932531746352,
+          "n": 8,
+          "pass_rate": 87.5,
+          "std_signed": 0.9521530811617874
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251229-111107.csv",
+      "coef_key": "scalar:x=0.001800,y=0.001800,z=0.001800",
+      "coefs": {
+        "x": 0.0018000000000000002,
+        "y": 0.0018000000000000002,
+        "z": 0.0018000000000000002
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251229-111107.csv",
+      "recorded_at_ms": 1768258569349,
+      "selected": {
+        "all": {
+          "mean_abs": 1.115822237867378,
+          "mean_signed": -1.0774306194775545,
+          "n": 17,
+          "pass_rate": 64.70588235294117,
+          "std_signed": 0.8410044658250858
+        },
+        "bw": {
+          "mean_abs": 1.0226054172665,
+          "mean_signed": -0.9780525845184164,
+          "n": 9,
+          "pass_rate": 44.44444444444444,
+          "std_signed": 0.7297502996110306
+        },
+        "db": {
+          "mean_abs": 1.220691161043366,
+          "mean_signed": -1.1892309088065847,
+          "n": 8,
+          "pass_rate": 87.5,
+          "std_signed": 0.9904871676028345
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0018_0.0018_0.0018-06.0000000c-20251229-111107.csv",
+      "temp_f": 74.093
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.225030824434847,
+          "mean_signed": 0.8283090886988783,
+          "n": 18,
+          "pass_rate": 72.22222222222223,
+          "std_signed": 1.6167336723517198
+        },
+        "bw": {
+          "mean_abs": 0.4993528107926356,
+          "mean_signed": -0.2926217968526864,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 0.6934156154788046
+        },
+        "db": {
+          "mean_abs": 1.9507088380770585,
+          "mean_signed": 1.949239974250443,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.4988212624738508
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20260105-115931.csv",
+      "coef_key": "scalar:x=0.001800,y=0.001800,z=0.001800",
+      "coefs": {
+        "x": 0.0018000000000000002,
+        "y": 0.0018000000000000002,
+        "z": 0.0018000000000000002
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20260105-115931.csv",
+      "recorded_at_ms": 1768258569688,
+      "selected": {
+        "all": {
+          "mean_abs": 1.1935238097669123,
+          "mean_signed": 0.7553058887010624,
+          "n": 18,
+          "pass_rate": 72.22222222222223,
+          "std_signed": 1.5884197049710134
+        },
+        "bw": {
+          "mean_abs": 0.507319744460423,
+          "mean_signed": -0.34822528245601125,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 0.6902665007211125
+        },
+        "db": {
+          "mean_abs": 1.8797278750734014,
+          "mean_signed": 1.858837059858136,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.4646036215630927
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0018_0.0018_0.0018-06.0000000c-20260105-115931.csv",
+      "temp_f": 74.8832
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 5.741755725958639,
+          "mean_signed": 5.702167189265121,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 2.446295943611202
+        },
+        "bw": {
+          "mean_abs": 7.052728236981864,
+          "mean_signed": 7.052728236981864,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.3681129145039885
+        },
+        "db": {
+          "mean_abs": 4.430783214935415,
+          "mean_signed": 4.351606141548379,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 2.596344766776708
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251124-130741.csv",
+      "coef_key": "scalar:x=0.001800,y=0.001800,z=0.001800",
+      "coefs": {
+        "x": 0.0018000000000000002,
+        "y": 0.0018000000000000002,
+        "z": 0.0018000000000000002
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251124-130741.csv",
+      "recorded_at_ms": 1768258570432,
+      "selected": {
+        "all": {
+          "mean_abs": 2.3863554835370113,
+          "mean_signed": 1.7707161209700657,
+          "n": 18,
+          "pass_rate": 33.333333333333336,
+          "std_signed": 1.897309564557228
+        },
+        "bw": {
+          "mean_abs": 2.580759238032713,
+          "mean_signed": 2.580759238032713,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.100039158419396
+        },
+        "db": {
+          "mean_abs": 2.191951729041309,
+          "mean_signed": 0.9606730039074185,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 2.2277952777484704
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0018_0.0018_0.0018-06.00000025-20251124-130741.csv",
+      "temp_f": 56.71415929203539
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 8.839923727887797,
+          "mean_signed": 8.839923727887797,
+          "n": 18,
+          "pass_rate": 0.0,
+          "std_signed": 2.2648209540289175
+        },
+        "bw": {
+          "mean_abs": 10.303698552579549,
+          "mean_signed": 10.303698552579549,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.143896926424743
+        },
+        "db": {
+          "mean_abs": 7.376148903196044,
+          "mean_signed": 7.376148903196044,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 2.1841638707766218
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251126-191429.csv",
+      "coef_key": "scalar:x=0.001800,y=0.001800,z=0.001800",
+      "coefs": {
+        "x": 0.0018000000000000002,
+        "y": 0.0018000000000000002,
+        "z": 0.0018000000000000002
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251126-191429.csv",
+      "recorded_at_ms": 1768258570736,
+      "selected": {
+        "all": {
+          "mean_abs": 1.8998268890811947,
+          "mean_signed": 1.518477756356347,
+          "n": 18,
+          "pass_rate": 50.0,
+          "std_signed": 1.7790984122594935
+        },
+        "bw": {
+          "mean_abs": 1.9171736315275278,
+          "mean_signed": 1.9171736315275278,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 1.069081599674529
+        },
+        "db": {
+          "mean_abs": 1.8824801466348613,
+          "mean_signed": 1.1197818811851663,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 2.285921990648899
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0018_0.0018_0.0018-06.00000025-20251126-191429.csv",
+      "temp_f": 42.312200000000004
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 3.1110150778813663,
+          "mean_signed": -0.6010819217143242,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 3.46355040751695
+        },
+        "bw": {
+          "mean_abs": 2.509933156167042,
+          "mean_signed": 2.509933156167042,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.2570342398957877
+        },
+        "db": {
+          "mean_abs": 3.71209699959569,
+          "mean_signed": -3.71209699959569,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.4612724302524596
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251223-170231.csv",
+      "coef_key": "scalar:x=0.001800,y=0.001800,z=0.001800",
+      "coefs": {
+        "x": 0.0018000000000000002,
+        "y": 0.0018000000000000002,
+        "z": 0.0018000000000000002
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251223-170231.csv",
+      "recorded_at_ms": 1768258571064,
+      "selected": {
+        "all": {
+          "mean_abs": 3.078770342275385,
+          "mean_signed": -0.8104144123903879,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 3.4125848503444094
+        },
+        "bw": {
+          "mean_abs": 2.268355929884997,
+          "mean_signed": 2.268355929884997,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.1358244330070546
+        },
+        "db": {
+          "mean_abs": 3.889184754665773,
+          "mean_signed": -3.889184754665773,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.4593595009513505
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0018_0.0018_0.0018-06.00000025-20251223-170231.csv",
+      "temp_f": 73.45305263157888
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.5090043576926626,
+          "mean_signed": 0.6010819217143212,
+          "n": 18,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.661406317092639
+        },
+        "bw": {
+          "mean_abs": 1.584381648594748,
+          "mean_signed": 1.571936378637651,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 0.8944453783991684
+        },
+        "db": {
+          "mean_abs": 1.4336270667905773,
+          "mean_signed": -0.36977253520900877,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.7160381369983229
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20260105-120607.csv",
+      "coef_key": "scalar:x=0.001800,y=0.001800,z=0.001800",
+      "coefs": {
+        "x": 0.0018000000000000002,
+        "y": 0.0018000000000000002,
+        "z": 0.0018000000000000002
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20260105-120607.csv",
+      "recorded_at_ms": 1768258571379,
+      "selected": {
+        "all": {
+          "mean_abs": 1.5304291278150968,
+          "mean_signed": 0.49593103132026833,
+          "n": 18,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.6973909625957253
+        },
+        "bw": {
+          "mean_abs": 1.4761694666584229,
+          "mean_signed": 1.460522578720489,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 0.8125515756021569
+        },
+        "db": {
+          "mean_abs": 1.5846887889717707,
+          "mean_signed": -0.46866051607995224,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.8353994624649297
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0018_0.0018_0.0018-06.00000025-20260105-120607.csv",
+      "temp_f": 74.15132
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 0.7514724780197168,
+          "mean_signed": 0.5638413777299269,
+          "n": 18,
+          "pass_rate": 83.33333333333333,
+          "std_signed": 0.7756240504644464
+        },
+        "bw": {
+          "mean_abs": 0.6867717336053915,
+          "mean_signed": 0.5851835695876282,
+          "n": 9,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 0.6847240905038392
+        },
+        "db": {
+          "mean_abs": 0.8161732224340422,
+          "mean_signed": 0.5424991858722256,
+          "n": 9,
+          "pass_rate": 100.0,
+          "std_signed": 0.8991732247258551
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251120-150300.csv",
+      "coef_key": "scalar:x=0.001900,y=0.001900,z=0.001900",
+      "coefs": {
+        "x": 0.0019,
+        "y": 0.0019,
+        "z": 0.0019
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251120-150300.csv",
+      "recorded_at_ms": 1768258572159,
+      "selected": {
+        "all": {
+          "mean_abs": 2.1030320715760946,
+          "mean_signed": -2.1030320715760946,
+          "n": 18,
+          "pass_rate": 27.77777777777778,
+          "std_signed": 0.8501077131064706
+        },
+        "bw": {
+          "mean_abs": 2.3548444696312556,
+          "mean_signed": -2.3548444696312556,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 0.6576594270413928
+        },
+        "db": {
+          "mean_abs": 1.8512196735209336,
+          "mean_signed": -1.8512196735209336,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 0.9800583542284858
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0019_0.0019_0.0019-06.0000000c-20251120-150300.csv",
+      "temp_f": 61.49350943396227
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 2.8441209157206546,
+          "mean_signed": 2.8441209157206546,
+          "n": 18,
+          "pass_rate": 16.666666666666668,
+          "std_signed": 1.4528362483780366
+        },
+        "bw": {
+          "mean_abs": 2.223259162274492,
+          "mean_signed": 2.223259162274492,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.1152176670684033
+        },
+        "db": {
+          "mean_abs": 3.464982669166817,
+          "mean_signed": 3.464982669166817,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 1.5408736375278935
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251124-130139.csv",
+      "coef_key": "scalar:x=0.001900,y=0.001900,z=0.001900",
+      "coefs": {
+        "x": 0.0019,
+        "y": 0.0019,
+        "z": 0.0019
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251124-130139.csv",
+      "recorded_at_ms": 1768258572520,
+      "selected": {
+        "all": {
+          "mean_abs": 1.1807875266681638,
+          "mean_signed": -0.5744171720881626,
+          "n": 18,
+          "pass_rate": 61.111111111111114,
+          "std_signed": 1.5042968540049302
+        },
+        "bw": {
+          "mean_abs": 1.488364801899582,
+          "mean_signed": -1.4768747556733268,
+          "n": 9,
+          "pass_rate": 33.333333333333336,
+          "std_signed": 1.0505472509393379
+        },
+        "db": {
+          "mean_abs": 0.8732102514367457,
+          "mean_signed": 0.3280404114970016,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.368417096034634
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0019_0.0019_0.0019-06.0000000c-20251124-130139.csv",
+      "temp_f": 57.7924571428571
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 7.477821249908273,
+          "mean_signed": 7.477821249908273,
+          "n": 17,
+          "pass_rate": 0.0,
+          "std_signed": 2.6480917949844827
+        },
+        "bw": {
+          "mean_abs": 6.410536622381602,
+          "mean_signed": 6.410536622381602,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.949795510860534
+        },
+        "db": {
+          "mean_abs": 8.678516455875778,
+          "mean_signed": 8.678516455875778,
+          "n": 8,
+          "pass_rate": 0.0,
+          "std_signed": 2.9276856314158457
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251126-190324.csv",
+      "coef_key": "scalar:x=0.001900,y=0.001900,z=0.001900",
+      "coefs": {
+        "x": 0.0019,
+        "y": 0.0019,
+        "z": 0.0019
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251126-190324.csv",
+      "recorded_at_ms": 1768258572917,
+      "selected": {
+        "all": {
+          "mean_abs": 1.6850561929344507,
+          "mean_signed": 0.316707017285545,
+          "n": 17,
+          "pass_rate": 52.94117647058823,
+          "std_signed": 2.477408641220923
+        },
+        "bw": {
+          "mean_abs": 1.230892371729462,
+          "mean_signed": -1.0584556011818158,
+          "n": 9,
+          "pass_rate": 44.44444444444444,
+          "std_signed": 0.995943963144204
+        },
+        "db": {
+          "mean_abs": 2.1959904917900634,
+          "mean_signed": 1.863764963061326,
+          "n": 8,
+          "pass_rate": 62.5,
+          "std_signed": 2.780001691725503
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0019_0.0019_0.0019-06.0000000c-20251126-190324.csv",
+      "temp_f": 43.3742
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 0.9588998068877691,
+          "mean_signed": -0.8626511653323097,
+          "n": 17,
+          "pass_rate": 82.3529411764706,
+          "std_signed": 0.8057517752519424
+        },
+        "bw": {
+          "mean_abs": 0.8438631880677491,
+          "mean_signed": -0.7499915316946869,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 0.6890997887895108
+        },
+        "db": {
+          "mean_abs": 1.0883160030602916,
+          "mean_signed": -0.9893932531746352,
+          "n": 8,
+          "pass_rate": 87.5,
+          "std_signed": 0.9521530811617874
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251229-111107.csv",
+      "coef_key": "scalar:x=0.001900,y=0.001900,z=0.001900",
+      "coefs": {
+        "x": 0.0019,
+        "y": 0.0019,
+        "z": 0.0019
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251229-111107.csv",
+      "recorded_at_ms": 1768258573245,
+      "selected": {
+        "all": {
+          "mean_abs": 1.1253851340735874,
+          "mean_signed": -1.0893859400792387,
+          "n": 17,
+          "pass_rate": 64.70588235294117,
+          "std_signed": 0.84309574712088
+        },
+        "bw": {
+          "mean_abs": 1.032561172751615,
+          "mean_signed": -0.9907223595090423,
+          "n": 9,
+          "pass_rate": 44.44444444444444,
+          "std_signed": 0.7321831756305839
+        },
+        "db": {
+          "mean_abs": 1.2298120905608068,
+          "mean_signed": -1.2003824682207096,
+          "n": 8,
+          "pass_rate": 87.5,
+          "std_signed": 0.9926916544963624
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0019_0.0019_0.0019-06.0000000c-20251229-111107.csv",
+      "temp_f": 74.093
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.225030824434847,
+          "mean_signed": 0.8283090886988783,
+          "n": 18,
+          "pass_rate": 72.22222222222223,
+          "std_signed": 1.6167336723517198
+        },
+        "bw": {
+          "mean_abs": 0.4993528107926356,
+          "mean_signed": -0.2926217968526864,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 0.6934156154788046
+        },
+        "db": {
+          "mean_abs": 1.9507088380770585,
+          "mean_signed": 1.949239974250443,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.4988212624738508
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20260105-115931.csv",
+      "coef_key": "scalar:x=0.001900,y=0.001900,z=0.001900",
+      "coefs": {
+        "x": 0.0019,
+        "y": 0.0019,
+        "z": 0.0019
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20260105-115931.csv",
+      "recorded_at_ms": 1768258573583,
+      "selected": {
+        "all": {
+          "mean_abs": 1.1917697793906894,
+          "mean_signed": 0.7512435179153918,
+          "n": 18,
+          "pass_rate": 72.22222222222223,
+          "std_signed": 1.5869268622593409
+        },
+        "bw": {
+          "mean_abs": 0.5077606694937931,
+          "mean_signed": -0.35131182122735044,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 0.6903862356712653
+        },
+        "db": {
+          "mean_abs": 1.875778889287586,
+          "mean_signed": 1.853798857058134,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.4627607683670876
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0019_0.0019_0.0019-06.0000000c-20260105-115931.csv",
+      "temp_f": 74.8832
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 5.741755725958639,
+          "mean_signed": 5.702167189265121,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 2.446295943611202
+        },
+        "bw": {
+          "mean_abs": 7.052728236981864,
+          "mean_signed": 7.052728236981864,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.3681129145039885
+        },
+        "db": {
+          "mean_abs": 4.430783214935415,
+          "mean_signed": 4.351606141548379,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 2.596344766776708
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251124-130741.csv",
+      "coef_key": "scalar:x=0.001900,y=0.001900,z=0.001900",
+      "coefs": {
+        "x": 0.0019,
+        "y": 0.0019,
+        "z": 0.0019
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251124-130741.csv",
+      "recorded_at_ms": 1768258574324,
+      "selected": {
+        "all": {
+          "mean_abs": 2.205909186974398,
+          "mean_signed": 1.5546437709609917,
+          "n": 18,
+          "pass_rate": 33.333333333333336,
+          "std_signed": 1.8696800077924989
+        },
+        "bw": {
+          "mean_abs": 2.334474810090061,
+          "mean_signed": 2.334474810090061,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.0855045079479906
+        },
+        "db": {
+          "mean_abs": 2.077343563858735,
+          "mean_signed": 0.7748127318319227,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 2.209466571634283
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0019_0.0019_0.0019-06.00000025-20251124-130741.csv",
+      "temp_f": 56.71415929203539
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 8.839923727887797,
+          "mean_signed": 8.839923727887797,
+          "n": 18,
+          "pass_rate": 0.0,
+          "std_signed": 2.2648209540289175
+        },
+        "bw": {
+          "mean_abs": 10.303698552579549,
+          "mean_signed": 10.303698552579549,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.143896926424743
+        },
+        "db": {
+          "mean_abs": 7.376148903196044,
+          "mean_signed": 7.376148903196044,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 2.1841638707766218
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251126-191429.csv",
+      "coef_key": "scalar:x=0.001900,y=0.001900,z=0.001900",
+      "coefs": {
+        "x": 0.0019,
+        "y": 0.0019,
+        "z": 0.0019
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251126-191429.csv",
+      "recorded_at_ms": 1768258574615,
+      "selected": {
+        "all": {
+          "mean_abs": 1.686547030764516,
+          "mean_signed": 1.1151106567184756,
+          "n": 18,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.7731907581066053
+        },
+        "bw": {
+          "mean_abs": 1.5208950492290938,
+          "mean_signed": 1.452982128857299,
+          "n": 9,
+          "pass_rate": 33.333333333333336,
+          "std_signed": 1.069712966084525
+        },
+        "db": {
+          "mean_abs": 1.852199012299938,
+          "mean_signed": 0.7772391845796524,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 2.2978897354415233
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0019_0.0019_0.0019-06.00000025-20251126-191429.csv",
+      "temp_f": 42.312200000000004
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 3.1110150778813663,
+          "mean_signed": -0.6010819217143242,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 3.46355040751695
+        },
+        "bw": {
+          "mean_abs": 2.509933156167042,
+          "mean_signed": 2.509933156167042,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.2570342398957877
+        },
+        "db": {
+          "mean_abs": 3.71209699959569,
+          "mean_signed": -3.71209699959569,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.4612724302524596
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251223-170231.csv",
+      "coef_key": "scalar:x=0.001900,y=0.001900,z=0.001900",
+      "coefs": {
+        "x": 0.0019,
+        "y": 0.0019,
+        "z": 0.0019
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251223-170231.csv",
+      "recorded_at_ms": 1768258574936,
+      "selected": {
+        "all": {
+          "mean_abs": 3.0769907340788727,
+          "mean_signed": -0.8220421554870332,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 3.409946386249118
+        },
+        "bw": {
+          "mean_abs": 2.2549485785918395,
+          "mean_signed": 2.2549485785918395,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.1293308764341472
+        },
+        "db": {
+          "mean_abs": 3.899032889565906,
+          "mean_signed": -3.899032889565906,
+          "n": 9,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 1.4597381034760004
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0019_0.0019_0.0019-06.00000025-20251223-170231.csv",
+      "temp_f": 73.45305263157888
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.5090043576926626,
+          "mean_signed": 0.6010819217143212,
+          "n": 18,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.661406317092639
+        },
+        "bw": {
+          "mean_abs": 1.584381648594748,
+          "mean_signed": 1.571936378637651,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 0.8944453783991684
+        },
+        "db": {
+          "mean_abs": 1.4336270667905773,
+          "mean_signed": -0.36977253520900877,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.7160381369983229
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20260105-120607.csv",
+      "coef_key": "scalar:x=0.001900,y=0.001900,z=0.001900",
+      "coefs": {
+        "x": 0.0019,
+        "y": 0.0019,
+        "z": 0.0019
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20260105-120607.csv",
+      "recorded_at_ms": 1768258575248,
+      "selected": {
+        "all": {
+          "mean_abs": 1.5316181859187423,
+          "mean_signed": 0.49009739619882925,
+          "n": 18,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.699776480274564
+        },
+        "bw": {
+          "mean_abs": 1.4701627317997825,
+          "mean_signed": 1.4543426054387112,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 0.8086771373175253
+        },
+        "db": {
+          "mean_abs": 1.5930736400377021,
+          "mean_signed": -0.4741478130410526,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.842198852122453
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0019_0.0019_0.0019-06.00000025-20260105-120607.csv",
+      "temp_f": 74.15132
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.4951794679846435,
+          "mean_signed": 0.5556361780648932,
+          "n": 18,
+          "pass_rate": 50.0,
+          "std_signed": 1.7256115220505437
+        },
+        "bw": {
+          "mean_abs": 0.9395471686360115,
+          "mean_signed": -0.9395394112034892,
+          "n": 9,
+          "pass_rate": 44.44444444444444,
+          "std_signed": 0.6779002297078586
+        },
+        "db": {
+          "mean_abs": 2.0508117673332755,
+          "mean_signed": 2.0508117673332755,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 0.9155057744680255
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251120-150300.csv",
+      "coef_key": "scalar:x=0.002100,y=0.002100,z=0.002100",
+      "coefs": {
+        "x": 0.0021,
+        "y": 0.0021,
+        "z": 0.0021
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251120-150300.csv",
+      "recorded_at_ms": 1767735095070,
+      "selected": {
+        "all": {
+          "mean_abs": 2.5270082472116533,
+          "mean_signed": -2.3862014804479603,
+          "n": 18,
+          "pass_rate": 50.0,
+          "std_signed": 1.9808759285180684
+        },
+        "bw": {
+          "mean_abs": 4.1381888648685425,
+          "mean_signed": -4.1381888648685425,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 0.6517326167607113
+        },
+        "db": {
+          "mean_abs": 0.9158276295547646,
+          "mean_signed": -0.6342140960273788,
+          "n": 9,
+          "pass_rate": 100.0,
+          "std_signed": 1.0035848872953934
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0021_0.0021_0.0021-06.0000000c-20251120-150300.csv",
+      "temp_f": 61.49350943396227
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 3.028883294641875,
+          "mean_signed": 2.845470208441929,
+          "n": 18,
+          "pass_rate": 27.77777777777778,
+          "std_signed": 2.5938717060626173
+        },
+        "bw": {
+          "mean_abs": 1.040576542275054,
+          "mean_signed": 0.6737503698751625,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.1051631825054296
+        },
+        "db": {
+          "mean_abs": 5.017190047008696,
+          "mean_signed": 5.017190047008696,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.5697613257252951
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251124-130139.csv",
+      "coef_key": "scalar:x=0.002100,y=0.002100,z=0.002100",
+      "coefs": {
+        "x": 0.0021,
+        "y": 0.0021,
+        "z": 0.0021
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251124-130139.csv",
+      "recorded_at_ms": 1767735096080,
+      "selected": {
+        "all": {
+          "mean_abs": 2.425986576098329,
+          "mean_signed": -0.9286023938470335,
+          "n": 18,
+          "pass_rate": 44.44444444444444,
+          "std_signed": 2.763995616893711
+        },
+        "bw": {
+          "mean_abs": 3.3545889699453624,
+          "mean_signed": -3.3545889699453624,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.0392318549096025
+        },
+        "db": {
+          "mean_abs": 1.4973841822512952,
+          "mean_signed": 1.4973841822512952,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.382796156981024
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0021_0.0021_0.0021-06.0000000c-20251124-130139.csv",
+      "temp_f": 57.7924571428571
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 7.39052224072432,
+          "mean_signed": 7.39052224072432,
+          "n": 17,
+          "pass_rate": 0.0,
+          "std_signed": 3.7097387514709372
+        },
+        "bw": {
+          "mean_abs": 4.797576793941727,
+          "mean_signed": 4.797576793941727,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.9257392337528096
+        },
+        "db": {
+          "mean_abs": 10.307585868354739,
+          "mean_signed": 10.307585868354739,
+          "n": 8,
+          "pass_rate": 0.0,
+          "std_signed": 2.9747133457156982
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251126-190324.csv",
+      "coef_key": "scalar:x=0.002100,y=0.002100,z=0.002100",
+      "coefs": {
+        "x": 0.0021,
+        "y": 0.0021,
+        "z": 0.0021
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251126-190324.csv",
+      "recorded_at_ms": 1767735102428,
+      "selected": {
+        "all": {
+          "mean_abs": 3.013546423060231,
+          "mean_signed": -0.4902440351499586,
+          "n": 17,
+          "pass_rate": 29.41176470588235,
+          "std_signed": 3.653230868994391
+        },
+        "bw": {
+          "mean_abs": 3.300252046836021,
+          "mean_signed": -3.300252046836021,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 0.9511806550455416
+        },
+        "db": {
+          "mean_abs": 2.6910025963124684,
+          "mean_signed": 2.6710149779968613,
+          "n": 8,
+          "pass_rate": 62.5,
+          "std_signed": 2.810333020155606
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0021_0.0021_0.0021-06.0000000c-20251126-190324.csv",
+      "temp_f": 43.3742
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.6190219158468717,
+          "mean_signed": -0.9607410834788427,
+          "n": 17,
+          "pass_rate": 47.05882352941177,
+          "std_signed": 1.625950631785837
+        },
+        "bw": {
+          "mean_abs": 2.254457691186802,
+          "mean_signed": -2.254457691186802,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 0.6848960181511486
+        },
+        "db": {
+          "mean_abs": 0.9041566685894505,
+          "mean_signed": 0.4946901001926112,
+          "n": 8,
+          "pass_rate": 100.0,
+          "std_signed": 0.9663793601362168
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20251229-111107.csv",
+      "coef_key": "scalar:x=0.002100,y=0.002100,z=0.002100",
+      "coefs": {
+        "x": 0.0021,
+        "y": 0.0021,
+        "z": 0.0021
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20251229-111107.csv",
+      "recorded_at_ms": 1767735107948,
+      "selected": {
+        "all": {
+          "mean_abs": 1.7146263885706912,
+          "mean_signed": -1.2109050275481195,
+          "n": 17,
+          "pass_rate": 47.05882352941177,
+          "std_signed": 1.6593574585522641
+        },
+        "bw": {
+          "mean_abs": 2.5164983433799666,
+          "mean_signed": -2.5164983433799666,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 0.7319327277019407
+        },
+        "db": {
+          "mean_abs": 0.8125204394102564,
+          "mean_signed": 0.2578874527627087,
+          "n": 8,
+          "pass_rate": 100.0,
+          "std_signed": 1.0120484673709056
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0021_0.0021_0.0021-06.0000000c-20251229-111107.csv",
+      "temp_f": 74.093
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 2.6412835316400005,
+          "mean_signed": 0.8372628200109725,
+          "n": 18,
+          "pass_rate": 16.666666666666668,
+          "std_signed": 2.9478476894149277
+        },
+        "bw": {
+          "mean_abs": 1.8040207116290279,
+          "mean_signed": -1.8040207116290279,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 0.6891532134231205
+        },
+        "db": {
+          "mean_abs": 3.478546351650973,
+          "mean_signed": 3.478546351650973,
+          "n": 9,
+          "pass_rate": 33.333333333333336,
+          "std_signed": 1.5146133287910635
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-processed-06.0000000c-20260105-115931.csv",
+      "coef_key": "scalar:x=0.002100,y=0.002100,z=0.002100",
+      "coefs": {
+        "x": 0.0021,
+        "y": 0.0021,
+        "z": 0.0021
+      },
+      "device_id": "06.0000000c",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-raw-06.0000000c-20260105-115931.csv",
+      "recorded_at_ms": 1767735113425,
+      "selected": {
+        "all": {
+          "mean_abs": 2.6196715163797037,
+          "mean_signed": 0.7517761696855341,
+          "n": 18,
+          "pass_rate": 16.666666666666668,
+          "std_signed": 2.9173971848489444
+        },
+        "bw": {
+          "mean_abs": 1.8678953466941697,
+          "mean_signed": -1.8678953466941697,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 0.6869433262462086
+        },
+        "db": {
+          "mean_abs": 3.371447686065238,
+          "mean_signed": 3.371447686065238,
+          "n": 9,
+          "pass_rate": 33.333333333333336,
+          "std_signed": 1.4742438420188144
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.0000000c\\temp-scalar-0.0021_0.0021_0.0021-06.0000000c-20260105-115931.csv",
+      "temp_f": 74.8832
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 5.714432827628821,
+          "mean_signed": 5.714432827628821,
+          "n": 18,
+          "pass_rate": 11.11111111111111,
+          "std_signed": 2.0516210275051265
+        },
+        "bw": {
+          "mean_abs": 5.470787913278688,
+          "mean_signed": 5.470787913278688,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.3559005259268773
+        },
+        "db": {
+          "mean_abs": 5.958077741978953,
+          "mean_signed": 5.958077741978953,
+          "n": 9,
+          "pass_rate": 22.22222222222222,
+          "std_signed": 2.640531887746617
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251124-130741.csv",
+      "coef_key": "scalar:x=0.002100,y=0.002100,z=0.002100",
+      "coefs": {
+        "x": 0.0021,
+        "y": 0.0021,
+        "z": 0.0021
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251124-130741.csv",
+      "recorded_at_ms": 1767735120412,
+      "selected": {
+        "all": {
+          "mean_abs": 1.794291291272473,
+          "mean_signed": 1.1432445320419944,
+          "n": 18,
+          "pass_rate": 61.111111111111114,
+          "std_signed": 1.8715585741294267
+        },
+        "bw": {
+          "mean_abs": 0.8536452531772728,
+          "mean_signed": 0.33739930120668726,
+          "n": 9,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 1.0483361945765595
+        },
+        "db": {
+          "mean_abs": 2.734937329367673,
+          "mean_signed": 1.9490897628773014,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 2.209790928312028
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0021_0.0021_0.0021-06.00000025-20251124-130741.csv",
+      "temp_f": 56.71415929203539
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 8.85136578065408,
+          "mean_signed": 8.85136578065408,
+          "n": 18,
+          "pass_rate": 0.0,
+          "std_signed": 1.71700476723951
+        },
+        "bw": {
+          "mean_abs": 8.673616906455553,
+          "mean_signed": 8.673616906455553,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 1.1260833346845203
+        },
+        "db": {
+          "mean_abs": 9.029114654852606,
+          "mean_signed": 9.029114654852606,
+          "n": 9,
+          "pass_rate": 0.0,
+          "std_signed": 2.2193630270879976
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251126-191429.csv",
+      "coef_key": "scalar:x=0.002100,y=0.002100,z=0.002100",
+      "coefs": {
+        "x": 0.0021,
+        "y": 0.0021,
+        "z": 0.0021
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251126-191429.csv",
+      "recorded_at_ms": 1767735125565,
+      "selected": {
+        "all": {
+          "mean_abs": 1.6113667565117797,
+          "mean_signed": 0.3370249924710287,
+          "n": 18,
+          "pass_rate": 61.111111111111114,
+          "std_signed": 2.2174695475154893
+        },
+        "bw": {
+          "mean_abs": 1.168871644887033,
+          "mean_signed": -0.960464124744974,
+          "n": 9,
+          "pass_rate": 44.44444444444444,
+          "std_signed": 1.0530467955800797
+        },
+        "db": {
+          "mean_abs": 2.0538618681365266,
+          "mean_signed": 1.6345141096870313,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 2.3563224976632604
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0021_0.0021_0.0021-06.00000025-20251126-191429.csv",
+      "temp_f": 42.312200000000004
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.7042043426735283,
+          "mean_signed": -0.6173835354915718,
+          "n": 18,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 2.1254141223350547
+        },
+        "bw": {
+          "mean_abs": 1.1784332686898298,
+          "mean_signed": 0.995208345674083,
+          "n": 9,
+          "pass_rate": 55.55555555555556,
+          "std_signed": 1.2542615804518549
+        },
+        "db": {
+          "mean_abs": 2.2299754166572265,
+          "mean_signed": -2.2299754166572265,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 1.4748739354160219
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20251223-170231.csv",
+      "coef_key": "scalar:x=0.002100,y=0.002100,z=0.002100",
+      "coefs": {
+        "x": 0.0021,
+        "y": 0.0021,
+        "z": 0.0021
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20251223-170231.csv",
+      "recorded_at_ms": 1767735130861,
+      "selected": {
+        "all": {
+          "mean_abs": 1.6848405950339738,
+          "mean_signed": -0.8611273975044937,
+          "n": 18,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 2.0605572572901427
+        },
+        "bw": {
+          "mean_abs": 0.9298706614950637,
+          "mean_signed": 0.7175557335638962,
+          "n": 9,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 1.1156994038659798
+        },
+        "db": {
+          "mean_abs": 2.4398105285728837,
+          "mean_signed": -2.4398105285728837,
+          "n": 9,
+          "pass_rate": 66.66666666666667,
+          "std_signed": 1.473160997296924
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0021_0.0021_0.0021-06.00000025-20251223-170231.csv",
+      "temp_f": 73.45305263157888
+    },
+    {
+      "baseline": {
+        "all": {
+          "mean_abs": 1.045668308804621,
+          "mean_signed": 0.6173835354915653,
+          "n": 18,
+          "pass_rate": 83.33333333333333,
+          "std_signed": 1.4504881542218833
+        },
+        "bw": {
+          "mean_abs": 0.6473778026019349,
+          "mean_signed": 0.07102178052957048,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 0.8964883501163408
+        },
+        "db": {
+          "mean_abs": 1.4439588150073068,
+          "mean_signed": 1.1637452904535601,
+          "n": 9,
+          "pass_rate": 88.88888888888889,
+          "std_signed": 1.7307454372270792
+        }
+      },
+      "baseline_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-processed-06.00000025-20260105-120607.csv",
+      "coef_key": "scalar:x=0.002100,y=0.002100,z=0.002100",
+      "coefs": {
+        "x": 0.0021,
+        "y": 0.0021,
+        "z": 0.0021
+      },
+      "device_id": "06.00000025",
+      "device_type": "06",
+      "mode": "scalar",
+      "plate_type": "06",
+      "raw_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-raw-06.00000025-20260105-120607.csv",
+      "recorded_at_ms": 1767735136058,
+      "selected": {
+        "all": {
+          "mean_abs": 1.0441633775887176,
+          "mean_signed": 0.494787867159859,
+          "n": 18,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 1.5087795722996815
+        },
+        "bw": {
+          "mean_abs": 0.5760161502217123,
+          "mean_signed": -0.057029048303649105,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 0.8037522882179812
+        },
+        "db": {
+          "mean_abs": 1.5123106049557227,
+          "mean_signed": 1.0466047826233673,
+          "n": 9,
+          "pass_rate": 77.77777777777777,
+          "std_signed": 1.8724947359216642
+        }
+      },
+      "selected_csv": "C:\\Users\\caleb\\Documents\\Axioforce\\AxioforceFluxLite\\temp_testing\\06.00000025\\temp-scalar-0.0021_0.0021_0.0021-06.00000025-20260105-120607.csv",
+      "temp_f": 74.15132
+    }
+  ],
+  "updated_at_ms": 1768258575248,
+  "version": 1
+}

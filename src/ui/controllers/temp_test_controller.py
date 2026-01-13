@@ -7,66 +7,18 @@ from ... import config
 from ...app_services.testing import TestingService
 from ...app_services.hardware import HardwareService
 from ..presenters.grid_presenter import GridPresenter
+from .temp_test_controller_actions import TempTestControllerActionsMixin
+from .temp_test_workers import (
+    BiasComputeWorker,
+    PlateTypeAutoSearchWorker,
+    PlateTypeRollupWorker,
+    ProcessingWorker,
+    TemperatureAnalysisWorker,
+    TemperatureImportWorker,
+    TemperatureAutoUpdateWorker,
+)
 
-class ProcessingWorker(QtCore.QThread):
-    """Worker thread for running temperature processing in the background."""
-    def __init__(self, service: TestingService, folder: str, device_id: str, csv_path: str, slopes: dict, room_temp_f: float, mode: str = "scalar"):
-        super().__init__()
-        self.service = service
-        self.folder = folder
-        self.device_id = device_id
-        self.csv_path = csv_path
-        self.slopes = slopes
-        self.room_temp_f = float(room_temp_f)
-        self.mode = mode
-
-    def run(self):
-        self.service.run_temperature_processing(self.folder, self.device_id, self.csv_path, self.slopes, self.room_temp_f, self.mode)
-
-class TemperatureAnalysisWorker(QtCore.QThread):
-    """Background worker for processed run analysis."""
-
-    result_ready = QtCore.Signal(dict)
-    error = QtCore.Signal(str)
-
-    def __init__(self, service: TestingService, baseline_csv: str, selected_csv: str, meta: Dict[str, object], baseline_data: Optional[Dict[str, object]] = None):
-        super().__init__()
-        self.service = service
-        self.baseline_csv = baseline_csv
-        self.selected_csv = selected_csv
-        self.meta = dict(meta or {})
-        self.baseline_data = baseline_data
-
-    def run(self) -> None:
-        try:
-            payload = self.service.analyze_temperature_processed_runs(
-                self.baseline_csv,
-                self.selected_csv,
-                self.meta,
-                baseline_data=self.baseline_data,
-            )
-            self.result_ready.emit(payload)
-        except Exception as exc:
-            self.error.emit(str(exc))
-
-class BiasComputeWorker(QtCore.QThread):
-    """Background worker for per-device room-temp baseline bias computation."""
-
-    result_ready = QtCore.Signal(dict)
-
-    def __init__(self, service: TestingService, device_id: str):
-        super().__init__()
-        self.service = service
-        self.device_id = str(device_id or "").strip()
-
-    def run(self) -> None:
-        try:
-            res = self.service.compute_temperature_bias_for_device(self.device_id)
-            self.result_ready.emit(dict(res or {}))
-        except Exception as exc:
-            self.result_ready.emit({"ok": False, "message": str(exc), "errors": [str(exc)]})
-
-class TempTestController(QtCore.QObject):
+class TempTestController(TempTestControllerActionsMixin, QtCore.QObject):
     """
     Controller for the Temperature Testing UI.
     Manages test file listing, processing, and configuration.
@@ -88,6 +40,13 @@ class TempTestController(QtCore.QObject):
     bias_status = QtCore.Signal(dict)
     # Plate-type batch status (big picture)
     rollup_ready = QtCore.Signal(dict)
+    # Auto-search status (big picture)
+    auto_search_status = QtCore.Signal(dict)
+    # Import status
+    import_ready = QtCore.Signal(dict)
+    # Auto-update status (post-import)
+    auto_update_status = QtCore.Signal(dict)
+    auto_update_done = QtCore.Signal(dict)
 
     def __init__(self, testing_service: TestingService, hardware_service: HardwareService):
         super().__init__()
@@ -113,6 +72,9 @@ class TempTestController(QtCore.QObject):
         self._last_processing_device_id: Optional[str] = None
         self._bias_worker: Optional[BiasComputeWorker] = None
         self._rollup_worker: Optional[QtCore.QThread] = None
+        self._auto_search_worker: Optional[QtCore.QThread] = None
+        self._import_worker: Optional[QtCore.QThread] = None
+        self._auto_update_worker: Optional[QtCore.QThread] = None
 
         # Clear any retained state
         self._last_analysis_payload = None
@@ -124,6 +86,43 @@ class TempTestController(QtCore.QObject):
         self.testing.processing_status.connect(self._on_processing_status)
         
         self._worker = None # Keep reference to prevent GC
+
+    def import_temperature_tests(self, file_paths: list[str]) -> None:
+        """
+        Import raw temperature tests (CSV + meta.json) into temp_testing/<device_id>/.
+        """
+        if self._import_worker and self._import_worker.isRunning():
+            self.processing_status.emit({"status": "error", "message": "Import already in progress"})
+            return
+
+        worker = TemperatureImportWorker(list(file_paths or []))
+        self._import_worker = worker
+        worker.finished.connect(lambda: setattr(self, "_import_worker", None))
+        worker.result_ready.connect(self.import_ready.emit)
+        worker.start()
+
+    def run_auto_update_metrics(self, plate_types: list[str], _device_ids: list[str] | None = None) -> None:
+        """
+        Post-import automation:
+          - resets rollups for affected plate types
+          - runs unified auto-search per plate type
+        """
+        if self._auto_update_worker and self._auto_update_worker.isRunning():
+            self.processing_status.emit({"status": "error", "message": "Auto-update already running"})
+            return
+        if self._rollup_worker and self._rollup_worker.isRunning():
+            self.processing_status.emit({"status": "error", "message": "Batch rollup already running"})
+            return
+        if self._auto_search_worker and self._auto_search_worker.isRunning():
+            self.processing_status.emit({"status": "error", "message": "Auto search already running"})
+            return
+
+        worker = TemperatureAutoUpdateWorker(self.testing, list(plate_types or []))
+        self._auto_update_worker = worker
+        worker.finished.connect(lambda: setattr(self, "_auto_update_worker", None))
+        worker.status_ready.connect(self.auto_update_status.emit)
+        worker.result_ready.connect(self.auto_update_done.emit)
+        worker.start()
 
     def refresh_tests(self, device_id: str):
         """List available tests for the device."""
@@ -369,15 +368,58 @@ class TempTestController(QtCore.QObject):
             return dev.split(".", 1)[0].strip()
         return ""
 
+    @staticmethod
+    def plate_type_from_device_id(device_id: str) -> str:
+        dev = str(device_id or "").strip()
+        if dev:
+            return dev.split(".", 1)[0].strip()
+        return ""
+
+    def top3_for_plate_type(self, plate_type: str) -> dict:
+        """
+        Return both top-3 rankings:
+          - by mean abs % (default)
+          - by abs(mean signed %)
+        """
+        pt = str(plate_type or "").strip()
+        if not pt:
+            return {"mean_abs": [], "signed_abs": []}
+        try:
+            rows_abs = self.testing.top3_temperature_coefs_for_plate_type(pt, sort_by="mean_abs")
+        except Exception:
+            rows_abs = []
+        try:
+            rows_signed = self.testing.top3_temperature_coefs_for_plate_type(pt, sort_by="signed_abs")
+        except Exception:
+            rows_signed = []
+        return {"mean_abs": list(rows_abs or []), "signed_abs": list(rows_signed or [])}
+
     def top3_for_current_plate_type(self) -> list[dict]:
         pt = self.current_plate_type()
         if not pt:
             return []
         try:
-            rows = self.testing.top3_temperature_coefs_for_plate_type(pt)
+            rows = self.testing.top3_temperature_coefs_for_plate_type(pt, sort_by="mean_abs")
             return list(rows or [])
         except Exception:
             return []
+
+    def load_bias_cache_for_device(self, device_id: str) -> bool:
+        """
+        Load bias cache from disk (if present) and update bias_status.
+        Returns True if a valid cache was loaded.
+        """
+        try:
+            self._refresh_bias_cache(str(device_id or ""))
+        except Exception:
+            return False
+        return isinstance(self._bias_cache, dict)
+
+    def compute_bias_for_device(self, device_id: str) -> None:
+        """
+        Start background bias compute for the given device (room-temp baseline bias).
+        """
+        self._start_bias_compute(str(device_id or ""))
 
     def run_coefs_across_plate_type(self, coefs: dict, mode: str) -> None:
         """
@@ -392,29 +434,59 @@ class TempTestController(QtCore.QObject):
             self.processing_status.emit({"status": "error", "message": "Batch rollup already running"})
             return
 
-        class _RollupWorker(QtCore.QThread):
-            result_ready = QtCore.Signal(dict)
-
-            def __init__(self, service: TestingService, plate_type: str, coefs: dict, mode: str):
-                super().__init__()
-                self.service = service
-                self.plate_type = plate_type
-                self.coefs = dict(coefs or {})
-                self.mode = str(mode or "legacy")
-
-            def run(self) -> None:
-                try:
-                    res = self.service.run_temperature_coefs_across_plate_type(
-                        plate_type=self.plate_type, coefs=self.coefs, mode=self.mode
-                    )
-                    self.result_ready.emit(dict(res or {}))
-                except Exception as exc:
-                    self.result_ready.emit({"ok": False, "message": str(exc), "errors": [str(exc)]})
-
-        worker = _RollupWorker(self.testing, plate_type, coefs, mode)
+        worker = PlateTypeRollupWorker(self.testing, plate_type, coefs, mode)
         self._rollup_worker = worker
         worker.finished.connect(lambda: setattr(self, "_rollup_worker", None))
         worker.result_ready.connect(self.rollup_ready.emit)
+        worker.start()
+
+    def run_auto_search_for_current_plate_type(self, *, search_mode: str = "unified", mode: str = "scalar") -> None:
+        """
+        Run an automated coefficient search for the current plate type.
+        Currently supports only search_mode == 'unified' (x=y=z).
+        """
+        plate_type = self.current_plate_type()
+        if not plate_type:
+            self.processing_status.emit({"status": "error", "message": "Missing plate type (no device selected)."})
+            return
+
+        if self._rollup_worker and self._rollup_worker.isRunning():
+            self.processing_status.emit({"status": "error", "message": "Batch rollup already running"})
+            return
+        if self._auto_search_worker and self._auto_search_worker.isRunning():
+            self.processing_status.emit({"status": "error", "message": "Auto search already running"})
+            return
+
+        sm = str(search_mode or "unified").strip().lower()
+        if sm not in ("unified",):
+            self.processing_status.emit({"status": "error", "message": f"Unsupported auto search mode: {search_mode}"})
+            return
+
+        worker = PlateTypeAutoSearchWorker(self.testing, plate_type, mode, sm)
+        self._auto_search_worker = worker
+        worker.finished.connect(lambda: setattr(self, "_auto_search_worker", None))
+        worker.status_ready.connect(self.auto_search_status.emit)
+
+        def _on_done(payload: dict) -> None:
+            payload = payload or {}
+            ok = bool(payload.get("ok"))
+            msg = str(payload.get("message") or "")
+            if msg:
+                try:
+                    self.auto_search_status.emit({"status": "completed" if ok else "error", "message": msg})
+                except Exception:
+                    pass
+            # Reuse rollup_ready so the panel refreshes top3 consistently.
+            errs = []
+            if not ok and msg:
+                errs = [msg]
+            try:
+                out = {"ok": ok, "message": msg, "errors": errs, "best": payload.get("best")}
+                self.rollup_ready.emit(out)
+            except Exception:
+                pass
+
+        worker.result_ready.connect(_on_done)
         worker.start()
 
     def reset_rollup_for_current_plate_type(self, *, backup: bool = True) -> None:
@@ -435,145 +507,3 @@ class TempTestController(QtCore.QObject):
         except Exception:
             pass
 
-    def _on_analysis_result(self, payload: dict) -> None:
-        # Update cache if needed
-        self._last_analysis_payload = payload
-        if payload and payload.get("baseline"):
-            worker = self.sender()
-            if isinstance(worker, TemperatureAnalysisWorker) and worker.baseline_csv:
-                 if self._cached_baseline_path != worker.baseline_csv:
-                     self._cached_baseline_path = worker.baseline_csv
-                     self._cached_baseline_result = payload.get("baseline")
-
-        self.analysis_status.emit({"status": "completed", "message": "Analysis ready"})
-        self.analysis_ready.emit(payload)
-
-    def _on_analysis_error(self, message: str) -> None:
-        self.analysis_status.emit({"status": "error", "message": message})
-        self.processing_status.emit({"status": "error", "message": message})
-
-    def delete_processed_run(self, file_path: str) -> None:
-        """Delete a processed run file."""
-        if not file_path:
-            return
-            
-        if not os.path.exists(file_path):
-            self.processing_status.emit({"status": "error", "message": "File not found"})
-            return
-
-        try:
-            os.remove(file_path)
-            # We do NOT delete the meta file as per instructions "NOTHING ELSE"
-            
-            # Refresh details
-            if self._current_test_csv:
-                self.load_test_details(self._current_test_csv)
-                
-            self.processing_status.emit({"status": "completed", "message": "File deleted"})
-        except Exception as e:
-            self.processing_status.emit({"status": "error", "message": f"Failed to delete file: {str(e)}"})
-
-    def configure_correction(self, payload: dict):
-        self.hardware.configure_temperature_correction(
-            payload.get("slopes", {}),
-            payload.get("use_temperature_correction", False),
-            payload.get("room_temperature_f", 72.0)
-        )
-
-    def prepare_grid_display(self, payload: dict, stage_key: str) -> None:
-        """
-        Prepare grid cell display data from analysis payload and emit grid_display_ready.
-        Uses GridPresenter for logic.
-        """
-        if not payload:
-            return
-
-        grid_info = payload.get("grid", {})
-        meta = payload.get("meta", {})
-        body_weight_n = float(meta.get("body_weight_n") or 0.0)
-        device_type = str(grid_info.get("device_type", "06"))
-
-        baseline = payload.get("baseline", {})
-        selected = payload.get("selected", {})
-
-        bias = self.bias_map() if self._grading_mode == "bias" else None
-
-        # Compute view models
-        baseline_vms = self.presenter.compute_analysis_cells(baseline, stage_key, device_type, body_weight_n, bias_map=bias)
-        selected_vms = self.presenter.compute_analysis_cells(selected, stage_key, device_type, body_weight_n, bias_map=bias)
-
-        # Convert to dicts for view compatibility (for now)
-        # Passing 'color' (QColor) instead of 'color_bin'
-        def _to_dict(vms):
-            return [{
-                "row": vm.row,
-                "col": vm.col,
-                "text": vm.text,
-                "color": vm.color,
-                "tooltip": vm.tooltip
-            } for vm in vms]
-
-        display_data = {
-            "grid_info": grid_info,
-            "device_id": meta.get("device_id"),
-            "baseline_cells": _to_dict(baseline_vms),
-            "selected_cells": _to_dict(selected_vms),
-        }
-        
-        self.grid_display_ready.emit(display_data)
-
-    def plot_stage_detection(self) -> None:
-        """
-        Emit signal to launch matplotlib visualization showing stage detection windows.
-        """
-        if not self._current_meta:
-            self.processing_status.emit({"status": "error", "message": "No test loaded"})
-            return
-        
-        baseline_path = self._current_baseline_path or ""
-        selected_path = self._current_selected_path or ""
-        
-        # Fallback: find paths from processed runs if not set
-        if not baseline_path:
-            for run in self._current_processed_runs:
-                if run.get("is_baseline"):
-                    baseline_path = str(run.get("path") or "").strip()
-                    break
-        
-        if not selected_path:
-            for run in reversed(self._current_processed_runs):
-                if not run.get("is_baseline"):
-                    selected_path = str(run.get("path") or "").strip()
-                    break
-        
-        if not baseline_path:
-            self.processing_status.emit({"status": "error", "message": "No baseline CSV found"})
-            return
-        
-        if not selected_path:
-            selected_path = baseline_path
-        
-        body_weight_n = float(self._current_meta.get("body_weight_n") or 800.0)
-        
-        baseline_windows = {}
-        baseline_segments = []
-        selected_windows = {}
-        selected_segments = []
-        
-        if self._last_analysis_payload:
-            base_data = self._last_analysis_payload.get("baseline") or {}
-            sel_data = self._last_analysis_payload.get("selected") or {}
-            baseline_windows = base_data.get("_windows") or {}
-            baseline_segments = base_data.get("_segments") or []
-            selected_windows = sel_data.get("_windows") or {}
-            selected_segments = sel_data.get("_segments") or []
-        
-        self.plot_ready.emit({
-            "baseline_path": baseline_path,
-            "selected_path": selected_path,
-            "body_weight_n": body_weight_n,
-            "baseline_windows": baseline_windows,
-            "baseline_segments": baseline_segments,
-            "selected_windows": selected_windows,
-            "selected_segments": selected_segments,
-        })

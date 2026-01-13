@@ -181,12 +181,49 @@ class TestingService(QtCore.QObject):
             status_cb=self.processing_status.emit,
         )
 
-    def top3_temperature_coefs_for_plate_type(self, plate_type: str) -> List[Dict[str, object]]:
-        return self._temp_rollup.top3_for_plate_type(plate_type)
+    def top3_temperature_coefs_for_plate_type(self, plate_type: str, *, sort_by: str = "mean_abs") -> List[Dict[str, object]]:
+        return self._temp_rollup.top3_for_plate_type(plate_type, sort_by=str(sort_by or "mean_abs"))
 
     def reset_temperature_coef_rollup(self, plate_type: str, *, backup: bool = True) -> Dict[str, object]:
         """
         Clear the stored plate-type coefficient rollup (used for the "Top 3 Coef Combos" view).
         """
         return self._temp_rollup.reset_rollup(plate_type, backup=bool(backup))
+
+    def aggregate_temperature_coefs_for_plate_type(
+        self,
+        plate_type: str,
+        *,
+        coefs: dict,
+        mode: str,
+    ) -> Optional[Dict[str, object]]:
+        """
+        Aggregate rollup metrics (selected/all mean_signed, etc.) for a specific coef set.
+        Returns None if no eligible runs exist yet.
+        """
+        ck = self._temp_rollup.coef_key(mode, coefs)
+        out = self._temp_rollup.aggregate_selected_all_mean_signed(plate_type, coef_key=ck)
+        return dict(out or {}) if isinstance(out, dict) else None
+
+    def list_existing_unified_temperature_coef_candidates_for_plate_type(
+        self,
+        plate_type: str,
+        *,
+        mode: str = "scalar",
+        min_coef: float = 0.0,
+        max_coef: float = 0.01,
+    ) -> List[Dict[str, object]]:
+        """
+        Return existing unified candidates (x=y=z) found in the rollup for this plate type.
+        Each row includes coef, coef_key, mean_signed, coverage.
+        """
+        return list(
+            self._temp_rollup.list_existing_unified_candidates(
+                plate_type,
+                mode=mode,
+                min_coef=min_coef,
+                max_coef=max_coef,
+            )
+            or []
+        )
 
