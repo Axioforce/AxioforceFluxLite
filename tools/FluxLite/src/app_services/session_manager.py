@@ -35,16 +35,24 @@ class SessionManager(QtCore.QObject):
         return int(self._current_stage_index)
 
     def start_session(
-        self, 
-        tester_name: str, 
-        device_id: str, 
-        model_id: str, 
-        body_weight_n: float, 
-        thresholds: TestThresholds, 
-        is_temp_test: bool = False, 
+        self,
+        tester_name: str,
+        device_id: str,
+        model_id: str,
+        body_weight_n: float,
+        thresholds: TestThresholds | None,
+        is_temp_test: bool = False,
         is_discrete_temp: bool = False
     ) -> TestSession:
         rows, cols = GeometryService.get_grid_dimensions(model_id)
+
+        # Create default thresholds if not provided
+        if thresholds is None:
+            device_type = (model_id or "06")[:2]
+            db_tol = config.THRESHOLDS_DB_N_BY_MODEL.get(device_type, 6.0)
+            bw_pct = config.THRESHOLDS_BW_PCT_BY_MODEL.get(device_type, 0.015)
+            bw_tol = body_weight_n * bw_pct if body_weight_n > 0 else 10.0
+            thresholds = TestThresholds(dumbbell_tol_n=db_tol, bodyweight_tol_n=bw_tol)
         
         session = TestSession(
             tester_name=tester_name,

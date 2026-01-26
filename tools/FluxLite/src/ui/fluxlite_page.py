@@ -187,13 +187,16 @@ class FluxLitePage(QtWidgets.QWidget):
         except Exception:
             pass
 
-        # Live Testing Signals
-        self.controller.live_test.view_grid_configured.connect(self.canvas.show_live_grid)
-        self.controller.live_test.view_session_ended.connect(self.canvas.hide_live_grid)
+        # Live Testing Signals - show grid on both canvases
+        self.controller.live_test.view_grid_configured.connect(self.canvas_left.show_live_grid)
+        self.controller.live_test.view_grid_configured.connect(self.canvas_right.show_live_grid)
+        self.controller.live_test.view_session_ended.connect(self.canvas_left.hide_live_grid)
+        self.controller.live_test.view_session_ended.connect(self.canvas_right.hide_live_grid)
         self.controller.live_test.view_cell_updated.connect(self._on_live_cell_updated)
 
-        # User interaction: clicks on the live grid overlay
-        self.canvas.live_cell_clicked.connect(self._on_live_cell_clicked)
+        # User interaction: clicks on the live grid overlay (either canvas)
+        self.canvas_left.live_cell_clicked.connect(self._on_live_cell_clicked)
+        self.canvas_right.live_cell_clicked.connect(self._on_live_cell_clicked)
 
         # Plate quick actions (overlay buttons)
         try:
@@ -266,6 +269,14 @@ class FluxLitePage(QtWidgets.QWidget):
         cal_ctrl.status_updated.connect(live_panel.set_calibration_status)
         cal_ctrl.files_loaded.connect(live_panel.set_generate_enabled)
         cal_ctrl.heatmap_ready.connect(self._on_heatmap_ready)
+
+        # Model Management Signals
+        model_svc = self.controller.models
+        model_svc.metadata_received.connect(self._on_model_metadata_received)
+        model_svc.activation_status_received.connect(self._on_model_activation_status)
+        live_panel.activate_model_requested.connect(self._on_activate_model_requested)
+        live_panel.deactivate_model_requested.connect(self._on_deactivate_model_requested)
+        live_panel.package_model_requested.connect(self._on_package_model_requested)
 
         # Mound Device Mapping
         self.canvas_left.mound_device_selected.connect(self._on_mound_device_selected)
@@ -576,6 +587,36 @@ class FluxLitePage(QtWidgets.QWidget):
             except Exception:
                 pass
 
+        # Update Live Testing panel's device info from current selection
+        try:
+            device_id = (self.state.selected_device_id or "").strip()
+            device_type = (self.state.selected_device_type or "").strip()
+            device_name = (self.state.selected_device_name or "").strip()
+
+            live_panel = self.controls.live_testing_panel
+
+            # Update device label (show device ID or name)
+            display_device = device_id or device_name or ""
+            live_panel.lbl_device.setText(display_device or "—")
+
+            # Update model label with device type (plate type)
+            live_panel.lbl_model.setText(device_type or "—")
+
+            # Request model metadata for this device so we can populate the model list
+            if device_id:
+                # Show loading state while fetching
+                live_panel.set_current_model("Loading...")
+                live_panel.set_model_status("Fetching models...")
+                live_panel.set_model_controls_enabled(False)
+                self.controller.models.request_metadata(device_id)
+            else:
+                # No device selected - clear model info
+                live_panel.set_current_model("—")
+                live_panel.set_model_list([])
+                live_panel.set_model_status("")
+        except Exception:
+            pass
+
     def _on_load_calibration(self) -> None:
         try:
             d = QtWidgets.QFileDialog(self)
@@ -817,4 +858,162 @@ class FluxLitePage(QtWidgets.QWidget):
             )
         except Exception as e:
             print(f"[FluxLitePage] Plot error: {e}")
+
+    # --- Model Management Handlers ---
+
+    def _on_model_metadata_received(self, models: list) -> None:
+        """Handle model metadata from backend - update Live Testing panel's model list."""
+        try:
+            print(f"[FluxLitePage] Model metadata received: {models}")
+            live_panel = self.controls.live_testing_panel
+            live_panel.set_model_list(models or [])
+            live_panel.set_model_controls_enabled(True)
+
+            # If there's an active model, update the current model display
+            # Check various field names that backends might use
+            active_model = None
+            for m in (models or []):
+                if not isinstance(m, dict):
+                    continue
+                # Check various ways the backend might indicate an active model
+                is_active = (
+                    m.get("modelActive") or  # Backend uses modelActive
+                    m.get("isActive") or
+                    m.get("active") or
+                    m.get("is_active") or
+                    str(m.get("status", "")).lower() == "active"
+                )
+                if is_active:
+                    active_model = m.get("modelId") or m.get("model_id") or m.get("id") or m.get("name")
+                    print(f"[FluxLitePage] Found active model: {active_model}")
+                    break
+
+            # Don't use first model as fallback - only show active models
+            if not active_model:
+                print("[FluxLitePage] No model is currently active")
+
+            if active_model:
+                print(f"[FluxLitePage] Setting current model to: {active_model}")
+                live_panel.set_current_model(str(active_model))
+                live_panel.set_session_model_id(str(active_model))
+            else:
+                print("[FluxLitePage] No active model found")
+                live_panel.set_current_model("No active model")
+
+            live_panel.set_model_status(None)  # Clear any loading status
+        except Exception as e:
+            print(f"[FluxLitePage] Model metadata error: {e}")
+
+    def _on_model_activation_status(self, status: dict) -> None:
+        """Handle model activation/deactivation status from backend."""
+        try:
+            print(f"[FluxLitePage] Model activation status received: {status}")
+            live_panel = self.controls.live_testing_panel
+
+            # Handle various response formats from backend
+            success = bool(status.get("success", False) or status.get("ok", False))
+            action = str(status.get("action") or status.get("type") or "").lower()
+            model_id = str(status.get("modelId") or status.get("model_id") or status.get("activeModel") or "")
+            error = str(status.get("error") or status.get("message") or "")
+
+            # Some backends just return the active model ID directly
+            active_model = status.get("activeModel") or status.get("activeModelId") or status.get("currentModel")
+
+            if success or active_model is not None:
+                if active_model:
+                    # Backend told us directly which model is now active
+                    live_panel.set_current_model(str(active_model))
+                    live_panel.set_session_model_id(str(active_model))
+                    live_panel.set_model_status(f"Active: {active_model}")
+                elif action == "activate" and model_id:
+                    live_panel.set_current_model(model_id)
+                    live_panel.set_session_model_id(model_id)
+                    live_panel.set_model_status(f"Activated: {model_id}")
+                elif action == "deactivate" or active_model == "" or active_model is None:
+                    live_panel.set_current_model("No active model")
+                    live_panel.set_session_model_id("")
+                    live_panel.set_model_status("Model deactivated")
+                else:
+                    live_panel.set_model_status("Success")
+                # Note: Reconnect hint is shown when button is clicked, not here
+            else:
+                live_panel.set_model_status(f"Error: {error}" if error else "Operation failed")
+
+            live_panel.set_model_controls_enabled(True)
+
+            # Refresh metadata to get updated list and confirm active state
+            device_id = (self.state.selected_device_id or "").strip()
+            if device_id:
+                # Small delay to let backend update its state
+                QtCore.QTimer.singleShot(200, lambda: self.controller.models.request_metadata(device_id))
+        except Exception as e:
+            print(f"[FluxLitePage] Model activation status error: {e}")
+
+    def _on_activate_model_requested(self, model_id: str) -> None:
+        """Handle request to activate a model from the UI."""
+        try:
+            device_id = (self.state.selected_device_id or "").strip()
+            print(f"[FluxLitePage] Activate model requested: device={device_id}, model={model_id}")
+            if not device_id:
+                self.controls.live_testing_panel.set_model_status("No device selected")
+                self.controls.live_testing_panel.set_model_controls_enabled(True)
+                return
+            if not model_id:
+                self.controls.live_testing_panel.set_model_status("No model selected")
+                self.controls.live_testing_panel.set_model_controls_enabled(True)
+                return
+
+            self.controller.models.activate_model(device_id, model_id)
+        except Exception as e:
+            print(f"[FluxLitePage] Activate model error: {e}")
+            try:
+                self.controls.live_testing_panel.set_model_status(f"Error: {e}")
+                self.controls.live_testing_panel.set_model_controls_enabled(True)
+            except Exception:
+                pass
+
+    def _on_deactivate_model_requested(self, model_id: str) -> None:
+        """Handle request to deactivate a model from the UI."""
+        try:
+            device_id = (self.state.selected_device_id or "").strip()
+            print(f"[FluxLitePage] Deactivate model requested: device={device_id}, model={model_id}")
+            if not device_id:
+                self.controls.live_testing_panel.set_model_status("No device selected")
+                self.controls.live_testing_panel.set_model_controls_enabled(True)
+                return
+            if not model_id:
+                self.controls.live_testing_panel.set_model_status("No model to deactivate")
+                self.controls.live_testing_panel.set_model_controls_enabled(True)
+                return
+
+            self.controller.models.deactivate_model(device_id, model_id)
+        except Exception as e:
+            print(f"[FluxLitePage] Deactivate model error: {e}")
+            try:
+                self.controls.live_testing_panel.set_model_status(f"Error: {e}")
+                self.controls.live_testing_panel.set_model_controls_enabled(True)
+            except Exception:
+                pass
+
+    def _on_package_model_requested(self) -> None:
+        """Handle request to package a model from the UI."""
+        try:
+            from .dialogs.model_packager import ModelPackagerDialog
+
+            dialog = ModelPackagerDialog(self)
+            if dialog.exec() != QtWidgets.QDialog.Accepted:
+                return
+
+            force_dir, moments_dir, output_dir = dialog.get_values()
+            if not force_dir or not output_dir:
+                return
+
+            self.controls.live_testing_panel.set_model_status("Packaging model...")
+            self.controller.models.package_model(force_dir, moments_dir or "", output_dir)
+        except Exception as e:
+            print(f"[FluxLitePage] Package model error: {e}")
+            try:
+                self.controls.live_testing_panel.set_model_status(f"Error: {e}")
+            except Exception:
+                pass
 

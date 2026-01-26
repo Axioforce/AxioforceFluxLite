@@ -66,7 +66,7 @@ class TestingService(QtCore.QObject):
     def current_stage_index(self) -> int:
         return self.session_manager.current_stage_index
 
-    def start_session(self, tester_name: str, device_id: str, model_id: str, body_weight_n: float, thresholds: TestThresholds, is_temp_test: bool = False, is_discrete_temp: bool = False) -> TestSession:
+    def start_session(self, tester_name: str, device_id: str, model_id: str, body_weight_n: float, thresholds: TestThresholds | None, is_temp_test: bool = False, is_discrete_temp: bool = False) -> TestSession:
         return self.session_manager.start_session(
             tester_name, device_id, model_id, body_weight_n, thresholds, is_temp_test, is_discrete_temp
         )

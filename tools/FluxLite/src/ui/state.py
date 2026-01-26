@@ -24,5 +24,8 @@ class ViewState:
         "Upper Landing Zone": None,
         "Lower Landing Zone": None,
     })
+    # Session defaults (persisted across sessions for convenience)
+    last_tester_name: str = ""
+    last_body_weight_n: float = 0.0
 
 

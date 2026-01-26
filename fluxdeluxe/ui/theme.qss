@@ -4,11 +4,11 @@ AxioforceFluxDeluxe Qt stylesheet (QSS)
 This is the global theme applied by the FluxDeluxe host.
 
 Tinker knobs (search/replace these hex values):
-  - BG      :#121212  (main background)
+  - BG      : #121212  (main background)
   - SURFACE : #1A1A1A  (panels)
-  - SURFACE2: #202020  (controls on panels)
+  - SURFACE2: #282828  (controls on panels - lighter for distinction)
   - BORDER  : #2A2A2A
-  - BORDER2 : #333333
+  - BORDER2 : #3A3A3A
   - TEXT    : #E0E0E0
   - MUTED   : #BDBDBD
   - ACCENT  : #3D7EFF
@@ -28,6 +28,9 @@ QWidget {
 /* ---- Temperature Testing tab continuity (fix nested wrapper blocks) ---- */
 #temperature_testing_panel QWidget { background: transparent; }
 #temperature_testing_panel QGroupBox { background-color: #1A1A1A; }
+#temperature_testing_panel QPushButton { background-color: #282828; }
+#temperature_testing_panel QPushButton:pressed { background-color: #242424; }
+#temperature_testing_panel QPushButton:disabled { background-color: #1E1E1E; }
 
 /*
 Continuity fixes for nested panes:
@@ -115,7 +118,7 @@ QCheckBox::indicator {
   width: 14px;
   height: 14px;
   border-radius: 3px;
-  background: #202020; /* surface2 */
+  background: #282828; /* surface2 */
   border: 1px solid rgba(224, 224, 224, 70);
 }
 
@@ -125,13 +128,13 @@ QCheckBox::indicator:hover {
 
 QCheckBox::indicator:checked {
   /* Keep the border, but use an inset fill so it feels less "flat". */
-  background: #202020;
+  background: #282828;
   border: 1px solid rgba(224, 224, 224, 175);
   image: url("assets/icons/checkbox_fill_inset.svg");
 }
 
 QCheckBox::indicator:checked:hover {
-  background: #202020;
+  background: #282828;
   border: 1px solid rgba(224, 224, 224, 200);
   image: url("assets/icons/checkbox_fill_inset_hover.svg");
 }
@@ -145,7 +148,7 @@ QRadioButton::indicator {
   width: 14px;
   height: 14px;
   border-radius: 7px;
-  background: #202020; /* surface2 */
+  background: #282828; /* surface2 */
   border: 1px solid rgba(224, 224, 224, 70);
 }
 
@@ -155,13 +158,13 @@ QRadioButton::indicator:hover {
 
 QRadioButton::indicator:checked {
   /* Border + inset dot (matches checkbox "gap" style). */
-  background: #202020;
+  background: #282828;
   border: 1px solid rgba(224, 224, 224, 175);
   image: url("assets/icons/radio_dot_inset.svg");
 }
 
 QRadioButton::indicator:checked:hover {
-  background: #202020;
+  background: #282828;
   border: 1px solid rgba(224, 224, 224, 200);
   image: url("assets/icons/radio_dot_inset_hover.svg");
 }
@@ -182,7 +185,7 @@ QGroupBox {
 
 /* Depth: nested panels step up a surface shade automatically */
 QGroupBox QGroupBox {
-  background-color: #202020;
+  background-color: #282828;
 }
 
 QGroupBox QGroupBox QGroupBox {
@@ -222,43 +225,40 @@ QTabBar::tab:selected {
 }
 
 QTabBar::tab:hover {
-  background: #202020;
+  background: #282828;
 }
 
-/* Buttons */
+/* Buttons - consistent surface2 background with subtle border */
 QPushButton {
-  /* Default: on BG -> Surface1 */
-  background-color: #1A1A1A;
-  border: 1px solid transparent; /* keep layout stable; only show on focus */
+  background-color: #282828;
+  border: 1px solid #3A3A3A;
   border-radius: 8px;
   padding: 4px 8px;
 }
 
 QPushButton:hover {
-  /* Keep to the 3-surface system */
-  background-color: #1A1A1A;
-  border-color: #333333;
+  border-color: #4A4A4A;
 }
 
 QPushButton:pressed {
-  background-color: #1A1A1A;
+  background-color: #242424;
+  border-color: #3A3A3A;
 }
 
 QPushButton:focus {
-  border-color:rgb(109, 155, 247);
+  border-color: rgb(109, 155, 247);
 }
 
 QPushButton:disabled {
   color: #777777;
-  border-color: transparent;
-  background-color: #202020;
+  border-color: #2A2A2A;
+  background-color: #1E1E1E;
 }
 
-/* Inputs */
+/* Inputs - consistent surface2 background with subtle border */
 QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QDateTimeEdit {
-  /* Default: on BG -> Surface1 */
-  background-color: #1A1A1A;
-  border: 1px solid transparent; /* no borders unless interacting */
+  background-color: #282828;
+  border: 1px solid #3A3A3A;
   border-radius: 6px;
   padding: 3px 6px;
   selection-background-color: #3D7EFF;
@@ -267,7 +267,7 @@ QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QDateTimeEdit {
 
 QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover,
 QSpinBox:hover, QDoubleSpinBox:hover, QDateTimeEdit:hover {
-  background-color: #202020;
+  border-color: #4A4A4A;
 }
 
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus,
@@ -275,22 +275,33 @@ QSpinBox:focus, QDoubleSpinBox:focus, QDateTimeEdit:focus {
   border-color: #3D7EFF;
 }
 
-/* Combo boxes */
+QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled,
+QSpinBox:disabled, QDoubleSpinBox:disabled, QDateTimeEdit:disabled {
+  background-color: #1E1E1E;
+  border-color: #2A2A2A;
+  color: #777777;
+}
+
+/* Combo boxes - consistent surface2 background with subtle border */
 QComboBox {
-  /* Default: on BG -> Surface1 */
-  background-color: #1A1A1A;
-  border: 1px solid transparent;
+  background-color: #282828;
+  border: 1px solid #3A3A3A;
   border-radius: 6px;
   padding: 3px 22px 3px 6px; /* leave room for arrow */
 }
 
 QComboBox:hover {
-  background-color: #1A1A1A;
-  border-color: #333333;
+  border-color: #4A4A4A;
 }
 
 QComboBox:focus {
   border-color: #3D7EFF;
+}
+
+QComboBox:disabled {
+  background-color: #1E1E1E;
+  border-color: #2A2A2A;
+  color: #777777;
 }
 
 QComboBox::drop-down {
@@ -304,25 +315,26 @@ QComboBox::drop-down {
 }
 
 QComboBox QAbstractItemView {
-  background-color: #1A1A1A;
-  border: none;
+  background-color: #282828;
+  border: 1px solid #3A3A3A;
   selection-background-color: #3D7EFF;
   selection-color: #121212;
 }
 
-/* Controls should be one surface higher than the panel they sit on (BG->S1, S1->S2). */
+/* Buttons inside panels - override transparent QWidget inheritance */
 QGroupBox QPushButton,
 QTabWidget QStackedWidget QPushButton {
-  background-color: #202020;
+  background-color: #282828;
 }
 
-QGroupBox QLineEdit, QGroupBox QTextEdit, QGroupBox QPlainTextEdit,
-QGroupBox QSpinBox, QGroupBox QDoubleSpinBox, QGroupBox QDateTimeEdit,
-QGroupBox QComboBox,
-QTabWidget QStackedWidget QLineEdit, QTabWidget QStackedWidget QTextEdit, QTabWidget QStackedWidget QPlainTextEdit,
-QTabWidget QStackedWidget QSpinBox, QTabWidget QStackedWidget QDoubleSpinBox, QTabWidget QStackedWidget QDateTimeEdit,
-QTabWidget QStackedWidget QComboBox {
-  background-color: #202020;
+QGroupBox QPushButton:pressed,
+QTabWidget QStackedWidget QPushButton:pressed {
+  background-color: #242424;
+}
+
+QGroupBox QPushButton:disabled,
+QTabWidget QStackedWidget QPushButton:disabled {
+  background-color: #1E1E1E;
 }
 
 /* Lists/Tables (depth without borders) */
@@ -340,7 +352,7 @@ QAbstractItemView::item {
 }
 
 QAbstractItemView::item:hover {
-  background: #202020;
+  background: #282828;
 }
 
 QAbstractItemView::item:selected {
@@ -348,8 +360,20 @@ QAbstractItemView::item:selected {
   color: #121212;
 }
 
+/* Lists/Tables - consistent surface2 background with subtle border */
+QListWidget,
+QListView,
+QTreeWidget,
+QTreeView,
+QTableWidget,
+QTableView {
+  background-color: #282828;
+  border: 1px solid #3A3A3A;
+  border-radius: 6px;
+}
+
 QHeaderView::section {
-  background-color: #202020;
+  background-color: #282828;
   color: #BDBDBD;
   border: none;
   padding: 3px 6px;
@@ -430,7 +454,7 @@ QScrollBar::add-page, QScrollBar::sub-page {
 
 /* Tooltips */
 QToolTip {
-  background-color: #202020;
+  background-color: #282828;
   color: #E0E0E0;
   border: 1px solid #333333;
   padding: 4px 6px;
@@ -441,5 +465,26 @@ QStatusBar {
   background-color: #121212;
   color: #BDBDBD;
   border-top: none;
+}
+
+/* Dialogs */
+QDialog {
+  background-color: #121212;
+}
+
+QDialog QLabel {
+  background: transparent;
+}
+
+QDialog QGroupBox {
+  background-color: #1A1A1A;
+}
+
+/* Dialog buttons (OK/Cancel) */
+QDialogButtonBox QPushButton {
+  background-color: #282828;
+  border: 1px solid #3A3A3A;
+  min-width: 70px;
+  padding: 6px 16px;
 }
 

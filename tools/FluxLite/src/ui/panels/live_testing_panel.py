@@ -5,12 +5,15 @@ from typing import Optional
 from PySide6 import QtCore, QtWidgets, QtGui
 
 from ..state import ViewState
+from ..dialogs.live_test_setup import LiveTestSetupDialog
 from .live_testing.session_controls_box import SessionControlsBox
 from .live_testing.testing_guide_box import TestingGuideBox
 from .live_testing.session_info_box import SessionInfoBox
 from .live_testing.model_box import ModelBox
 from .live_testing.calibration_heatmap_box import CalibrationHeatmapBox
 from .live_testing.temps_in_test_box import TempsInTestBox
+from ...domain.testing import TestThresholds
+from ... import config
 
 
 class LiveTestingPanel(QtWidgets.QWidget):
@@ -329,13 +332,17 @@ class LiveTestingPanel(QtWidgets.QWidget):
 
     # UI helpers for future wiring
     def set_metadata(self, tester: str, device_id: str, model_id: str, body_weight_n: float) -> None:
-        self.lbl_tester.setText(tester or "—")
+        self._meta_box.set_tester_name(tester or "")
         self.lbl_device.setText(device_id or "—")
         self.lbl_model.setText(model_id or "—")
-        try:
-            self.lbl_bw.setText(f"{body_weight_n:.1f}")
-        except Exception:
-            self.lbl_bw.setText("—")
+        self._meta_box.set_body_weight_n(body_weight_n)
+
+    def get_session_info(self) -> tuple[str, float]:
+        """Get the current tester name and body weight from the editable fields."""
+        return (
+            self._meta_box.get_tester_name(),
+            self._meta_box.get_body_weight_n()
+        )
 
     def set_session_model_id(self, model_id: str | None) -> None:
         # Keep Session Info pane's Model ID in sync with active model selection
@@ -384,6 +391,10 @@ class LiveTestingPanel(QtWidgets.QWidget):
     def set_model_controls_enabled(self, enabled: bool) -> None:
         self._model_box.set_model_controls_enabled(enabled)
 
+    def show_reconnect_hint(self) -> None:
+        """Show the reconnect cable hint with fade-out."""
+        self._model_box.show_reconnect_hint()
+
     def set_debug_status(self, text: str | None) -> None:
         # Debug status deprecated in favor of Model panel; keep as no-op to avoid breaking call sites
         return
@@ -404,6 +415,8 @@ class LiveTestingPanel(QtWidgets.QWidget):
         if mid and mid != "—" and not str(mid).lower().startswith("loading"):
             self.set_model_status("Activating…")
             self.set_model_controls_enabled(False)
+            # Show reconnect hint immediately when button is clicked
+            self.show_reconnect_hint()
             self.activate_model_requested.emit(str(mid))
 
     def _emit_deactivate(self) -> None:
@@ -411,6 +424,8 @@ class LiveTestingPanel(QtWidgets.QWidget):
         if mid and mid != "—" and not mid.lower().startswith("loading"):
             self.set_model_status("Deactivating…")
             self.set_model_controls_enabled(False)
+            # Show reconnect hint immediately when button is clicked
+            self.show_reconnect_hint()
             self.deactivate_model_requested.emit(mid)
 
 
@@ -448,23 +463,85 @@ class LiveTestingPanel(QtWidgets.QWidget):
         return self._cal_box.current_heatmap_view()
 
     def _on_start_clicked(self):
-        if self.controller:
-            # Gather config
-            # For now, we use placeholders or get from UI if available
-            # In the original app, MainWindow gathered this from state/config.
-            # We might need to access state here.
-            config = {
-                'tester': "Tester", # Placeholder
-                'device_id': self.lbl_device.text(),
-                'model_id': self.lbl_model.text(),
-                'body_weight_n': 0.0, # Placeholder
-                'thresholds': None, # Placeholder
-                'is_temp_test': self.is_temperature_session(),
-                'is_discrete_temp': self._is_discrete_temp_session()
-            }
-            self.controller.start_session(config)
-        else:
+        if not self.controller:
             self.start_session_requested.emit()
+            return
+
+        # Get current device/model info from UI labels
+        device_id = self.lbl_device.text().strip()
+        device_type = self.lbl_model.text().strip()  # This is the plate type ("06", "07", etc.)
+        if device_id == "—":
+            device_id = ""
+        if device_type == "—":
+            device_type = ""
+
+        # Get the active ML model ID from the Model box
+        ml_model_id = self.lbl_current_model.text().strip()
+        if ml_model_id in ("—", "No active model", "Loading..."):
+            ml_model_id = ""
+
+        # Determine session mode
+        is_temp_test = self.is_temperature_session()
+        is_discrete_temp = self._is_discrete_temp_session()
+
+        # Show setup dialog to gather tester name, body weight, etc.
+        dialog = LiveTestSetupDialog(self, is_temp_test=is_temp_test)
+        dialog.set_device_info(device_id, ml_model_id or device_type)
+
+        # Pre-fill defaults from the editable Session Info fields first, then fall back to state
+        current_tester, current_bw = self.get_session_info()
+        default_tester = current_tester
+        default_bw = current_bw
+
+        # If session info fields are empty, try state
+        if not default_tester and self.state:
+            try:
+                default_tester = str(getattr(self.state, "last_tester_name", "") or "")
+            except Exception:
+                pass
+        if default_bw <= 0 and self.state:
+            try:
+                default_bw = float(getattr(self.state, "last_body_weight_n", 0.0) or 0.0)
+            except Exception:
+                pass
+
+        dialog.set_defaults(default_tester, default_bw)
+
+        if dialog.exec() != QtWidgets.QDialog.Accepted:
+            return
+
+        tester, body_weight_n, _is_temp, _capture, _save_dir = dialog.get_values()
+
+        # Save to state for next time
+        if self.state:
+            try:
+                self.state.last_tester_name = tester
+                self.state.last_body_weight_n = body_weight_n
+            except Exception:
+                pass
+
+        # Compute thresholds based on device type (plate type, not ML model)
+        plate_type = device_type[:2] if device_type else "06"
+        db_tol = config.THRESHOLDS_DB_N_BY_MODEL.get(plate_type, 6.0)
+        bw_pct = config.THRESHOLDS_BW_PCT_BY_MODEL.get(plate_type, 0.015)
+        bw_tol = body_weight_n * bw_pct if body_weight_n > 0 else 10.0
+        thresholds = TestThresholds(dumbbell_tol_n=db_tol, bodyweight_tol_n=bw_tol)
+
+        # Update UI with session metadata (show ML model if available, else device type)
+        display_model = ml_model_id or device_type
+        self.set_metadata(tester, device_id, display_model, body_weight_n)
+        self.set_thresholds(db_tol, bw_tol)
+
+        session_config = {
+            'tester': tester,
+            'device_id': device_id,
+            'model_id': device_type,  # Use plate type for grid dimensions
+            'body_weight_n': body_weight_n,
+            'thresholds': thresholds,
+            'is_temp_test': is_temp_test,
+            'is_discrete_temp': is_discrete_temp
+        }
+        self.controller.start_session(session_config)
 
     def _on_end_clicked(self):
         if self.controller:
