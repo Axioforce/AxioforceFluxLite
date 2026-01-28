@@ -217,6 +217,11 @@ class LiveTestingPanel(QtWidgets.QWidget):
 
     def _on_session_mode_changed(self, _text: str) -> None:
         self._update_session_controls_for_mode()
+        # Update Testing Guide mode
+        if self.is_temperature_session():
+            self._guide_box.set_mode("temperature_test")
+        else:
+            self._guide_box.set_mode("normal")
         if self._is_discrete_temp_session() and self.controller:
             self.controller.refresh_discrete_tests()
 

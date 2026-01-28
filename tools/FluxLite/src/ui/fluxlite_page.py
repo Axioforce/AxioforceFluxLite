@@ -24,6 +24,7 @@ from .widgets.world_canvas import WorldCanvas
 from .widgets.live_cell_details import LiveCellDetailsPanel
 from .dialogs.warmup_prompt import WarmupPromptDialog
 from .dialogs.tare_prompt import TarePromptDialog
+from .dialogs.stage_switch_prompt import StageSwitchPromptDialog
 
 
 class FluxLitePage(QtWidgets.QWidget):
@@ -64,6 +65,18 @@ class FluxLitePage(QtWidgets.QWidget):
         self._live_gate_phase_last: str = "inactive"
         self._warmup_dialog: WarmupPromptDialog | None = None
         self._tare_dialog: TarePromptDialog | None = None
+        # Temperature test stage switch dialog
+        self._stage_switch_dialog: StageSwitchPromptDialog | None = None
+        self._stage_switch_pending: bool = False
+        self._stage_switch_target_idx: int = -1
+        # Periodic auto-tare (every 90 seconds after initial tare)
+        self._periodic_tare_interval_ms: int = 90_000  # 90 seconds
+        self._periodic_tare_last_ms: int = 0
+        self._periodic_tare_pending: bool = False
+        self._periodic_tare_countdown_start_ms: int = 0
+        self._periodic_tare_dialog: TarePromptDialog | None = None
+        self._periodic_tare_due: bool = False  # Timer expired but waiting for measurement
+        self._periodic_tare_waiting_cell: tuple[int, int] | None = None  # Cell we're waiting on
         # Some backends send missing/stale timestamps; maintain a monotonic stream clock for countdowns.
         self._stream_time_last_ms: int = 0
 
@@ -736,9 +749,22 @@ class FluxLitePage(QtWidgets.QWidget):
                         except Exception:
                             pass
 
+                        # If stage switch dialog is showing, update force and check threshold
+                        try:
+                            if self._stage_switch_pending and self._stage_switch_dialog is not None:
+                                self._update_stage_switch_dialog_force(float(abs(fz)))
+                        except Exception:
+                            pass
+
                         # Live testing warmup/tare gating (must complete before measurement)
                         try:
                             self._process_live_session_gate(t_ms=int(t_ms), fz_abs_n=float(abs(fz)))
+                        except Exception:
+                            pass
+
+                        # Check periodic tare (every 90 seconds after initial tare)
+                        try:
+                            self._check_periodic_tare(t_ms=int(t_ms), fz_abs_n=float(abs(fz)))
                         except Exception:
                             pass
 
@@ -787,6 +813,8 @@ class FluxLitePage(QtWidgets.QWidget):
         """Begin warmup + off-plate tare gating for the new session."""
         self._reset_live_gate("session_started")
         self._reset_live_measurement_engine("session_started")
+        # Reset temperature test auto-switch counter
+        self._temp_test_cells_since_switch = 0
         # Lock session controls while session is active
         try:
             self.controls.live_testing_panel.set_session_controls_locked(True)
@@ -796,6 +824,11 @@ class FluxLitePage(QtWidgets.QWidget):
         try:
             sess = getattr(self.controller.testing, "current_session", None)
             if sess and not bool(getattr(sess, "is_discrete_temp", False)):
+                # Set Testing Guide mode based on session type
+                if bool(getattr(sess, "is_temp_test", False)):
+                    self.controls.live_testing_panel._guide_box.set_mode("temperature_test")
+                else:
+                    self.controls.live_testing_panel._guide_box.set_mode("normal")
                 total = int(getattr(sess, "grid_rows", 0) or 0) * int(getattr(sess, "grid_cols", 0) or 0)
                 self.controls.live_testing_panel.set_stage_summary(
                     getattr(sess, "stages", []) or [],
@@ -825,6 +858,10 @@ class FluxLitePage(QtWidgets.QWidget):
         """Clean up when a live test session ends."""
         self._reset_live_gate("session_ended")
         self._reset_live_measurement_engine("session_ended")
+        # Close stage switch dialog if open
+        self._close_stage_switch_dialog()
+        # Reset periodic tare state
+        self._reset_periodic_tare()
         # Unlock session controls
         try:
             self.controls.live_testing_panel.set_session_controls_locked(False)
@@ -859,6 +896,161 @@ class FluxLitePage(QtWidgets.QWidget):
                     pass
         except Exception:
             pass
+
+    # --- Periodic Auto-Tare (every 90 seconds) ---
+
+    def _check_periodic_tare(self, t_ms: int, fz_abs_n: float) -> None:
+        """Check if periodic tare is due and handle the tare dialog."""
+        # Only run periodic tare when gate is active and no other dialogs are pending
+        if self._live_gate.phase != "active":
+            return
+        if self._stage_switch_pending:
+            return
+
+        # If periodic tare dialog is already showing, update it
+        if self._periodic_tare_pending:
+            self._update_periodic_tare_dialog(t_ms, fz_abs_n)
+            return
+
+        # Check if we're waiting for a measurement to complete before showing tare
+        if self._periodic_tare_due:
+            self._check_periodic_tare_waiting(t_ms)
+            return
+
+        # Check if interval has elapsed
+        elapsed = int(t_ms) - self._periodic_tare_last_ms
+        if elapsed >= self._periodic_tare_interval_ms:
+            # Check if we're mid-arming or mid-measurement
+            phase = str(getattr(self._live_meas, "phase", "idle") or "idle")
+            active_cell = getattr(self._live_meas, "active_cell", None)
+
+            if phase in ("arming", "measuring") and active_cell is not None:
+                # Don't interrupt - mark as due and wait
+                self._periodic_tare_due = True
+                self._periodic_tare_waiting_cell = active_cell
+                self._lt_log(f"Periodic tare due but waiting (phase={phase}, cell={active_cell})")
+            else:
+                # Safe to show dialog immediately
+                self._show_periodic_tare_dialog(t_ms)
+
+    def _check_periodic_tare_waiting(self, t_ms: int) -> None:
+        """Check if we should trigger periodic tare while waiting for measurement."""
+        phase = str(getattr(self._live_meas, "phase", "idle") or "idle")
+        active_cell = getattr(self._live_meas, "active_cell", None)
+
+        # If measurement completed (phase is idle), show the dialog
+        if phase == "idle":
+            self._lt_log("Periodic tare: measurement completed, showing dialog")
+            self._periodic_tare_due = False
+            self._periodic_tare_waiting_cell = None
+            self._show_periodic_tare_dialog(t_ms)
+            return
+
+        # If the cell changed while we were waiting, force tare immediately
+        if self._periodic_tare_waiting_cell is not None and active_cell != self._periodic_tare_waiting_cell:
+            self._lt_log(f"Periodic tare: cell changed from {self._periodic_tare_waiting_cell} to {active_cell}, forcing tare")
+            self._periodic_tare_due = False
+            self._periodic_tare_waiting_cell = None
+            self._show_periodic_tare_dialog(t_ms)
+
+    def _show_periodic_tare_dialog(self, t_ms: int) -> None:
+        """Show the periodic tare dialog."""
+        if self._periodic_tare_pending:
+            return
+
+        self._periodic_tare_pending = True
+        self._periodic_tare_countdown_start_ms = 0  # Will be set when force < 50N
+
+        try:
+            dlg = TarePromptDialog(self)
+            dlg.setWindowTitle("Periodic Tare")
+            dlg.rejected.connect(self._on_periodic_tare_dialog_dismissed)
+            self._periodic_tare_dialog = dlg
+            dlg.set_countdown(15)
+            dlg.show()
+            self._lt_log("Periodic tare dialog shown")
+        except Exception:
+            self._periodic_tare_pending = False
+            self._periodic_tare_dialog = None
+
+    def _update_periodic_tare_dialog(self, t_ms: int, fz_abs_n: float) -> None:
+        """Update the periodic tare dialog with force and countdown."""
+        if not self._periodic_tare_pending or self._periodic_tare_dialog is None:
+            return
+
+        try:
+            self._periodic_tare_dialog.set_force(float(fz_abs_n))
+        except Exception:
+            pass
+
+        # Check if force is below 50N
+        if fz_abs_n < 50.0:
+            # Start or continue countdown
+            if self._periodic_tare_countdown_start_ms == 0:
+                self._periodic_tare_countdown_start_ms = int(t_ms)
+                self._lt_log("Periodic tare countdown started (force < 50N)")
+
+            elapsed_s = (int(t_ms) - self._periodic_tare_countdown_start_ms) / 1000.0
+            remaining_s = max(0, 15 - int(elapsed_s))
+
+            try:
+                self._periodic_tare_dialog.set_countdown(remaining_s)
+            except Exception:
+                pass
+
+            # Check if countdown complete
+            if elapsed_s >= 15.0:
+                self._complete_periodic_tare(t_ms)
+        else:
+            # Force went back above 50N, reset countdown
+            if self._periodic_tare_countdown_start_ms != 0:
+                self._lt_log("Periodic tare countdown reset (force >= 50N)")
+            self._periodic_tare_countdown_start_ms = 0
+            try:
+                self._periodic_tare_dialog.set_countdown(15)
+            except Exception:
+                pass
+
+    def _complete_periodic_tare(self, t_ms: int) -> None:
+        """Complete the periodic tare: issue tare command and close dialog."""
+        try:
+            self.controller.hardware.tare("")
+            self._lt_log("Periodic tare: issued hardware tare")
+        except Exception:
+            pass
+
+        self._close_periodic_tare_dialog()
+        # Reset timer for next periodic tare
+        self._periodic_tare_last_ms = int(t_ms)
+
+    def _on_periodic_tare_dialog_dismissed(self) -> None:
+        """User dismissed the periodic tare dialog (X / Esc)."""
+        self._lt_log("Periodic tare dialog dismissed by user (skipping tare)")
+        self._close_periodic_tare_dialog()
+        # Reset timer anyway so they get another chance in 90 seconds
+        self._periodic_tare_last_ms = self._stream_time_last_ms
+
+    def _close_periodic_tare_dialog(self) -> None:
+        """Close the periodic tare dialog and reset state."""
+        try:
+            if self._periodic_tare_dialog is not None:
+                try:
+                    self._periodic_tare_dialog.rejected.disconnect()
+                except Exception:
+                    pass
+                self._periodic_tare_dialog.close()
+        except Exception:
+            pass
+        self._periodic_tare_dialog = None
+        self._periodic_tare_pending = False
+        self._periodic_tare_countdown_start_ms = 0
+
+    def _reset_periodic_tare(self) -> None:
+        """Reset periodic tare state (called when session ends)."""
+        self._close_periodic_tare_dialog()
+        self._periodic_tare_last_ms = 0
+        self._periodic_tare_due = False
+        self._periodic_tare_waiting_cell = None
 
     def _process_live_session_gate(self, *, t_ms: int, fz_abs_n: float) -> None:
         """Advance warmup/tare gating using the current force sample."""
@@ -899,6 +1091,10 @@ class FluxLitePage(QtWidgets.QWidget):
             if phase == "active":
                 self._safe_close_gate_dialog(self._tare_dialog)
                 self._tare_dialog = None
+                # Start periodic tare timer
+                self._periodic_tare_last_ms = int(t_ms)
+                self._periodic_tare_pending = False
+                self._lt_log(f"Periodic tare timer started (interval={self._periodic_tare_interval_ms}ms)")
                 # Clear any status from gating (overlay + status bar)
                 try:
                     self.canvas_left.set_live_status(None)
@@ -944,6 +1140,12 @@ class FluxLitePage(QtWidgets.QWidget):
         """
         sess = self.controller.testing.current_session
         if not sess:
+            return
+        # Do not capture measurements while stage switch dialog is showing
+        if self._stage_switch_pending:
+            return
+        # Do not capture measurements while periodic tare dialog is showing
+        if self._periodic_tare_pending:
             return
         # Do not change discrete-temp capture behavior yet (it has its own flow).
         if bool(getattr(sess, "is_discrete_temp", False)):
@@ -1052,6 +1254,11 @@ class FluxLitePage(QtWidgets.QWidget):
         )
         self.controller.testing.record_result(int(stage_idx), int(ev.row), int(ev.col), res)
 
+        # For Temperature Test mode: use stage-specific colors (no pass/fail)
+        is_temp_test = bool(getattr(sess, "is_temp_test", False))
+        if is_temp_test:
+            self._apply_temp_test_cell_color(stage, int(ev.row), int(ev.col))
+
         # Update progress/Next button using existing LiveTestingPanel helpers
         try:
             completed = 0
@@ -1078,6 +1285,10 @@ class FluxLitePage(QtWidgets.QWidget):
                     )
             except Exception:
                 pass
+
+            # Temperature Test mode: auto-switch stages after 2 cells or stage completion
+            if is_temp_test:
+                self._maybe_auto_switch_temp_test_stage(sess, stage_idx, completed, total)
         except Exception:
             pass
 
@@ -1124,6 +1335,162 @@ class FluxLitePage(QtWidgets.QWidget):
 
         panel.set_prev_stage_enabled(prev_enabled)
         panel.set_next_stage_enabled(next_enabled)
+
+    def _apply_temp_test_cell_color(self, stage: object, row: int, col: int) -> None:
+        """Apply stage-specific color for Temperature Test mode (no pass/fail)."""
+        stage_name = str(getattr(stage, "name", "") or "").lower()
+        # Pink for 45 lb stage, Purple for Bodyweight stage
+        if "45" in stage_name:
+            color = QtGui.QColor(255, 105, 180, 160)  # Pink
+        else:
+            color = QtGui.QColor(148, 103, 189, 160)  # Purple
+        try:
+            self.canvas_left.set_live_cell_color(int(row), int(col), color)
+            self.canvas_right.set_live_cell_color(int(row), int(col), color)
+        except Exception:
+            pass
+
+    def _maybe_auto_switch_temp_test_stage(self, sess: object, current_stage_idx: int, completed: int, total: int) -> None:
+        """
+        Auto-switch stages for Temperature Test mode.
+        Show a dialog after 2 cells are captured OR the current stage is complete.
+        The actual switch happens when force drops below 50N.
+        """
+        # Don't trigger if a switch is already pending
+        if self._stage_switch_pending:
+            return
+
+        stages = getattr(sess, "stages", []) or []
+        if len(stages) != 2:
+            return  # Only applies to 2-stage temperature test
+
+        # Determine the other stage index
+        other_stage_idx = 1 - current_stage_idx
+
+        def _should_switch_to_other() -> bool:
+            """Check if the other stage has remaining cells."""
+            try:
+                other_stage = stages[other_stage_idx]
+                other_completed = sum(
+                    1 for r in (getattr(other_stage, "results", {}) or {}).values()
+                    if r is not None and getattr(r, "fz_mean_n", None) is not None
+                )
+                other_total = int(getattr(other_stage, "total_cells", 0) or 0)
+                return other_completed < other_total
+            except Exception:
+                return False
+
+        # Check if current stage is complete
+        if completed >= total:
+            if _should_switch_to_other():
+                self._show_stage_switch_dialog(other_stage_idx, stages, "stage_complete")
+            return
+
+        # Check how many cells we've captured in current stage since last switch
+        if not hasattr(self, "_temp_test_cells_since_switch"):
+            self._temp_test_cells_since_switch = 0
+        self._temp_test_cells_since_switch += 1
+
+        if self._temp_test_cells_since_switch >= 2:
+            if _should_switch_to_other():
+                self._show_stage_switch_dialog(other_stage_idx, stages, "2_cells_captured")
+
+    def _show_stage_switch_dialog(self, target_stage_idx: int, stages: list, reason: str = "") -> None:
+        """Show the stage switch dialog and wait for force to drop below 50N."""
+        if self._stage_switch_pending:
+            return
+
+        try:
+            target_stage = stages[target_stage_idx]
+            target_name = str(getattr(target_stage, "name", "") or "")
+            # Make the display name user-friendly
+            if "45" in target_name.lower():
+                display_name = "45 lb Dumbbell"
+            else:
+                display_name = "Bodyweight"
+        except Exception:
+            display_name = "Next Stage"
+
+        self._stage_switch_pending = True
+        self._stage_switch_target_idx = target_stage_idx
+
+        try:
+            dlg = StageSwitchPromptDialog(self, target_stage=display_name)
+            dlg.rejected.connect(self._on_stage_switch_dialog_dismissed)
+            dlg.switch_ready.connect(self._on_stage_switch_ready)
+            self._stage_switch_dialog = dlg
+            dlg.show()
+            self._lt_log(f"Stage switch dialog shown: target={display_name} ({reason})")
+        except Exception:
+            self._stage_switch_pending = False
+            self._stage_switch_dialog = None
+
+    def _on_stage_switch_dialog_dismissed(self) -> None:
+        """User dismissed the stage switch dialog (X / Esc)."""
+        self._stage_switch_pending = False
+        self._stage_switch_target_idx = -1
+        self._stage_switch_dialog = None
+        # Reset the counter so it triggers again after 2 more cells
+        self._temp_test_cells_since_switch = 0
+        self._lt_log("Stage switch dialog dismissed by user")
+
+    def _on_stage_switch_ready(self) -> None:
+        """Force dropped below threshold, perform the actual stage switch."""
+        target_idx = self._stage_switch_target_idx
+        self._close_stage_switch_dialog()
+
+        if target_idx < 0:
+            return
+
+        try:
+            current_idx = int(getattr(self.controller.testing, "current_stage_index", 0) or 0)
+            if target_idx == current_idx:
+                return
+            if target_idx > current_idx:
+                self.controller.testing.next_stage()
+            else:
+                self.controller.testing.prev_stage()
+            # Reset cells-since-switch counter
+            self._temp_test_cells_since_switch = 0
+            self._lt_log(f"Auto-switched to stage {target_idx} (force < 50N)")
+        except Exception:
+            pass
+
+    def _close_stage_switch_dialog(self) -> None:
+        """Close the stage switch dialog and reset state."""
+        try:
+            if self._stage_switch_dialog is not None:
+                try:
+                    self._stage_switch_dialog.rejected.disconnect()
+                except Exception:
+                    pass
+                try:
+                    self._stage_switch_dialog.switch_ready.disconnect()
+                except Exception:
+                    pass
+                self._stage_switch_dialog.close()
+        except Exception:
+            pass
+        self._stage_switch_dialog = None
+        self._stage_switch_pending = False
+        self._stage_switch_target_idx = -1
+
+    def _update_stage_switch_dialog_force(self, fz_n: float) -> None:
+        """Update the stage switch dialog with current force and check threshold."""
+        if not self._stage_switch_pending or self._stage_switch_dialog is None:
+            return
+
+        try:
+            self._stage_switch_dialog.set_force(float(fz_n))
+        except Exception:
+            pass
+
+        # Check if force dropped below 50N
+        try:
+            if abs(float(fz_n)) < 50.0:
+                self._stage_switch_dialog.signal_ready()
+        except Exception:
+            pass
 
     def _on_live_cell_updated(self, row, col, result) -> None:
         color = None
@@ -1192,18 +1559,35 @@ class FluxLitePage(QtWidgets.QWidget):
         except Exception:
             results = {}
 
-        for (r, c), res in results.items():
-            try:
-                if res is None or getattr(res, "fz_mean_n", None) is None:
+        # Temperature Test mode: use stage-specific colors (no pass/fail)
+        is_temp_test = bool(getattr(sess, "is_temp_test", False))
+        if is_temp_test:
+            # Pink for 45 lb stage, Purple for Bodyweight stage
+            if "45" in st_name.lower():
+                stage_color = QtGui.QColor(255, 105, 180, 160)  # Pink
+            else:
+                stage_color = QtGui.QColor(148, 103, 189, 160)  # Purple
+            for (r, c), res in results.items():
+                try:
+                    if res is None or getattr(res, "fz_mean_n", None) is None:
+                        continue
+                    self.canvas_left.set_live_cell_color(int(r), int(c), stage_color)
+                    self.canvas_right.set_live_cell_color(int(r), int(c), stage_color)
+                except Exception:
                     continue
-                vm = presenter.compute_live_cell(res, float(target_n), float(tol_n))
-                self.canvas_left.set_live_cell_color(int(r), int(c), vm.color)
-                self.canvas_right.set_live_cell_color(int(r), int(c), vm.color)
-                if getattr(vm, "text", None):
-                    self.canvas_left.set_live_cell_text(int(r), int(c), str(vm.text))
-                    self.canvas_right.set_live_cell_text(int(r), int(c), str(vm.text))
-            except Exception:
-                continue
+        else:
+            for (r, c), res in results.items():
+                try:
+                    if res is None or getattr(res, "fz_mean_n", None) is None:
+                        continue
+                    vm = presenter.compute_live_cell(res, float(target_n), float(tol_n))
+                    self.canvas_left.set_live_cell_color(int(r), int(c), vm.color)
+                    self.canvas_right.set_live_cell_color(int(r), int(c), vm.color)
+                    if getattr(vm, "text", None):
+                        self.canvas_left.set_live_cell_text(int(r), int(c), str(vm.text))
+                        self.canvas_right.set_live_cell_text(int(r), int(c), str(vm.text))
+                except Exception:
+                    continue
 
         # Update the stage progress label to match this stage's actual completion.
         try:

@@ -80,9 +80,9 @@ class SessionManager(QtCore.QObject):
                 stages.append(TestStage(idx, "One Leg", loc, float(body_weight_n), total_cells))
                 idx += 1
         else:
-            # Temperature/discrete temp modes can customize later; keep minimal defaults for now.
+            # Temperature/discrete temp modes: 2 stages at Location A only
             stages.append(TestStage(0, "45 lb", "A", float(config.TEMP_DB_TARGET_N), total_cells))
-            stages.append(TestStage(1, "Body Weight", "A", float(body_weight_n), total_cells))
+            stages.append(TestStage(1, "Bodyweight", "A", float(body_weight_n), total_cells))
         
         session.stages = stages
         session.start()

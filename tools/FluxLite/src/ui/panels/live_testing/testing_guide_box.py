@@ -41,61 +41,112 @@ class TestingGuideBox(QtWidgets.QGroupBox):
         """Update the Location A/B stage tracker from a session's stage list."""
         self._tracker.set_summary(stages or [], grid_total_cells=grid_total_cells, current_stage_index=current_stage_index)
 
+    def set_mode(self, mode: str) -> None:
+        """Set the testing guide mode: 'normal' or 'temperature_test'."""
+        self._tracker.set_mode(mode)
+
 
 class _StageProgressTracker(QtWidgets.QWidget):
-    """Small fixed layout: Location A/B with 3 lines each."""
+    """Small fixed layout: Location A/B with 3 lines each (Normal) or Location A with 2 lines (Temperature Test)."""
+
+    # Mode constants
+    MODE_NORMAL = "normal"
+    MODE_TEMPERATURE_TEST = "temperature_test"
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
-        root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(6)
+        self._root = QtWidgets.QVBoxLayout(self)
+        self._root.setContentsMargins(0, 0, 0, 0)
+        self._root.setSpacing(6)
 
         self._rows: dict[tuple[str, str], QtWidgets.QLabel] = {}
         self._name_labels: dict[tuple[str, str], QtWidgets.QLabel] = {}
         self._dots: dict[tuple[str, str], QtWidgets.QLabel] = {}
         self._accent_blue = "#3D7EFF"
+        self._section_widgets: list[QtWidgets.QWidget] = []
+        self._current_mode = self.MODE_NORMAL
 
-        def _section(title: str, loc: str) -> QtWidgets.QWidget:
-            w = QtWidgets.QWidget(self)
-            lay = QtWidgets.QGridLayout(w)
-            lay.setContentsMargins(0, 0, 0, 0)
-            lay.setHorizontalSpacing(10)
-            lay.setVerticalSpacing(2)
+        self._build_normal_mode()
 
-            hdr = QtWidgets.QLabel(title)
+    def _clear_sections(self) -> None:
+        """Remove all section widgets."""
+        for w in self._section_widgets:
             try:
-                hdr.setStyleSheet("font-weight: 700; color: #E0E0E0;")
+                self._root.removeWidget(w)
+                w.deleteLater()
             except Exception:
                 pass
-            lay.addWidget(hdr, 0, 0, 1, 3)
+        self._section_widgets.clear()
+        self._rows.clear()
+        self._name_labels.clear()
+        self._dots.clear()
 
-            for i, st in enumerate(("45 lb", "Two Leg", "One Leg"), start=1):
-                dot = QtWidgets.QLabel("●")
-                lbl = QtWidgets.QLabel(st)
-                val = QtWidgets.QLabel("0/0")
-                try:
-                    val.setStyleSheet("font-weight: 700;")
-                except Exception:
-                    pass
-                try:
-                    dot.setStyleSheet(f"color: {self._accent_blue};")
-                    dot.setVisible(False)
-                except Exception:
-                    pass
-                lay.addWidget(dot, i, 0)
-                lay.addWidget(lbl, i, 1)
-                lay.addWidget(val, i, 2)
-                self._rows[(loc, st)] = val
-                self._name_labels[(loc, st)] = lbl
-                self._dots[(loc, st)] = dot
-            lay.setColumnStretch(0, 0)
-            lay.setColumnStretch(1, 1)
-            lay.setColumnStretch(2, 0)
-            return w
+    def _build_section(self, title: str, loc: str, stages: tuple[str, ...]) -> QtWidgets.QWidget:
+        """Build a section widget with given stages."""
+        w = QtWidgets.QWidget(self)
+        lay = QtWidgets.QGridLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setHorizontalSpacing(10)
+        lay.setVerticalSpacing(2)
 
-        root.addWidget(_section("Location A", "A"))
-        root.addWidget(_section("Location B", "B"))
+        hdr = QtWidgets.QLabel(title)
+        try:
+            hdr.setStyleSheet("font-weight: 700; color: #E0E0E0;")
+        except Exception:
+            pass
+        lay.addWidget(hdr, 0, 0, 1, 3)
+
+        for i, st in enumerate(stages, start=1):
+            dot = QtWidgets.QLabel("●")
+            lbl = QtWidgets.QLabel(st)
+            val = QtWidgets.QLabel("0/0")
+            try:
+                val.setStyleSheet("font-weight: 700;")
+            except Exception:
+                pass
+            try:
+                dot.setStyleSheet(f"color: {self._accent_blue};")
+                dot.setVisible(False)
+            except Exception:
+                pass
+            lay.addWidget(dot, i, 0)
+            lay.addWidget(lbl, i, 1)
+            lay.addWidget(val, i, 2)
+            self._rows[(loc, st)] = val
+            self._name_labels[(loc, st)] = lbl
+            self._dots[(loc, st)] = dot
+        lay.setColumnStretch(0, 0)
+        lay.setColumnStretch(1, 1)
+        lay.setColumnStretch(2, 0)
+        return w
+
+    def _build_normal_mode(self) -> None:
+        """Build the normal mode layout: Location A/B with 3 stages each."""
+        self._clear_sections()
+        stages = ("45 lb", "Two Leg", "One Leg")
+        sec_a = self._build_section("Location A", "A", stages)
+        sec_b = self._build_section("Location B", "B", stages)
+        self._root.addWidget(sec_a)
+        self._root.addWidget(sec_b)
+        self._section_widgets.extend([sec_a, sec_b])
+        self._current_mode = self.MODE_NORMAL
+
+    def _build_temperature_test_mode(self) -> None:
+        """Build the temperature test mode layout: Location A with 2 stages."""
+        self._clear_sections()
+        stages = ("45 lb", "Bodyweight")
+        sec_a = self._build_section("Location A", "A", stages)
+        self._root.addWidget(sec_a)
+        self._section_widgets.append(sec_a)
+        self._current_mode = self.MODE_TEMPERATURE_TEST
+
+    def set_mode(self, mode: str) -> None:
+        """Switch between normal and temperature_test modes."""
+        mode = (mode or "").strip().lower()
+        if mode == self.MODE_TEMPERATURE_TEST and self._current_mode != self.MODE_TEMPERATURE_TEST:
+            self._build_temperature_test_mode()
+        elif mode != self.MODE_TEMPERATURE_TEST and self._current_mode != self.MODE_NORMAL:
+            self._build_normal_mode()
 
     def set_summary(self, stages: list[Any], *, grid_total_cells: int | None = None, current_stage_index: int | None = None) -> None:
         # Reset first
@@ -122,6 +173,11 @@ class _StageProgressTracker(QtWidgets.QWidget):
                 return None
             if "45" in n:
                 return "45 lb"
+            # For temperature test mode, "bodyweight" is its own stage
+            if self._current_mode == self.MODE_TEMPERATURE_TEST:
+                if "body" in n or "weight" in n:
+                    return "Bodyweight"
+            # Normal mode mappings
             if "two" in n:
                 return "Two Leg"
             if "one" in n:
