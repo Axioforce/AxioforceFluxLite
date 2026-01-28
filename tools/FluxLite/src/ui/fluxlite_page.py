@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import copy
+import time
 from typing import Dict, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .. import config
+from ..app_services.live_measurement_engine import LiveMeasurementEngine
+from ..app_services.live_session_gate import LiveSessionGate
 from ..app_services.temperature_post_correction import apply_post_correction_to_run_data, compute_delta_t_f
+from ..domain.models import TestResult
 from .bridge import UiBridge  # Keep for compatibility if needed by other components
 from .controllers.main_controller import MainController
 from .pane_switcher import PaneSwitcher
@@ -17,6 +21,9 @@ from .widgets.moments_view import MomentsViewWidget
 from .widgets.temp_coef_widget import TempCoefWidget
 from .widgets.temp_plot_widget import TempPlotWidget
 from .widgets.world_canvas import WorldCanvas
+from .widgets.live_cell_details import LiveCellDetailsPanel
+from .dialogs.warmup_prompt import WarmupPromptDialog
+from .dialogs.tare_prompt import TarePromptDialog
 
 
 class FluxLitePage(QtWidgets.QWidget):
@@ -43,6 +50,22 @@ class FluxLitePage(QtWidgets.QWidget):
         # Track connection/streaming state for clean disconnect behavior
         self._connected_device_ids: set[str] = set()
         self._active_device_ids: set[str] = set()
+        self._live_test_start_enabled_last: Optional[bool] = None
+
+        # Live testing measurement engine (arming -> stability -> capture)
+        self._live_meas = LiveMeasurementEngine()
+        self._live_meas_status_last: str = ""
+        self._live_status_bar_last_text: str = ""
+        self._live_status_bar_last_pct: int = -1
+        self._live_status_bar_last_mode: str = "idle"
+        self._live_meas_active_cell_last: tuple[int, int] | None = None
+        # Live session gating: Warmup -> Off-plate tare -> Active session
+        self._live_gate = LiveSessionGate()
+        self._live_gate_phase_last: str = "inactive"
+        self._warmup_dialog: WarmupPromptDialog | None = None
+        self._tare_dialog: TarePromptDialog | None = None
+        # Some backends send missing/stale timestamps; maintain a monotonic stream clock for countdowns.
+        self._stream_time_last_ms: int = 0
 
         # Legacy Bridge (kept for compatibility)
         self.bridge = UiBridge()
@@ -54,10 +77,212 @@ class FluxLitePage(QtWidgets.QWidget):
         # Start Controller (triggers autoconnect)
         self.controller.start()
 
+    # --- Live Testing logging / enablement helpers ---
+    def _lt_log(self, msg: str) -> None:
+        """Lightweight live-testing logging (stdout)."""
+        try:
+            ts = time.strftime("%H:%M:%S")
+            print(f"[LiveTesting {ts}] {msg}")
+        except Exception:
+            pass
+
+    def _is_device_streaming(self, device_id: str) -> bool:
+        """Use the same active-device pathway as the Config green check."""
+        did = (device_id or "").strip()
+        if not did:
+            return False
+        try:
+            # ControlPanel.update_active_devices uses substring matching; mirror it here.
+            return any(did in active_id or active_id in did for active_id in (self._active_device_ids or set()))
+        except Exception:
+            return False
+
+    def _has_active_model(self) -> bool:
+        """True if a non-empty, non-placeholder active model is displayed."""
+        try:
+            live_panel = self.controls.live_testing_panel
+            text = (live_panel.lbl_current_model.text() or "").strip()
+        except Exception:
+            text = ""
+        t = text.lower()
+        if not text:
+            return False
+        if text in ("—",):
+            return False
+        if "loading" in t:
+            return False
+        if "no active model" in t:
+            return False
+        return True
+
+    def _live_session_active(self) -> bool:
+        """True if a live-test session is currently active in the testing service."""
+        try:
+            svc = getattr(self.controller, "testing", None)
+            sess = getattr(svc, "current_session", None)
+            return bool(sess)
+        except Exception:
+            return False
+
+    def _update_live_test_start_enabled(self, reason: str = "") -> None:
+        """
+        Enable Start Session only when:
+        - a plate is selected
+        - that plate is actively streaming (same pathway as Config green check)
+        - an active model is present for that plate
+        - no live-test session is currently active
+        """
+        try:
+            live_panel = self.controls.live_testing_panel
+        except Exception:
+            return
+
+        selected_id = (self.state.selected_device_id or "").strip()
+        streaming = self._is_device_streaming(selected_id)
+        has_model = self._has_active_model()
+        session_active = self._live_session_active()
+        enabled = bool(selected_id and streaming and has_model and not session_active)
+
+        try:
+            live_panel.btn_start.setEnabled(enabled)
+        except Exception:
+            pass
+
+        if self._live_test_start_enabled_last is None or self._live_test_start_enabled_last != enabled:
+            self._live_test_start_enabled_last = enabled
+            self._lt_log(
+                f"Start Session enabled -> {enabled}"
+                f"{' (' + reason + ')' if reason else ''}; "
+                f"selected_id={selected_id or '∅'}, "
+                f"streaming={streaming}, active_model={has_model}, session_active={session_active}"
+            )
+
     def shutdown(self) -> None:
         """Cleanup and shutdown services."""
         try:
             self.controller.shutdown()
+        except Exception:
+            pass
+
+    def _close_gate_dialogs(self) -> None:
+        """Close warmup/tare dialogs without ending the session."""
+        try:
+            if self._warmup_dialog is not None:
+                try:
+                    self._warmup_dialog.rejected.disconnect()
+                except Exception:
+                    pass
+                self._warmup_dialog.close()
+        except Exception:
+            pass
+        try:
+            if self._tare_dialog is not None:
+                try:
+                    self._tare_dialog.rejected.disconnect()
+                except Exception:
+                    pass
+                self._tare_dialog.close()
+        except Exception:
+            pass
+        self._warmup_dialog = None
+        self._tare_dialog = None
+
+    def _safe_close_gate_dialog(self, dlg: QtWidgets.QDialog | None) -> None:
+        """Close a single gate dialog, ensuring it can't end the session."""
+        if dlg is None:
+            return
+        try:
+            try:
+                dlg.rejected.disconnect()
+            except Exception:
+                pass
+            dlg.close()
+        except Exception:
+            pass
+
+    def _reset_live_gate(self, reason: str = "") -> None:
+        """Reset warmup/tare gating state."""
+        self._close_gate_dialogs()
+        try:
+            self._live_gate.reset()
+        except Exception:
+            pass
+        self._live_gate_phase_last = "inactive"
+        self._stream_time_last_ms = 0
+        if reason:
+            try:
+                self._lt_log(f"gate_reset: {reason}")
+            except Exception:
+                pass
+
+    def _reset_live_measurement_engine(self, reason: str = "") -> None:
+        """Reset only arming/stability/capture state (does NOT touch warmup/tare gate)."""
+        try:
+            self._live_meas.reset()
+        except Exception:
+            pass
+        self._live_meas_status_last = ""
+        self._set_live_status_bar_state(mode="idle", text="", pct=None)
+        self._live_meas_active_cell_last = None
+        try:
+            self.canvas_left.set_live_active_cell(None, None)
+            self.canvas_right.set_live_active_cell(None, None)
+        except Exception:
+            pass
+        try:
+            # We use the bottom status bar; keep overlay status empty.
+            self.canvas_left.set_live_status(None)
+        except Exception:
+            pass
+        if reason:
+            try:
+                self._lt_log(f"measurement_reset: {reason}")
+            except Exception:
+                pass
+
+    def _set_live_status_bar_state(self, *, mode: str, text: str, pct: int | None) -> None:
+        """
+        Update the bottom live-testing status bar.
+
+        mode: idle|arming|measuring
+        pct: 0..100 or None (hidden)
+        """
+        m = str(mode or "idle").strip().lower()
+        t = str(text or "")
+        p = None if pct is None else int(max(0, min(100, int(pct))))
+        if m == self._live_status_bar_last_mode and t == self._live_status_bar_last_text and (p if p is not None else -1) == self._live_status_bar_last_pct:
+            return
+        self._live_status_bar_last_mode = m
+        self._live_status_bar_last_text = t
+        self._live_status_bar_last_pct = (p if p is not None else -1)
+
+        # Colors: match active-cell highlight for arming, use yellow for measuring.
+        arming_hex = "#00C8FF"
+        measuring_hex = "#FFD24A"
+        idle_hex = "#BBB"
+        color = idle_hex
+        if m == "arming":
+            color = arming_hex
+        elif m == "measuring":
+            color = measuring_hex
+
+        show = bool(m in ("arming", "measuring") and t)
+        try:
+            if hasattr(self, "lbl_live_status_text") and self.lbl_live_status_text is not None:
+                self.lbl_live_status_text.setText(t)
+                self.lbl_live_status_text.setStyleSheet(f"color: {color}; font-size: 12px; font-weight: 600; background: transparent;")
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "lbl_live_status_pct") and self.lbl_live_status_pct is not None:
+                self.lbl_live_status_pct.setText(f"{p}%" if (p is not None and show) else "")
+                self.lbl_live_status_pct.setStyleSheet(f"color: {color}; font-size: 12px; font-weight: 700; background: transparent;")
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "live_status_bar") and self.live_status_bar is not None:
+                # Always present to avoid window resize. Contents are blank when idle.
+                self.live_status_bar.setVisible(True)
         except Exception:
             pass
 
@@ -70,6 +295,76 @@ class FluxLitePage(QtWidgets.QWidget):
         self.canvas_right = WorldCanvas(self.state, backend_address_provider=self.controller.hardware.backend_http_address)
         self.canvas = self.canvas_left  # Default active canvas
 
+        # Plate View wrappers so we can host a pop-out cell-details panel.
+        self._cell_details_left = LiveCellDetailsPanel(self)
+        self._cell_details_right = LiveCellDetailsPanel(self)
+        self._cell_details_left.reset_requested.connect(self._on_reset_cell_requested)
+        self._cell_details_right.reset_requested.connect(self._on_reset_cell_requested)
+        self._cell_details_left.reset_all_fail_requested.connect(self._on_reset_all_fail_requested)
+        self._cell_details_right.reset_all_fail_requested.connect(self._on_reset_all_fail_requested)
+
+        try:
+            self._cell_details_left.setFixedWidth(260)
+            self._cell_details_right.setFixedWidth(260)
+            # Border + top padding for a cleaner card look
+            style = (
+                "QGroupBox {"
+                "  background: #1A1A1A;"
+                "  border: 1px solid #2A2A2A;"
+                "  border-radius: 8px;"
+                "  margin-top: 10px;"
+                "  padding-top: 10px;"
+                "}"
+                "QGroupBox::title {"
+                "  subcontrol-origin: margin;"
+                "  subcontrol-position: top left;"
+                "  left: 10px;"
+                "  padding: 0 6px;"
+                "  color: #BDBDBD;"
+                "}"
+            )
+            self._cell_details_left.setStyleSheet(style)
+            self._cell_details_right.setStyleSheet(style)
+        except Exception:
+            pass
+
+        # Collapsed by default
+        self._cell_details_left.setVisible(False)
+        self._cell_details_right.setVisible(False)
+        self._cell_details_wrap_left = QtWidgets.QWidget()
+        self._cell_details_wrap_right = QtWidgets.QWidget()
+        self._cell_details_wrap_left.setContentsMargins(0, 0, 0, 0)
+        self._cell_details_wrap_right.setContentsMargins(0, 0, 0, 0)
+        
+        wl = QtWidgets.QVBoxLayout(self._cell_details_wrap_left)
+        wr = QtWidgets.QVBoxLayout(self._cell_details_wrap_right)
+        wl.setContentsMargins(0, 0, 0, 0)
+        wr.setContentsMargins(0, 0, 0, 0)
+        wl.addWidget(self._cell_details_left)
+        wr.addWidget(self._cell_details_right)
+        wl.addStretch(1)
+        wr.addStretch(1)
+        # Start collapsed so it "pops out" on click.
+        try:
+            self._cell_details_wrap_left.setFixedWidth(0)
+            self._cell_details_wrap_right.setFixedWidth(0)
+        except Exception:
+            pass
+
+        plate_left = QtWidgets.QWidget()
+        pl = QtWidgets.QHBoxLayout(plate_left)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.setSpacing(10)
+        pl.addWidget(self.canvas_left, 1)
+        pl.addWidget(self._cell_details_wrap_left, 0)
+
+        plate_right = QtWidgets.QWidget()
+        pr = QtWidgets.QHBoxLayout(plate_right)
+        pr.setContentsMargins(0, 0, 0, 0)
+        pr.setSpacing(10)
+        pr.addWidget(self.canvas_right, 1)
+        pr.addWidget(self._cell_details_wrap_right, 0)
+
         # Control Panel (Bottom)
         self.controls = ControlPanel(self.state, self.controller)
 
@@ -77,7 +372,7 @@ class FluxLitePage(QtWidgets.QWidget):
         self.top_tabs_right = QtWidgets.QTabWidget()
 
         # Left Tabs
-        self.top_tabs_left.addTab(self.canvas_left, "Plate View")
+        self.top_tabs_left.addTab(plate_left, "Plate View")
 
         sensor_left = QtWidgets.QWidget()
         sll = QtWidgets.QVBoxLayout(sensor_left)
@@ -96,8 +391,8 @@ class FluxLitePage(QtWidgets.QWidget):
         self.pane_switcher.register_tab(self.top_tabs_left, self.temp_plot_tab, "temp_plot")
 
         # Right Tabs
-        self.top_tabs_right.addTab(self.canvas_right, "Plate View")
-        self.pane_switcher.register_tab(self.top_tabs_right, self.canvas_right, "plate_view_right")
+        self.top_tabs_right.addTab(plate_right, "Plate View")
+        self.pane_switcher.register_tab(self.top_tabs_right, plate_right, "plate_view_right")
 
         sensor_right = QtWidgets.QWidget()
         srl = QtWidgets.QVBoxLayout(sensor_right)
@@ -123,6 +418,33 @@ class FluxLitePage(QtWidgets.QWidget):
         self.top_tabs_right.setMovable(True)
 
         outer.addWidget(self.splitter, 1)
+
+        # Live-testing status bar (bottom). Keep it minimal and non-intrusive.
+        status_wrap = QtWidgets.QFrame()
+        try:
+            status_wrap.setObjectName("live_status_bar")
+        except Exception:
+            pass
+        self.live_status_bar = status_wrap
+        try:
+            status_wrap.setFrameShape(QtWidgets.QFrame.NoFrame)
+            status_wrap.setFixedHeight(22)
+        except Exception:
+            pass
+        status_layout = QtWidgets.QHBoxLayout(status_wrap)
+        status_layout.setContentsMargins(10, 4, 10, 4)
+        status_layout.setSpacing(8)
+        self.lbl_live_status_text = QtWidgets.QLabel("")
+        self.lbl_live_status_pct = QtWidgets.QLabel("")
+        try:
+            self.lbl_live_status_pct.setFixedWidth(48)
+        except Exception:
+            pass
+        status_layout.addWidget(self.lbl_live_status_text, 0)
+        status_layout.addWidget(self.lbl_live_status_pct, 0)
+        status_layout.addStretch(1)
+        outer.addWidget(status_wrap, 0)
+
         outer.addWidget(self.controls)
 
         # Initial sizing
@@ -186,6 +508,11 @@ class FluxLitePage(QtWidgets.QWidget):
             self.controls.config_changed.connect(self._on_view_config_changed)
         except Exception:
             pass
+        # When Live Testing tab becomes visible, refresh gating state
+        try:
+            self.controls.live_testing_tab_selected.connect(lambda: self._update_live_test_start_enabled("live_tab_selected"))
+        except Exception:
+            pass
 
         # Live Testing Signals - show grid on both canvases
         self.controller.live_test.view_grid_configured.connect(self.canvas_left.show_live_grid)
@@ -193,10 +520,26 @@ class FluxLitePage(QtWidgets.QWidget):
         self.controller.live_test.view_session_ended.connect(self.canvas_left.hide_live_grid)
         self.controller.live_test.view_session_ended.connect(self.canvas_right.hide_live_grid)
         self.controller.live_test.view_cell_updated.connect(self._on_live_cell_updated)
+        # Reset measurement engine when sessions/stages change
+        try:
+            self.controller.live_test.view_session_started.connect(self._on_live_session_started)
+            self.controller.live_test.view_session_ended.connect(self._on_live_session_ended)
+            # Stage changes should NOT close gating dialogs; only reset arming/stability.
+            self.controller.live_test.view_stage_changed.connect(lambda _i, _st: self._reset_live_measurement_engine("stage_changed"))
+            self.controller.live_test.view_stage_changed.connect(lambda _i, _st: self._update_live_stage_nav("stage_changed"))
+            self.controller.live_test.view_stage_changed.connect(lambda i, st: self._render_live_stage_grid(int(i), st))
+            self.controller.live_test.view_session_ended.connect(lambda: self._update_live_stage_nav("session_ended"))
+        except Exception:
+            pass
 
         # User interaction: clicks on the live grid overlay (either canvas)
         self.canvas_left.live_cell_clicked.connect(self._on_live_cell_clicked)
         self.canvas_right.live_cell_clicked.connect(self._on_live_cell_clicked)
+        try:
+            self.canvas_left.live_background_clicked.connect(lambda: self._hide_cell_details("background_clicked"))
+            self.canvas_right.live_background_clicked.connect(lambda: self._hide_cell_details("background_clicked"))
+        except Exception:
+            pass
 
         # Plate quick actions (overlay buttons)
         try:
@@ -212,15 +555,17 @@ class FluxLitePage(QtWidgets.QWidget):
         try:
             self.canvas_left.rotation_changed.connect(self.canvas_right.set_rotation_quadrants)
             self.canvas_right.rotation_changed.connect(self.canvas_left.set_rotation_quadrants)
+            # Rotation changes alter COP->cell mapping; reset arming/stability state.
+            self.canvas_left.rotation_changed.connect(lambda _k: self._reset_live_measurement_engine("rotation_changed"))
+            # Rotation changes must also re-map already-painted cells to the new orientation.
+            self.canvas_left.rotation_changed.connect(lambda _k: self._render_current_live_stage_grid("rotation_changed"))
         except Exception:
             pass
 
-        # Discrete Temp: wire test selection + plot button to Temp Plot/Slopes
+        # Discrete Temp: wire test selection to Temp Plot/Slopes
         live_panel = self.controls.live_testing_panel
         live_panel.discrete_test_selected.connect(self.temp_plot_tab.set_test_path)
         live_panel.discrete_test_selected.connect(self._on_discrete_test_selected)  # Switch tabs on selection
-        live_panel.plot_test_requested.connect(self.temp_plot_tab.plot_current)
-        live_panel.process_test_requested.connect(self.temp_plot_tab.process_current)
 
         # Link Temp Plot <-> Coef metrics widget (toggle controls + computed values)
         try:
@@ -260,19 +605,10 @@ class FluxLitePage(QtWidgets.QWidget):
         except Exception:
             pass
 
-        # Heatmap / Calibration Signals
-        cal_ctrl = self.controller.calibration
-        live_panel.load_45v_requested.connect(self._on_load_calibration)
-        live_panel.generate_heatmap_requested.connect(self._on_generate_heatmap)
-        live_panel.heatmap_selected.connect(self._on_heatmap_selected)
-
-        cal_ctrl.status_updated.connect(live_panel.set_calibration_status)
-        cal_ctrl.files_loaded.connect(live_panel.set_generate_enabled)
-        cal_ctrl.heatmap_ready.connect(self._on_heatmap_ready)
-
         # Model Management Signals
         model_svc = self.controller.models
         model_svc.metadata_received.connect(self._on_model_metadata_received)
+        model_svc.metadata_error.connect(self._on_model_metadata_error)
         model_svc.activation_status_received.connect(self._on_model_activation_status)
         live_panel.activate_model_requested.connect(self._on_activate_model_requested)
         live_panel.deactivate_model_requested.connect(self._on_deactivate_model_requested)
@@ -340,6 +676,18 @@ class FluxLitePage(QtWidgets.QWidget):
                     fy = float(frame.get("fy", 0.0))
                     fz = float(frame.get("fz", 0.0))
                     t_ms = int(frame.get("time") or frame.get("t") or 0)
+                    # Some streams omit time or send stale timestamps; fall back to a monotonic local clock.
+                    if t_ms <= 0:
+                        try:
+                            t_ms = int(time.time() * 1000)
+                        except Exception:
+                            t_ms = 0
+                    if t_ms <= int(getattr(self, "_stream_time_last_ms", 0) or 0):
+                        try:
+                            t_ms = int(time.time() * 1000)
+                        except Exception:
+                            pass
+                    self._stream_time_last_ms = int(t_ms or 0)
 
                     # COP
                     cop = frame.get("cop") or {}
@@ -381,6 +729,32 @@ class FluxLitePage(QtWidgets.QWidget):
                         self.canvas_left.set_single_snapshot(snap)
                         self.canvas_right.set_single_snapshot(snap)  # Sync if both showing plate
 
+                        # If tare dialog is showing, keep the live force label updated
+                        try:
+                            if self._tare_dialog is not None:
+                                self._tare_dialog.set_force(float(abs(fz)))
+                        except Exception:
+                            pass
+
+                        # Live testing warmup/tare gating (must complete before measurement)
+                        try:
+                            self._process_live_session_gate(t_ms=int(t_ms), fz_abs_n=float(abs(fz)))
+                        except Exception:
+                            pass
+
+                        # Live testing measurement engine (arming -> stability -> capture)
+                        if self._live_gate.is_active():
+                            try:
+                                self._process_live_measurement(
+                                    t_ms=t_ms,
+                                    cop_x_m=cop_x,
+                                    cop_y_m=cop_y,
+                                    fz_n=fz,
+                                    is_visible=is_visible,
+                                )
+                            except Exception:
+                                pass
+
                     # Mound mapping
                     if self.state.display_mode == "mound":
                         for pos_name, mapped_id in mound_map.items():
@@ -409,6 +783,348 @@ class FluxLitePage(QtWidgets.QWidget):
         except Exception:
             pass
 
+    def _on_live_session_started(self, _session) -> None:
+        """Begin warmup + off-plate tare gating for the new session."""
+        self._reset_live_gate("session_started")
+        self._reset_live_measurement_engine("session_started")
+        # Lock session controls while session is active
+        try:
+            self.controls.live_testing_panel.set_session_controls_locked(True)
+        except Exception:
+            pass
+        # Initialize the Testing Guide stage tracker (Location A/B overview)
+        try:
+            sess = getattr(self.controller.testing, "current_session", None)
+            if sess and not bool(getattr(sess, "is_discrete_temp", False)):
+                total = int(getattr(sess, "grid_rows", 0) or 0) * int(getattr(sess, "grid_cols", 0) or 0)
+                self.controls.live_testing_panel.set_stage_summary(
+                    getattr(sess, "stages", []) or [],
+                    grid_total_cells=total if total > 0 else None,
+                    current_stage_index=int(getattr(self.controller.testing, "current_stage_index", 0) or 0),
+                )
+        except Exception:
+            pass
+        self._update_live_stage_nav("session_started")
+        try:
+            self._live_gate.begin()
+            self._live_gate_phase_last = self._live_gate.phase
+        except Exception:
+            return
+        # Warmup dialog shown immediately; countdown begins on first >=50N contact.
+        try:
+            dlg = WarmupPromptDialog(self, duration_s=20)
+            dlg.set_waiting_for_trigger(True)
+            dlg.set_remaining(20)
+            dlg.rejected.connect(self._on_warmup_dialog_dismissed)
+            self._warmup_dialog = dlg
+            dlg.show()
+        except Exception:
+            self._warmup_dialog = None
+
+    def _on_live_session_ended(self) -> None:
+        """Clean up when a live test session ends."""
+        self._reset_live_gate("session_ended")
+        self._reset_live_measurement_engine("session_ended")
+        # Unlock session controls
+        try:
+            self.controls.live_testing_panel.set_session_controls_locked(False)
+        except Exception:
+            pass
+
+    def _on_warmup_dialog_dismissed(self) -> None:
+        """
+        User dismissed warmup dialog (X / Esc).
+        Treat warmup as done and proceed to tare.
+        """
+        try:
+            if self._live_gate.phase == "warmup":
+                self._lt_log("gate_skip: warmup dismissed -> tare")
+                self._live_gate.skip_warmup()
+        except Exception:
+            pass
+
+    def _on_tare_dialog_dismissed(self) -> None:
+        """
+        User dismissed tare dialog (X / Esc).
+        Treat tare stage as done WITHOUT taring, and allow testing.
+        """
+        try:
+            if self._live_gate.phase == "tare":
+                self._lt_log("gate_skip: tare dismissed -> active (no tare)")
+                self._live_gate.skip_tare()
+                # Clear any status from gating immediately.
+                try:
+                    self.canvas_left.set_live_status(None)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _process_live_session_gate(self, *, t_ms: int, fz_abs_n: float) -> None:
+        """Advance warmup/tare gating using the current force sample."""
+        sess = self.controller.testing.current_session
+        if not sess:
+            return
+        if bool(getattr(sess, "is_discrete_temp", False)):
+            return
+        if self._live_gate.phase == "inactive":
+            return
+
+        info = self._live_gate.update(now_ms=int(t_ms), fz_abs_n=float(fz_abs_n))
+        phase = str(info.get("phase") or "inactive")
+
+        # Phase transitions drive dialog lifecycle
+        if phase != self._live_gate_phase_last:
+            self._live_gate_phase_last = phase
+            try:
+                self._lt_log(f"gate_phase -> {phase}")
+            except Exception:
+                pass
+            # Close warmup dialog when leaving warmup
+            if phase != "warmup":
+                self._safe_close_gate_dialog(self._warmup_dialog)
+                self._warmup_dialog = None
+            # Show tare dialog when entering tare
+            if phase == "tare":
+                try:
+                    td = TarePromptDialog(self)
+                    td.rejected.connect(self._on_tare_dialog_dismissed)
+                    self._tare_dialog = td
+                    td.set_force(float(fz_abs_n))
+                    td.set_countdown(15)
+                    td.show()
+                except Exception:
+                    self._tare_dialog = None
+            # Close tare dialog when entering active
+            if phase == "active":
+                self._safe_close_gate_dialog(self._tare_dialog)
+                self._tare_dialog = None
+                # Clear any status from gating (overlay + status bar)
+                try:
+                    self.canvas_left.set_live_status(None)
+                except Exception:
+                    pass
+                self._set_live_status_bar_state(mode="idle", text="", pct=None)
+
+        # Update dialog contents
+        if phase == "warmup":
+            try:
+                triggered = bool(info.get("warmup_triggered"))
+                remaining = info.get("warmup_remaining_s")
+                if self._warmup_dialog is not None:
+                    self._warmup_dialog.set_waiting_for_trigger(not triggered)
+                    if remaining is None:
+                        self._warmup_dialog.set_remaining(20)
+                    else:
+                        self._warmup_dialog.set_remaining(int(remaining))
+            except Exception:
+                pass
+            return
+
+        if phase == "tare":
+            try:
+                remaining = info.get("tare_remaining_s")
+                if self._tare_dialog is not None:
+                    self._tare_dialog.set_force(float(fz_abs_n))
+                    self._tare_dialog.set_countdown(int(remaining) if remaining is not None else 15)
+            except Exception:
+                pass
+
+        # Fire tare exactly once when the gate says so
+        if bool(info.get("should_tare")):
+            try:
+                self.controller.hardware.tare("")
+                self._lt_log("gate_tare: issued hardware tare")
+            except Exception:
+                pass
+
+    def _process_live_measurement(self, *, t_ms: int, cop_x_m: float, cop_y_m: float, fz_n: float, is_visible: bool) -> None:
+        """
+        Run arming/stability/capture for the currently-selected device when a live session is active.
+        """
+        sess = self.controller.testing.current_session
+        if not sess:
+            return
+        # Do not change discrete-temp capture behavior yet (it has its own flow).
+        if bool(getattr(sess, "is_discrete_temp", False)):
+            return
+        if self.state.display_mode != "single":
+            return
+
+        selected_id = (self.state.selected_device_id or "").strip()
+        if not selected_id:
+            return
+        # Session is tied to a specific device id
+        if str(getattr(sess, "device_id", "") or "").strip() != selected_id:
+            return
+
+        try:
+            stage_idx = int(getattr(self.controller.testing, "current_stage_index", 0))
+        except Exception:
+            stage_idx = 0
+        try:
+            stage = sess.stages[stage_idx]
+        except Exception:
+            return
+
+        dev_type = (self.state.selected_device_type or "").strip() or str(getattr(sess, "model_id", "") or "").strip() or "06"
+        rows = int(getattr(sess, "grid_rows", 0) or 0)
+        cols = int(getattr(sess, "grid_cols", 0) or 0)
+        if rows <= 0 or cols <= 0:
+            return
+
+        # COP from backend is in meters (renderer converts m->mm). Convert here too.
+        cop_x_mm = float(cop_x_m) * 1000.0
+        cop_y_mm = float(cop_y_m) * 1000.0
+
+        try:
+            rot_k = int(self.canvas_left.get_rotation_quadrants())
+        except Exception:
+            rot_k = 0
+
+        def _already_done(r: int, c: int) -> bool:
+            try:
+                existing = (stage.results or {}).get((int(r), int(c)))
+                return bool(existing and getattr(existing, "fz_mean_n", None) is not None)
+            except Exception:
+                return False
+
+        ev = self._live_meas.process_sample(
+            t_ms=int(t_ms),
+            cop_x_mm=float(cop_x_mm),
+            cop_y_mm=float(cop_y_mm),
+            fz_n=float(fz_n),
+            is_visible=bool(is_visible),
+            device_type=str(dev_type),
+            rows=int(rows),
+            cols=int(cols),
+            rotation_quadrants=int(rot_k),
+            is_cell_already_done=_already_done,
+        )
+
+        # Active cell highlight + status text (throttled to changes)
+        try:
+            active = self._live_meas.active_cell
+            if active != self._live_meas_active_cell_last:
+                self._live_meas_active_cell_last = active
+                if active is None:
+                    self.canvas_left.set_live_active_cell(None, None)
+                    self.canvas_right.set_live_active_cell(None, None)
+                else:
+                    self.canvas_left.set_live_active_cell(int(active[0]), int(active[1]))
+                    self.canvas_right.set_live_active_cell(int(active[0]), int(active[1]))
+        except Exception:
+            pass
+
+        # Replace verbose overlay assistant with a simple bottom status bar.
+        # Only show "Arming..." when we are *actually* arming in an unmeasured cell.
+        try:
+            phase = str(getattr(self._live_meas, "phase", "idle") or "idle")
+            prog = float(getattr(self._live_meas, "progress_01", 0.0) or 0.0)
+            pct = int(max(0, min(100, round(100.0 * prog))))
+            if phase == "arming":
+                self._set_live_status_bar_state(mode="arming", text="Arming...", pct=pct)
+            elif phase == "measuring":
+                self._set_live_status_bar_state(mode="measuring", text="Taking measurement...", pct=pct)
+            else:
+                self._set_live_status_bar_state(mode="idle", text="", pct=None)
+        except Exception:
+            self._set_live_status_bar_state(mode="idle", text="", pct=None)
+        # Keep overlay status empty for a cleaner plate view.
+        try:
+            self.canvas_left.set_live_status(None)
+        except Exception:
+            pass
+
+        if not ev:
+            return
+
+        # Captured: clear the status bar so it doesn't linger.
+        self._set_live_status_bar_state(mode="idle", text="", pct=None)
+
+        # Commit captured measurement into the session via TestingService
+        res = TestResult(
+            row=int(ev.row),
+            col=int(ev.col),
+            fz_mean_n=float(ev.mean_fz_n),
+            cop_x_mm=float(ev.mean_cop_x_mm),
+            cop_y_mm=float(ev.mean_cop_y_mm),
+        )
+        self.controller.testing.record_result(int(stage_idx), int(ev.row), int(ev.col), res)
+
+        # Update progress/Next button using existing LiveTestingPanel helpers
+        try:
+            completed = 0
+            for r in (stage.results or {}).values():
+                try:
+                    if r is not None and getattr(r, "fz_mean_n", None) is not None:
+                        completed += 1
+                except Exception:
+                    continue
+            total = int(getattr(stage, "total_cells", rows * cols) or (rows * cols))
+            stage_text = str(getattr(stage, "name", "") or "Stage")
+            self.controls.live_testing_panel.set_stage_progress(stage_text, completed, total)
+            # Navigation gating handled by `_update_live_stage_nav`.
+            self._update_live_stage_nav("cell_captured")
+            # Also update the per-stage summary tracker (Location A/B overview)
+            try:
+                sess2 = getattr(self.controller.testing, "current_session", None)
+                if sess2 and not bool(getattr(sess2, "is_discrete_temp", False)):
+                    total2 = int(getattr(sess2, "grid_rows", 0) or 0) * int(getattr(sess2, "grid_cols", 0) or 0)
+                    self.controls.live_testing_panel.set_stage_summary(
+                        getattr(sess2, "stages", []) or [],
+                        grid_total_cells=total2 if total2 > 0 else None,
+                        current_stage_index=int(stage_idx),
+                    )
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _update_live_stage_nav(self, reason: str = "") -> None:
+        """
+        Normal live testing navigation rule:
+        - can move freely within stages 0..2 (Location A)
+        - cannot move into stages 3..5 (Location B) until stages 0..2 are complete
+        - once unlocked, can move freely across 0..5
+        """
+        try:
+            panel = self.controls.live_testing_panel
+        except Exception:
+            return
+
+        sess = getattr(self.controller.testing, "current_session", None)
+        if not sess or bool(getattr(sess, "is_discrete_temp", False)) or bool(getattr(sess, "is_temp_test", False)):
+            # Default behavior for non-standard modes: sequential navigation.
+            try:
+                idx = int(getattr(self.controller.testing, "current_stage_index", 0) or 0)
+            except Exception:
+                idx = 0
+            try:
+                total_stages = len(getattr(sess, "stages", []) or [])
+            except Exception:
+                total_stages = 0
+            panel.set_prev_stage_enabled(bool(idx > 0))
+            panel.set_next_stage_enabled(bool(total_stages > 0 and idx < total_stages - 1))
+            return
+
+        stages = getattr(sess, "stages", []) or []
+        try:
+            idx = int(getattr(self.controller.testing, "current_stage_index", 0) or 0)
+        except Exception:
+            idx = 0
+
+        if len(stages) < 6:
+            panel.set_prev_stage_enabled(bool(idx > 0))
+            panel.set_next_stage_enabled(bool(idx < max(0, len(stages) - 1)))
+            return
+
+        prev_enabled = bool(idx > 0)
+        next_enabled = bool(idx < len(stages) - 1)
+
+        panel.set_prev_stage_enabled(prev_enabled)
+        panel.set_next_stage_enabled(next_enabled)
+
     def _on_live_cell_updated(self, row, col, result) -> None:
         color = None
         text = None
@@ -419,16 +1135,358 @@ class FluxLitePage(QtWidgets.QWidget):
         if not isinstance(color, QtGui.QColor):
             color = QtGui.QColor(0, 255, 0, 100)  # Green default fallback
 
-        self.canvas.set_live_cell_color(row, col, color)
-        if text:
-            self.canvas.set_live_cell_text(row, col, text)
+        # Apply to both plate views so switching tabs/panes stays consistent.
+        try:
+            self.canvas_left.set_live_cell_color(row, col, color)
+            self.canvas_right.set_live_cell_color(row, col, color)
+            if text:
+                self.canvas_left.set_live_cell_text(row, col, text)
+                self.canvas_right.set_live_cell_text(row, col, text)
+        except Exception:
+            # Fallback to legacy "active canvas" behavior
+            try:
+                self.canvas.set_live_cell_color(row, col, color)
+                if text:
+                    self.canvas.set_live_cell_text(row, col, text)
+            except Exception:
+                pass
+
+    def _render_live_stage_grid(self, stage_idx: int, stage: object) -> None:
+        """When switching stages, redraw grid colors/text for that stage's results."""
+        sess = getattr(self.controller.testing, "current_session", None)
+        if not sess:
+            return
+        # Discrete temp has its own grid rendering path.
+        if bool(getattr(sess, "is_discrete_temp", False)):
+            return
+
+        # Clear existing cell colors/text
+        try:
+            self.canvas_left.clear_live_colors()
+            self.canvas_right.clear_live_colors()
+        except Exception:
+            pass
+
+        try:
+            presenter = getattr(self.controller.live_test, "presenter", None)
+        except Exception:
+            presenter = None
+        if presenter is None:
+            return
+
+        # Determine target + tolerance for this stage
+        try:
+            target_n = float(getattr(stage, "target_n", 0.0) or 0.0)
+        except Exception:
+            target_n = 0.0
+        try:
+            st_name = str(getattr(stage, "name", "") or "")
+        except Exception:
+            st_name = ""
+        # Use the same tolerance logic as capture-time coloring (single source of truth).
+        tol_n = float(self.controller.live_test.tolerance_for_stage(stage, sess))
+
+        # Apply every recorded result
+        try:
+            results = getattr(stage, "results", {}) or {}
+        except Exception:
+            results = {}
+
+        for (r, c), res in results.items():
+            try:
+                if res is None or getattr(res, "fz_mean_n", None) is None:
+                    continue
+                vm = presenter.compute_live_cell(res, float(target_n), float(tol_n))
+                self.canvas_left.set_live_cell_color(int(r), int(c), vm.color)
+                self.canvas_right.set_live_cell_color(int(r), int(c), vm.color)
+                if getattr(vm, "text", None):
+                    self.canvas_left.set_live_cell_text(int(r), int(c), str(vm.text))
+                    self.canvas_right.set_live_cell_text(int(r), int(c), str(vm.text))
+            except Exception:
+                continue
+
+        # Update the stage progress label to match this stage's actual completion.
+        try:
+            total = int(getattr(stage, "total_cells", 0) or 0)
+        except Exception:
+            total = 0
+        done = 0
+        try:
+            for rr in (results or {}).values():
+                try:
+                    if rr is not None and getattr(rr, "fz_mean_n", None) is not None:
+                        done += 1
+                except Exception:
+                    continue
+        except Exception:
+            done = 0
+        try:
+            self.controls.live_testing_panel.set_stage_progress(str(st_name or "Stage"), int(done), int(total))
+        except Exception:
+            pass
+
+    def _render_current_live_stage_grid(self, reason: str = "") -> None:
+        """Repaint current stage grid (e.g., after rotation)."""
+        sess = getattr(self.controller.testing, "current_session", None)
+        if not sess:
+            return
+        if bool(getattr(sess, "is_discrete_temp", False)):
+            return
+        try:
+            idx = int(getattr(self.controller.testing, "current_stage_index", 0) or 0)
+        except Exception:
+            idx = 0
+        try:
+            stages = getattr(sess, "stages", []) or []
+            if 0 <= idx < len(stages):
+                self._render_live_stage_grid(int(idx), stages[int(idx)])
+        except Exception:
+            return
 
     def _on_live_cell_clicked(self, row: int, col: int) -> None:
         """Bridge canvas cell clicks into the live-test controller."""
+        # During standard live testing we capture automatically; clicking is used for inspection/reset UI.
+        try:
+            self._show_cell_details(int(row), int(col))
+        except Exception:
+            pass
+        # Keep click-to-record behavior for discrete temp only.
+        try:
+            sess = self.controller.testing.current_session
+            if sess and not bool(getattr(sess, "is_discrete_temp", False)):
+                return
+        except Exception:
+            pass
         try:
             self.controller.live_test.handle_cell_click(int(row), int(col), {})
         except Exception:
             pass
+
+    def _show_cell_details(self, row: int, col: int) -> None:
+        sess = getattr(self.controller.testing, "current_session", None)
+        if not sess:
+            self._cell_details_left.clear()
+            self._cell_details_right.clear()
+            self._cell_details_left.setVisible(False)
+            self._cell_details_right.setVisible(False)
+            try:
+                self._cell_details_wrap_left.setFixedWidth(0)
+                self._cell_details_wrap_right.setFixedWidth(0)
+            except Exception:
+                pass
+            return
+        if bool(getattr(sess, "is_discrete_temp", False)):
+            return
+        try:
+            stage_idx = int(getattr(self.controller.testing, "current_stage_index", 0) or 0)
+        except Exception:
+            stage_idx = 0
+        stages = getattr(sess, "stages", []) or []
+        if not (0 <= stage_idx < len(stages)):
+            return
+        stage = stages[stage_idx]
+        target_n = None
+        try:
+            target_n = float(getattr(stage, "target_n", None))
+        except Exception:
+            target_n = None
+        measured = None
+        try:
+            res = (getattr(stage, "results", {}) or {}).get((int(row), int(col)))
+            if res is not None and getattr(res, "fz_mean_n", None) is not None:
+                measured = float(getattr(res, "fz_mean_n"))
+        except Exception:
+            measured = None
+
+        # Show on both plate views
+        self._cell_details_left.set_cell(stage_idx=stage_idx, row=row, col=col, measured_n=measured, target_n=target_n)
+        self._cell_details_right.set_cell(stage_idx=stage_idx, row=row, col=col, measured_n=measured, target_n=target_n)
+        self._cell_details_left.setVisible(True)
+        self._cell_details_right.setVisible(True)
+        try:
+            self._cell_details_wrap_left.setFixedWidth(260)
+            self._cell_details_wrap_right.setFixedWidth(260)
+        except Exception:
+            pass
+        # Show reset-count badges only while inspector is open (normal live testing)
+        try:
+            if not bool(getattr(sess, "is_temp_test", False)) and not bool(getattr(sess, "is_discrete_temp", False)):
+                self._apply_reset_badges_for_stage(int(stage_idx))
+        except Exception:
+            pass
+
+    def _hide_cell_details(self, _reason: str = "") -> None:
+        try:
+            self._clear_reset_badges()
+        except Exception:
+            pass
+        try:
+            self._cell_details_left.clear()
+            self._cell_details_right.clear()
+            self._cell_details_left.setVisible(False)
+            self._cell_details_right.setVisible(False)
+        except Exception:
+            pass
+        try:
+            self._cell_details_wrap_left.setFixedWidth(0)
+            self._cell_details_wrap_right.setFixedWidth(0)
+        except Exception:
+            pass
+
+    def _clear_reset_badges(self) -> None:
+        """Clear all top-right reset badges for the current stage."""
+        sess = getattr(self.controller.testing, "current_session", None)
+        if not sess:
+            return
+        stages = getattr(sess, "stages", []) or []
+        try:
+            idx = int(getattr(self.controller.testing, "current_stage_index", 0) or 0)
+        except Exception:
+            idx = 0
+        if not (0 <= idx < len(stages)):
+            return
+        stage = stages[idx]
+        counts = getattr(stage, "reset_counts", {}) or {}
+        for (r, c) in list(counts.keys()):
+            try:
+                self.canvas_left.set_live_cell_corner_text(int(r), int(c), None)
+                self.canvas_right.set_live_cell_corner_text(int(r), int(c), None)
+            except Exception:
+                continue
+
+    def _apply_reset_badges_for_stage(self, stage_idx: int) -> None:
+        """Apply top-right reset badge numbers for this stage."""
+        sess = getattr(self.controller.testing, "current_session", None)
+        if not sess:
+            return
+        stages = getattr(sess, "stages", []) or []
+        if not (0 <= int(stage_idx) < len(stages)):
+            return
+        stage = stages[int(stage_idx)]
+        counts = getattr(stage, "reset_counts", {}) or {}
+        for (r, c), n in counts.items():
+            try:
+                txt = str(int(n)) if int(n) > 0 else ""
+                self.canvas_left.set_live_cell_corner_text(int(r), int(c), txt or None)
+                self.canvas_right.set_live_cell_corner_text(int(r), int(c), txt or None)
+            except Exception:
+                continue
+
+    def _on_reset_cell_requested(self, stage_idx: int, row: int, col: int) -> None:
+        """Clear a measured cell for a given stage and redraw."""
+        sess = getattr(self.controller.testing, "current_session", None)
+        if not sess:
+            return
+        stages = getattr(sess, "stages", []) or []
+        if not (0 <= int(stage_idx) < len(stages)):
+            return
+        stage = stages[int(stage_idx)]
+        # Track reset count for this stage/cell
+        try:
+            rc = getattr(stage, "reset_counts", None)
+            if isinstance(rc, dict):
+                key = (int(row), int(col))
+                rc[key] = int(rc.get(key, 0) or 0) + 1
+        except Exception:
+            pass
+        try:
+            results = getattr(stage, "results", None)
+            if isinstance(results, dict):
+                results.pop((int(row), int(col)), None)
+        except Exception:
+            pass
+
+        # Redraw current stage grid (keeps rotation mapping correct)
+        try:
+            cur = int(getattr(self.controller.testing, "current_stage_index", 0) or 0)
+        except Exception:
+            cur = 0
+        if int(stage_idx) == int(cur):
+            try:
+                self._render_live_stage_grid(int(stage_idx), stage)
+            except Exception:
+                pass
+        else:
+            # If they reset a non-current stage (possible via other modes later), still refresh tracker.
+            try:
+                self.controls.live_testing_panel.set_stage_summary(
+                    getattr(sess, "stages", []) or [],
+                    grid_total_cells=int(getattr(sess, "grid_rows", 0) or 0) * int(getattr(sess, "grid_cols", 0) or 0) or None,
+                    current_stage_index=int(cur),
+                )
+            except Exception:
+                pass
+
+        # Update the inspector with the cleared state
+        self._hide_cell_details("reset_clicked")
+
+    def _on_reset_all_fail_requested(self, stage_idx: int) -> None:
+        """Reset all failed cells on this stage."""
+        sess = getattr(self.controller.testing, "current_session", None)
+        if not sess:
+            return
+        if bool(getattr(sess, "is_discrete_temp", False)) or bool(getattr(sess, "is_temp_test", False)):
+            return
+        stages = getattr(sess, "stages", []) or []
+        if not (0 <= int(stage_idx) < len(stages)):
+            return
+        stage = stages[int(stage_idx)]
+        results = getattr(stage, "results", {}) or {}
+
+        try:
+            tol_n = float(self.controller.live_test.tolerance_for_stage(stage, sess))
+        except Exception:
+            return
+        try:
+            target_n = float(getattr(stage, "target_n", 0.0) or 0.0)
+        except Exception:
+            target_n = 0.0
+
+        fail_cut = float(config.COLOR_BIN_MULTIPLIERS["light_green"])
+        to_reset: list[tuple[int, int]] = []
+        for (r, c), res in list(results.items()):
+            try:
+                mean_n = getattr(res, "fz_mean_n", None)
+                if mean_n is None:
+                    continue
+                if float(tol_n) <= 0:
+                    continue
+                err_ratio = abs(float(mean_n) - float(target_n)) / float(tol_n)
+                if err_ratio > fail_cut:
+                    to_reset.append((int(r), int(c)))
+            except Exception:
+                continue
+
+        if not to_reset:
+            self._hide_cell_details("reset_all_fail_noop")
+            return
+
+        # Increment reset counts + clear results
+        try:
+            rc = getattr(stage, "reset_counts", None)
+            if isinstance(rc, dict):
+                for r, c in to_reset:
+                    key = (int(r), int(c))
+                    rc[key] = int(rc.get(key, 0) or 0) + 1
+        except Exception:
+            pass
+        for r, c in to_reset:
+            try:
+                results.pop((int(r), int(c)), None)
+            except Exception:
+                continue
+
+        # Redraw if we're on this stage
+        try:
+            cur = int(getattr(self.controller.testing, "current_stage_index", 0) or 0)
+        except Exception:
+            cur = 0
+        if int(stage_idx) == int(cur):
+            try:
+                self._render_live_stage_grid(int(stage_idx), stage)
+            except Exception:
+                pass
+        self._hide_cell_details("reset_all_fail_clicked")
 
     def _on_discrete_test_selected(self, path: str) -> None:
         """Switch to Temp Plot tab when a discrete test is selected."""
@@ -445,6 +1503,8 @@ class FluxLitePage(QtWidgets.QWidget):
         """
         try:
             self._active_device_ids = set(str(x) for x in (active_device_ids or set()) if str(x).strip())
+            # Gate Live Testing start on active streaming set changes (same source as Config green check).
+            self._update_live_test_start_enabled("active_devices_updated")
             active = sorted(self._active_device_ids)
             if not active:
                 if not self._connected_device_ids:
@@ -572,6 +1632,7 @@ class FluxLitePage(QtWidgets.QWidget):
                     self.sensor_plot_right.set_temperature_f(None)
             except Exception:
                 pass
+            self._update_live_test_start_enabled("clear_device_views")
         except Exception:
             pass
 
@@ -614,6 +1675,8 @@ class FluxLitePage(QtWidgets.QWidget):
                 live_panel.set_current_model("—")
                 live_panel.set_model_list([])
                 live_panel.set_model_status("")
+            self._lt_log(f"Selection changed: device_id={device_id or '∅'} type={device_type or '∅'} name={device_name or '∅'}")
+            self._update_live_test_start_enabled("config_changed")
         except Exception:
             pass
 
@@ -864,7 +1927,10 @@ class FluxLitePage(QtWidgets.QWidget):
     def _on_model_metadata_received(self, models: list) -> None:
         """Handle model metadata from backend - update Live Testing panel's model list."""
         try:
-            print(f"[FluxLitePage] Model metadata received: {models}")
+            try:
+                self._lt_log(f"Model metadata received: count={len(models or [])}")
+            except Exception:
+                pass
             live_panel = self.controls.live_testing_panel
             live_panel.set_model_list(models or [])
             live_panel.set_model_controls_enabled(True)
@@ -893,16 +1959,29 @@ class FluxLitePage(QtWidgets.QWidget):
                 print("[FluxLitePage] No model is currently active")
 
             if active_model:
-                print(f"[FluxLitePage] Setting current model to: {active_model}")
+                self._lt_log(f"Active model detected: {active_model}")
                 live_panel.set_current_model(str(active_model))
                 live_panel.set_session_model_id(str(active_model))
             else:
-                print("[FluxLitePage] No active model found")
+                self._lt_log("No active model found")
                 live_panel.set_current_model("No active model")
 
             live_panel.set_model_status(None)  # Clear any loading status
+            self._update_live_test_start_enabled("model_metadata_received")
         except Exception as e:
             print(f"[FluxLitePage] Model metadata error: {e}")
+
+    def _on_model_metadata_error(self, error_msg: str) -> None:
+        """Handle model metadata request errors (timeout, socket error, etc.)."""
+        try:
+            print(f"[FluxLitePage] Model metadata error: {error_msg}")
+            live_panel = self.controls.live_testing_panel
+            live_panel.set_current_model("Error loading models")
+            live_panel.set_model_list([])
+            live_panel.set_model_status(error_msg)
+            live_panel.set_model_controls_enabled(True)
+        except Exception as e:
+            print(f"[FluxLitePage] Error handling metadata error: {e}")
 
     def _on_model_activation_status(self, status: dict) -> None:
         """Handle model activation/deactivation status from backend."""
@@ -940,6 +2019,7 @@ class FluxLitePage(QtWidgets.QWidget):
                 live_panel.set_model_status(f"Error: {error}" if error else "Operation failed")
 
             live_panel.set_model_controls_enabled(True)
+            self._update_live_test_start_enabled("model_activation_status")
 
             # Refresh metadata to get updated list and confirm active state
             device_id = (self.state.selected_device_id or "").strip()

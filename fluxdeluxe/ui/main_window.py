@@ -5,6 +5,7 @@ from typing import Optional
 
 from PySide6 import QtWidgets, QtGui
 
+from .dialogs.backend_log_dialog import BackendLogDialog
 from .tools.launcher_page import ToolLauncherPage
 from .tools.tool_registry import ToolSpec, default_tools
 from .tools.web_tool_page import WebToolPage
@@ -63,6 +64,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.status_label = QtWidgets.QLabel("")
         self.statusBar().addPermanentWidget(self.status_label)
+
+        # Backend logs button
+        self.btn_backend_logs = QtWidgets.QPushButton("Backend Logs")
+        self.btn_backend_logs.clicked.connect(self._show_backend_logs)
+        self.statusBar().addPermanentWidget(self.btn_backend_logs)
+
+        # Start reading backend logs
+        self._setup_backend_log_reader()
 
         # Always start at Home (tool grid)
         self.show_home()
@@ -137,7 +146,45 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
             return
 
+    def _setup_backend_log_reader(self) -> None:
+        """Set up the backend log dialog to read from the DynamoDeluxe process."""
+        try:
+            # Import the module directly to avoid relative import issues
+            import FluxDeluxe.main as main_module
+
+            process = main_module.get_dynamo_process()
+            print(f"[DEBUG] _setup_backend_log_reader: process = {process}")
+            print(f"[DEBUG] main_module._dynamo_process = {main_module._dynamo_process}")
+            if process is not None:
+                print(f"[DEBUG] Process PID: {process.pid}, stdout: {process.stdout}, stderr: {process.stderr}")
+                dialog = BackendLogDialog.get_instance(self)
+                dialog.start_reading(process)
+                print("[DEBUG] Log reader started")
+            else:
+                print("[DEBUG] No process found - backend may have failed to start")
+        except Exception as e:
+            print(f"[DEBUG] Error setting up log reader: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _show_backend_logs(self) -> None:
+        """Show the backend log dialog."""
+        try:
+            dialog = BackendLogDialog.get_instance(self)
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
+        except Exception:
+            pass
+
     def closeEvent(self, event) -> None:
+        # Stop backend log reader
+        try:
+            dialog = BackendLogDialog.get_instance(self)
+            dialog.stop_reading()
+        except Exception:
+            pass
+
         # Give the current tool a chance to shut down.
         try:
             page = self._fluxlite_page

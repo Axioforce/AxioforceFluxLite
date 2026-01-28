@@ -116,6 +116,9 @@ THRESHOLDS_BW_PCT_BY_MODEL = {
     "11": 0.015,
 }
 
+# Default device type for fallbacks (Lite)
+DEFAULT_DEVICE_TYPE: str = "06"
+
 # Cell color bins as multipliers of the passing threshold T
 # green: ≤0.5T, light-green: (0.5T..T], yellow: (T..1.5T], orange: (1.5T..2.5T], red: >2.5T
 COLOR_BIN_MULTIPLIERS = {
@@ -151,11 +154,15 @@ def get_color_bin(error_ratio: float) -> str:
 def get_passing_threshold(stage_key: str, device_type: str, body_weight_n: float) -> float:
     """Get the passing threshold in Newtons for a stage and device type."""
     if stage_key == "db":
-        return float(THRESHOLDS_DB_N_BY_MODEL.get(device_type, 6.0))
+        return float(THRESHOLDS_DB_N_BY_MODEL.get(device_type, THRESHOLDS_DB_N_BY_MODEL[DEFAULT_DEVICE_TYPE]))
     elif stage_key == "bw":
-        pct = float(THRESHOLDS_BW_PCT_BY_MODEL.get(device_type, 0.015))
-        return body_weight_n * pct if body_weight_n > 0 else 10.0
-    return 10.0  # Fallback
+        pct = float(THRESHOLDS_BW_PCT_BY_MODEL.get(device_type, THRESHOLDS_BW_PCT_BY_MODEL[DEFAULT_DEVICE_TYPE]))
+        # If bodyweight is missing, fall back to a safe nonzero threshold (DB tol for this plate type).
+        if body_weight_n > 0:
+            return float(body_weight_n) * float(pct)
+        return float(THRESHOLDS_DB_N_BY_MODEL.get(device_type, THRESHOLDS_DB_N_BY_MODEL[DEFAULT_DEVICE_TYPE]))
+    # Fallback: treat as BW with unknown stage key -> use DB tol for this plate type.
+    return float(THRESHOLDS_DB_N_BY_MODEL.get(device_type, THRESHOLDS_DB_N_BY_MODEL[DEFAULT_DEVICE_TYPE]))
 
 # Temperature analysis constants (tunable)
 # Canonical stabilizer dumbbell "45 lb" load used by temperature/discrete-temp testing.

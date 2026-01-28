@@ -233,3 +233,41 @@ class GeometryService:
         row = min(max(int(row_f), 0), rows - 1)
         col = min(max(int(col_f), 0), cols - 1)
         return (row, col)
+
+    @staticmethod
+    def invert_map_cell(row: int, col: int, rows: int, cols: int, rotation_quadrants: int, device_type: str) -> Tuple[int, int]:
+        """
+        Invert `map_cell(...)`.
+
+        `map_cell` applies:
+        - device-specific mirror (06/08 anti-diagonal)
+        - then rotation (0/90/180/270 cw)
+
+        This inverts in reverse order: inverse rotation, then inverse device mirror.
+        """
+        r = int(row)
+        c = int(col)
+        rr = int(rows)
+        cc = int(cols)
+
+        # 1) Inverse rotation
+        k = int(rotation_quadrants) % 4
+        if k == 0:
+            dr, dc = r, c
+        elif k == 1:
+            # forward: (r, c) -> (c, cols-1-r)
+            dr, dc = (cc - 1 - c), r
+        elif k == 2:
+            # forward: (r, c) -> (rows-1-r, cols-1-c)
+            dr, dc = (rr - 1 - r), (cc - 1 - c)
+        else:
+            # k == 3, forward: (r, c) -> (rows-1-c, r)
+            dr, dc = c, (rr - 1 - r)
+
+        # 2) Inverse device mirror (self-inverse)
+        dev_type = (device_type or "").strip()
+        if dev_type in ("06", "08"):
+            # mirror: (r, c) -> (rows-1-c, cols-1-r) is its own inverse
+            return (rr - 1 - int(dc)), (cc - 1 - int(dr))
+
+        return int(dr), int(dc)

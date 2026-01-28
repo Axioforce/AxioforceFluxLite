@@ -92,7 +92,7 @@ class ForcePlotWidget(QtWidgets.QWidget):
         self._pg_rz: list[float] = []
         # Time zero for relative axis formatting (ms)
         self._time0_ms: Optional[int] = None
-        
+
         # Temperature buffer for 10-second rolling average
         self._temp_buffer: list[tuple[float, float]] = [] # (time_sec, temp_f)
         self._last_temp_update_time = 0.0

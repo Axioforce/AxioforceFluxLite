@@ -9,11 +9,27 @@ class GridOverlay(QtWidgets.QWidget):
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        # Ensure this overlay doesn't paint an opaque styled background (global QSS sets QWidget bg).
+        # We want only the grid/cell visuals on top of the plate.
+        try:
+            self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+        except Exception:
+            pass
+        try:
+            self.setAutoFillBackground(False)
+        except Exception:
+            pass
+        try:
+            self.setStyleSheet("background: transparent;")
+        except Exception:
+            pass
         self.rows = 3
         self.cols = 3
         self.active_cell: Optional[Tuple[int, int]] = None
         self.cell_colors: dict[Tuple[int, int], QtGui.QColor] = {}
         self.cell_texts: dict[Tuple[int, int], str] = {}
+        # Small top-right badges per cell (e.g., reset count)
+        self.cell_corner_texts: dict[Tuple[int, int], str] = {}
         self._plate_rect_px: Optional[QtCore.QRect] = None
         self._status_text: Optional[str] = None
         # Optional mode: draw a single central circle instead of a full grid
@@ -70,11 +86,25 @@ class GridOverlay(QtWidgets.QWidget):
         self.cell_texts[(int(row), int(col))] = str(text)
         self.update()
 
+    def set_cell_corner_text(self, row: int, col: int, text: Optional[str]) -> None:
+        key = (int(row), int(col))
+        t = (text or "").strip()
+        if not t:
+            if key in self.cell_corner_texts:
+                self.cell_corner_texts.pop(key, None)
+        else:
+            self.cell_corner_texts[key] = t
+        self.update()
+
     def clear_cell_color(self, row: int, col: int) -> None:
         try:
             key = (int(row), int(col))
             if key in self.cell_colors:
                 self.cell_colors.pop(key, None)
+            if key in self.cell_texts:
+                self.cell_texts.pop(key, None)
+            if key in self.cell_corner_texts:
+                self.cell_corner_texts.pop(key, None)
                 self.update()
         except Exception:
             pass
@@ -82,6 +112,7 @@ class GridOverlay(QtWidgets.QWidget):
     def clear_colors(self) -> None:
         self.cell_colors.clear()
         self.cell_texts.clear()
+        self.cell_corner_texts.clear()
         self.update()
 
     def set_status(self, text: Optional[str]) -> None:
@@ -159,8 +190,28 @@ class GridOverlay(QtWidgets.QWidget):
                         p.setFont(font)
                         p.drawText(cell_rect_text, QtCore.Qt.AlignCenter, text)
 
+                    # Draw small top-right badge text if present
+                    badge = self.cell_corner_texts.get((r, c))
+                    if badge:
+                        try:
+                            badge_rect = QtCore.QRect(
+                                int(rect.left() + c * cell_w),
+                                int(rect.top() + r * cell_h),
+                                int(cell_w),
+                                int(cell_h),
+                            )
+                            p.setPen(QtGui.QColor(255, 255, 255, 230))
+                            font2 = p.font()
+                            font2.setPointSize(8)
+                            font2.setBold(True)
+                            p.setFont(font2)
+                            p.drawText(badge_rect.adjusted(2, 1, -4, -2), QtCore.Qt.AlignTop | QtCore.Qt.AlignRight, badge)
+                        except Exception:
+                            pass
+
             # Draw grid lines
-            p.setPen(QtGui.QPen(QtGui.QColor(180, 180, 180, 180), 1))
+            # Higher-contrast lines so they read on the light plate fill.
+            p.setPen(QtGui.QPen(QtGui.QColor(35, 35, 45, 220), 2))
             for i in range(1, self.cols):
                 x = rect.left() + int(i * cell_w)
                 p.drawLine(x, rect.top(), x, rect.bottom())

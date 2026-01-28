@@ -49,10 +49,9 @@ class SessionManager(QtCore.QObject):
         # Create default thresholds if not provided
         if thresholds is None:
             device_type = (model_id or "06")[:2]
-            db_tol = config.THRESHOLDS_DB_N_BY_MODEL.get(device_type, 6.0)
-            bw_pct = config.THRESHOLDS_BW_PCT_BY_MODEL.get(device_type, 0.015)
-            bw_tol = body_weight_n * bw_pct if body_weight_n > 0 else 10.0
-            thresholds = TestThresholds(dumbbell_tol_n=db_tol, bodyweight_tol_n=bw_tol)
+            db_tol = float(config.THRESHOLDS_DB_N_BY_MODEL.get(device_type, config.THRESHOLDS_DB_N_BY_MODEL[config.DEFAULT_DEVICE_TYPE]))
+            bw_tol = float(config.get_passing_threshold("bw", device_type, float(body_weight_n or 0.0)))
+            thresholds = TestThresholds(dumbbell_tol_n=float(db_tol), bodyweight_tol_n=float(bw_tol))
         
         session = TestSession(
             tester_name=tester_name,
@@ -67,11 +66,23 @@ class SessionManager(QtCore.QObject):
         )
         
         # Initialize stages (default logic)
-        stages = []
-        # Stage 0: 45 lb DB
-        stages.append(TestStage(0, "45 lb DB", "A", float(config.TEMP_DB_TARGET_N), rows * cols))
-        # Stage 1: Body Weight
-        stages.append(TestStage(1, "Body Weight", "A", body_weight_n, rows * cols))
+        stages: List[TestStage] = []
+        total_cells = int(rows * cols)
+
+        # Normal live testing: 6 stages (A: DB / Two leg BW / One leg BW, then repeat at B)
+        if not bool(is_temp_test) and not bool(is_discrete_temp):
+            idx = 0
+            for loc in ("A", "B"):
+                stages.append(TestStage(idx, "45 lb", loc, float(config.TEMP_DB_TARGET_N), total_cells))
+                idx += 1
+                stages.append(TestStage(idx, "Two Leg", loc, float(body_weight_n), total_cells))
+                idx += 1
+                stages.append(TestStage(idx, "One Leg", loc, float(body_weight_n), total_cells))
+                idx += 1
+        else:
+            # Temperature/discrete temp modes can customize later; keep minimal defaults for now.
+            stages.append(TestStage(0, "45 lb", "A", float(config.TEMP_DB_TARGET_N), total_cells))
+            stages.append(TestStage(1, "Body Weight", "A", float(body_weight_n), total_cells))
         
         session.stages = stages
         session.start()
@@ -103,7 +114,7 @@ class SessionManager(QtCore.QObject):
     def next_stage(self) -> Optional[int]:
         if not self._current_session or not self._current_session.stages:
             return None
-        
+
         if self._current_stage_index < len(self._current_session.stages) - 1:
             self._current_stage_index += 1
             self.stage_changed.emit(self._current_stage_index)

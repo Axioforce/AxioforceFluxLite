@@ -24,44 +24,45 @@ class TarePromptDialog(QtWidgets.QDialog):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
 
-        self.lbl_title = QtWidgets.QLabel("Please step off the plate")
-        self.lbl_title.setStyleSheet("font-size: 18px; font-weight: 600;")
-        self.lbl_msg = QtWidgets.QLabel("When the force drops below 30 N, a 15 second timer will start.")
-        self.lbl_msg.setWordWrap(True)
+        self.lbl_title = QtWidgets.QLabel("Step off the plate")
+        self.lbl_title.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter)
+        self.lbl_title.setStyleSheet("font-size: 22px; font-weight: 700;")
 
-        info_row = QtWidgets.QHBoxLayout()
-        self.lbl_force = QtWidgets.QLabel("Force: — N")
-        self.lbl_countdown = QtWidgets.QLabel("Countdown: — s")
-        info_row.addWidget(self.lbl_force)
-        info_row.addStretch(1)
-        info_row.addWidget(self.lbl_countdown)
+        self.lbl_countdown = QtWidgets.QLabel("—")
+        self.lbl_countdown.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter)
+        try:
+            self.lbl_countdown.setStyleSheet("font-size: 56px; font-weight: 800;")
+        except Exception:
+            pass
+        self.lbl_force = QtWidgets.QLabel("Fz: — N")
+        try:
+            self.lbl_force.setStyleSheet("color: #AAA; font-size: 12px;")
+        except Exception:
+            pass
 
-        self.btn_cancel = QtWidgets.QPushButton("Cancel")
-        self.btn_cancel.clicked.connect(self.reject)
-
-        btn_row = QtWidgets.QHBoxLayout()
-        btn_row.addStretch(1)
-        btn_row.addWidget(self.btn_cancel)
+        bottom_row = QtWidgets.QHBoxLayout()
+        bottom_row.addWidget(self.lbl_force)
+        bottom_row.addStretch(1)
 
         root.addWidget(self.lbl_title)
-        root.addWidget(self.lbl_msg)
-        root.addLayout(info_row)
         root.addStretch(1)
-        root.addLayout(btn_row)
+        root.addWidget(self.lbl_countdown)
+        root.addStretch(1)
+        root.addLayout(bottom_row)
 
     @QtCore.Slot(float)
     def set_force(self, fz_n: float) -> None:
         try:
-            self.lbl_force.setText(f"Force: {float(fz_n):.1f} N")
+            self.lbl_force.setText(f"Fz: {float(fz_n):.1f} N")
         except Exception:
-            self.lbl_force.setText("Force: — N")
+            self.lbl_force.setText("Fz: — N")
 
     @QtCore.Slot(int)
     def set_countdown(self, seconds_remaining: int) -> None:
         try:
-            self.lbl_countdown.setText(f"Countdown: {int(seconds_remaining)} s")
+            self.lbl_countdown.setText(str(int(seconds_remaining)))
         except Exception:
-            self.lbl_countdown.setText("Countdown: — s")
+            self.lbl_countdown.setText("—")
 
     def signal_ready(self) -> None:
         try:

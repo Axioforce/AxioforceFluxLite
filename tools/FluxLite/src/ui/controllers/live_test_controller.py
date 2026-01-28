@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 from PySide6 import QtCore
 from ...project_paths import data_dir
+from ... import config
 from ...app_services.testing import TestingService
 from ...domain.models import TestResult
 from ..presenters.grid_presenter import GridPresenter
@@ -59,6 +60,18 @@ class LiveTestController(QtCore.QObject):
             is_temp_test=config.get('is_temp_test', False),
             is_discrete_temp=config.get('is_discrete_temp', False)
         )
+        try:
+            sess = getattr(self.service, "current_session", None)
+            if sess:
+                print(
+                    "[LiveTestController] start_session -> current_session "
+                    f"device_id={getattr(sess, 'device_id', '')} model_id={getattr(sess, 'model_id', '')} "
+                    f"grid={getattr(sess, 'grid_rows', '?')}x{getattr(sess, 'grid_cols', '?')}"
+                )
+            else:
+                print("[LiveTestController] start_session -> current_session is None")
+        except Exception:
+            pass
 
     def end_session(self):
         self.service.end_session()
@@ -213,6 +226,14 @@ class LiveTestController(QtCore.QObject):
         self.service.record_result(stage_idx, row, col, result)
 
     def _on_session_started(self, session):
+        try:
+            print(
+                "[LiveTestController] session_started "
+                f"device_id={getattr(session, 'device_id', '')} model_id={getattr(session, 'model_id', '')} "
+                f"grid={getattr(session, 'grid_rows', '?')}x{getattr(session, 'grid_cols', '?')}"
+            )
+        except Exception:
+            pass
         self.view_grid_configured.emit(session.grid_rows, session.grid_cols)
         self.view_session_started.emit(session)
         # Emit initial stage
@@ -220,6 +241,13 @@ class LiveTestController(QtCore.QObject):
             self.view_stage_changed.emit(0, session.stages[0])
 
     def _on_session_ended(self, session):
+        try:
+            print(
+                "[LiveTestController] session_ended "
+                f"device_id={getattr(session, 'device_id', '')} model_id={getattr(session, 'model_id', '')}"
+            )
+        except Exception:
+            pass
         self.view_session_ended.emit()
 
     def _on_stage_changed(self, index):
@@ -243,11 +271,7 @@ class LiveTestController(QtCore.QObject):
                 # It doesn't have tolerance.
                 # Thresholds are in session.thresholds.
                 
-                threshold_n = 10.0 # fallback
-                if stage.name == "45 lb DB": # rough check or use location?
-                    threshold_n = session.thresholds.dumbbell_tol_n
-                elif "Body Weight" in stage.name:
-                    threshold_n = session.thresholds.bodyweight_tol_n
+                threshold_n = self.tolerance_for_stage(stage, session)
                 
                 vm = self.presenter.compute_live_cell(result, target_n, threshold_n)
                 
@@ -264,3 +288,48 @@ class LiveTestController(QtCore.QObject):
 
         # Fallback if no session/stage context
         self.view_cell_updated.emit(row, col, result)
+
+    def tolerance_for_stage(self, stage, session) -> float:
+        """
+        Single source of truth for live-test tolerance (used for coloring/pass/fail).
+
+        We currently key off stage name conventions:
+        - DB stages: contains "45" or "db" or "dumbbell"
+        - BW stages: everything else (Two Leg / One Leg / Body Weight)
+        """
+        # Prefer session thresholds (already derived from `config.py` at session start).
+        thresh = getattr(session, "thresholds", None)
+        if thresh is not None:
+            try:
+                db_tol = float(getattr(thresh, "dumbbell_tol_n"))
+                bw_tol = float(getattr(thresh, "bodyweight_tol_n"))
+            except Exception:
+                db_tol = bw_tol = None
+        else:
+            db_tol = bw_tol = None
+
+        # If missing/invalid, compute from config dicts.
+        if not db_tol or not bw_tol:
+            try:
+                device_type = str(getattr(session, "model_id", "") or "").strip()[:2] or config.DEFAULT_DEVICE_TYPE
+            except Exception:
+                device_type = config.DEFAULT_DEVICE_TYPE
+            try:
+                body_weight_n = float(getattr(session, "body_weight_n", 0.0) or 0.0)
+            except Exception:
+                body_weight_n = 0.0
+            try:
+                db_tol = float(config.THRESHOLDS_DB_N_BY_MODEL.get(device_type, config.THRESHOLDS_DB_N_BY_MODEL[config.DEFAULT_DEVICE_TYPE]))
+            except Exception:
+                db_tol = float(config.THRESHOLDS_DB_N_BY_MODEL[config.DEFAULT_DEVICE_TYPE])
+            try:
+                bw_tol = float(config.get_passing_threshold("bw", device_type, body_weight_n))
+            except Exception:
+                bw_tol = float(db_tol)
+        try:
+            name = str(getattr(stage, "name", "") or "").strip().lower()
+        except Exception:
+            name = ""
+        if ("45" in name) or ("db" in name) or ("dumbbell" in name):
+            return float(db_tol)
+        return float(bw_tol)

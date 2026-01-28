@@ -26,6 +26,10 @@ class HardwareService(QtCore.QObject):
     model_metadata_received = QtCore.Signal(object)
     model_package_status_received = QtCore.Signal(object)
     model_activation_status_received = QtCore.Signal(object)
+    model_load_status_received = QtCore.Signal(object)
+
+    # Error signals
+    socket_error_received = QtCore.Signal(str)  # For socket.io errors
 
     def __init__(self):
         super().__init__()
@@ -95,6 +99,10 @@ class HardwareService(QtCore.QObject):
             self.client.on("modelMetadata", lambda d: self.model_metadata_received.emit(d))
             self.client.on("modelPackageStatus", lambda d: self.model_package_status_received.emit(d))
             self.client.on("modelActivationStatus", lambda d: self.model_activation_status_received.emit(d))
+            self.client.on("modelLoadStatus", lambda d: self.model_load_status_received.emit(d))
+
+            # Error event listener (socket.io standard error event)
+            self.client.on("error", lambda d: self.socket_error_received.emit(str(d)))
 
             self.client.start()
             self.connection_status_changed.emit(f"Connecting to {host}:{port}...")
@@ -336,6 +344,11 @@ class HardwareService(QtCore.QObject):
     def deactivate_model(self, device_id: str, model_id: str) -> None:
         if self.client:
             self.client.emit("deactivateModel", {"deviceId": str(device_id), "modelId": str(model_id)})
+
+    def load_model(self, model_dir: str) -> None:
+        """Load a model package file into both Firebase and local database."""
+        if self.client:
+            self.client.emit("loadModel", {"modelDir": str(model_dir)})
 
     # --- Device & Group Logic ---
 

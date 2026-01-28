@@ -49,8 +49,13 @@ def run_qt() -> int:
         import re
 
         qss_path = Path(__file__).resolve().parent / "ui" / "theme.qss"
-        qss_text = qss_path.read_text(encoding="utf-8")
         ui_dir = qss_path.parent
+        qss_text = qss_path.read_text(encoding="utf-8")
+
+        # Keep theme.qss stable; layer focused snippets on top.
+        spinbox_qss_path = ui_dir / "theme_spinbox.qss"
+        if spinbox_qss_path.exists():
+            qss_text += "\n\n" + spinbox_qss_path.read_text(encoding="utf-8")
 
         def _abs_url(m: "re.Match[str]") -> str:
             rel = m.group("rel")

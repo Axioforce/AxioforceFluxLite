@@ -26,6 +26,8 @@ class TestStage:
     target_n: float
     total_cells: int
     results: Dict[Tuple[int, int], TestResult] = field(default_factory=dict)
+    # Per-cell reset counts (how many times a cell was cleared for this stage)
+    reset_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
 
 @dataclass
 class TestSession:

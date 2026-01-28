@@ -20,6 +20,7 @@ class WorldCanvas(QtWidgets.QWidget):
     mapping_ready = QtCore.Signal(object)  # Dict[str, str]
     rotation_changed = QtCore.Signal(int)  # quadrants 0..3
     live_cell_clicked = QtCore.Signal(int, int)  # row, col in canonical grid space
+    live_background_clicked = QtCore.Signal()  # click outside grid/plate (used to collapse inspectors)
     refresh_devices_clicked = QtCore.Signal()
     tare_clicked = QtCore.Signal()
 
@@ -250,6 +251,8 @@ class WorldCanvas(QtWidgets.QWidget):
                         cr, cc2 = self._invert_device_and_rotation(rr, cc)
                         self.live_cell_clicked.emit(int(cr), int(cc2))
                         return
+                    # Inside overlay bounds but not on the plate rect -> treat as background.
+                    self.live_background_clicked.emit()
                 except Exception:
                     pass
             else:
@@ -258,6 +261,10 @@ class WorldCanvas(QtWidgets.QWidget):
                     self._grid_overlay.set_active_cell(None, None)
                     self._grid_overlay.set_status(None)
                     self.update()
+                except Exception:
+                    pass
+                try:
+                    self.live_background_clicked.emit()
                 except Exception:
                     pass
         return super().mousePressEvent(event)
@@ -399,6 +406,16 @@ class WorldCanvas(QtWidgets.QWidget):
     # Public API for live testing overlay
     def show_live_grid(self, rows: int, cols: int) -> None:
         try:
+            print(
+                "[WorldCanvas] show_live_grid "
+                f"rows={rows} cols={cols} "
+                f"display_mode={self.state.display_mode} "
+                f"selected_device_id={(self.state.selected_device_id or '').strip() or '∅'} "
+                f"selected_device_type={(self.state.selected_device_type or '').strip() or '∅'}"
+            )
+        except Exception:
+            pass
+        try:
             self._grid_overlay.set_center_circle_mode(False)
         except Exception:
             pass
@@ -407,6 +424,10 @@ class WorldCanvas(QtWidgets.QWidget):
         self.update()
 
     def hide_live_grid(self) -> None:
+        try:
+            print("[WorldCanvas] hide_live_grid")
+        except Exception:
+            pass
         self._grid_overlay.hide()
         self.update()
 
@@ -490,6 +511,11 @@ class WorldCanvas(QtWidgets.QWidget):
         dr, dc = self._map_cell_for_device(int(row), int(col))
         rr, cc = self._map_cell_for_rotation(dr, dc)
         self._grid_overlay.set_cell_text(rr, cc, text)
+
+    def set_live_cell_corner_text(self, row: int, col: int, text: Optional[str]) -> None:
+        dr, dc = self._map_cell_for_device(int(row), int(col))
+        rr, cc = self._map_cell_for_rotation(dr, dc)
+        self._grid_overlay.set_cell_corner_text(rr, cc, text)
 
     def clear_live_cell_color(self, row: int, col: int) -> None:
         dr, dc = self._map_cell_for_device(int(row), int(col))
