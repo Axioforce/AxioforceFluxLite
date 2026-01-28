@@ -9,6 +9,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .. import config
 from ..app_services.live_measurement_engine import LiveMeasurementEngine
 from ..app_services.live_session_gate import LiveSessionGate
+from ..app_services.live_test_capture import CaptureContext, TemperatureLiveCaptureManager
 from ..app_services.temperature_post_correction import apply_post_correction_to_run_data, compute_delta_t_f
 from ..domain.models import TestResult
 from .bridge import UiBridge  # Keep for compatibility if needed by other components
@@ -65,6 +66,9 @@ class FluxLitePage(QtWidgets.QWidget):
         self._live_gate_phase_last: str = "inactive"
         self._warmup_dialog: WarmupPromptDialog | None = None
         self._tare_dialog: TarePromptDialog | None = None
+        # Temperature live-testing CSV/raw capture lifecycle (backend-driven)
+        self._temp_live_capture = TemperatureLiveCaptureManager(self.controller.hardware)
+        self._temp_live_capture_ctx: CaptureContext | None = None
         # Temperature test stage switch dialog
         self._stage_switch_dialog: StageSwitchPromptDialog | None = None
         self._stage_switch_pending: bool = False
@@ -820,6 +824,30 @@ class FluxLitePage(QtWidgets.QWidget):
             self.controls.live_testing_panel.set_session_controls_locked(True)
         except Exception:
             pass
+        # Temperature live-testing mode: optionally start backend capture immediately.
+        try:
+            sess = getattr(self.controller.testing, "current_session", None)
+            if sess and bool(getattr(sess, "is_temp_test", False)) and not bool(getattr(sess, "is_discrete_temp", False)):
+                capture_enabled = False
+                save_dir = ""
+                try:
+                    capture_enabled = bool(self.controls.live_testing_panel._controls_box.is_capture_enabled())
+                    save_dir = str(self.controls.live_testing_panel._controls_box.get_save_directory() or "").strip()
+                except Exception:
+                    capture_enabled = False
+                    save_dir = ""
+                if capture_enabled:
+                    try:
+                        gid_fallback = str(self.controls.group_edit.text() or "").strip()
+                    except Exception:
+                        gid_fallback = ""
+                    self._temp_live_capture_ctx = self._temp_live_capture.start(
+                        device_id=str(getattr(sess, "device_id", "") or ""),
+                        save_dir=save_dir,
+                        group_id_fallback=gid_fallback,
+                    )
+        except Exception:
+            pass
         # Initialize the Testing Guide stage tracker (Location A/B overview)
         try:
             sess = getattr(self.controller.testing, "current_session", None)
@@ -856,6 +884,14 @@ class FluxLitePage(QtWidgets.QWidget):
 
     def _on_live_session_ended(self) -> None:
         """Clean up when a live test session ends."""
+        # Stop temperature-mode backend capture if we started one.
+        try:
+            ctx = self._temp_live_capture_ctx
+            if ctx is not None and str(getattr(ctx, "group_id", "") or "").strip():
+                self._temp_live_capture.stop(group_id=str(ctx.group_id))
+        except Exception:
+            pass
+        self._temp_live_capture_ctx = None
         self._reset_live_gate("session_ended")
         self._reset_live_measurement_engine("session_ended")
         # Close stage switch dialog if open
@@ -1884,8 +1920,11 @@ class FluxLitePage(QtWidgets.QWidget):
     def _auto_select_active_device(self, active_device_ids: set) -> None:
         """
         When a device is actively streaming, auto-select it so Plate View + Sensor View show data.
+        Only auto-select when transitioning from 0 streaming devices to 1+ streaming devices.
+        Once a device is selected, stick with it until it stops streaming entirely.
         """
         try:
+            prev_active = getattr(self, "_active_device_ids", set())
             self._active_device_ids = set(str(x) for x in (active_device_ids or set()) if str(x).strip())
             # Gate Live Testing start on active streaming set changes (same source as Config green check).
             self._update_live_test_start_enabled("active_devices_updated")
@@ -1896,10 +1935,16 @@ class FluxLitePage(QtWidgets.QWidget):
                 return
 
             selected = str(self.state.selected_device_id or "").strip()
-            should_select = (not selected) or (selected not in active and len(active) == 1)
+
+            # Only auto-select when:
+            # 1. No device is currently selected, AND
+            # 2. We just transitioned from 0 active devices to 1+ active devices
+            had_no_active_before = len(prev_active) == 0
+            should_select = (not selected) and had_no_active_before
             if not should_select:
                 return
 
+            # Select the first device (sorted alphabetically) and stick with it
             target_id = active[0]
 
             # Select in the Config device list so we go through the normal wiring.
