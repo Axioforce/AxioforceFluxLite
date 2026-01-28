@@ -1,0 +1,4 @@
+[submodule "FluxDeluxe/DynamoDeluxe"]
+	path = FluxDeluxe/DynamoDeluxe
+	url = https://github.com/Axioforce/AxioforceDynamoPy.git
+	branch = main
