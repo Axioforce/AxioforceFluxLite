@@ -213,13 +213,14 @@ class ForcePlotWidget(QtWidgets.QWidget):
             self._pg_curves["fx"] = mkcurve((220, 80, 80), "Fx")
             self._pg_curves["fy"] = mkcurve((80, 180, 220), "Fy")
             self._pg_curves["fz"] = mkcurve((120, 220, 120), "Fz")
-            # Dual (launch: base; landing: lighter)
-            self._pg_curves["lx"] = mkcurve((220, 80, 80), "Launch Fx")
-            self._pg_curves["ly"] = mkcurve((80, 180, 220), "Launch Fy")
-            self._pg_curves["lz"] = mkcurve((120, 220, 120), "Launch Fz")
-            self._pg_curves["rx"] = mkcurve((255, 140, 140), "Landing Fx")
-            self._pg_curves["ry"] = mkcurve((140, 220, 255), "Landing Fy")
-            self._pg_curves["rz"] = mkcurve((160, 255, 160), "Landing Fz")
+            # Dual (launch: lighter; landing: base)
+            # Lighter colors for launch
+            self._pg_curves["lx"] = mkcurve((255, 140, 140), "Launch Fx")
+            self._pg_curves["ly"] = mkcurve((140, 220, 255), "Launch Fy")
+            self._pg_curves["lz"] = mkcurve((160, 255, 160), "Launch Fz")
+            self._pg_curves["rx"] = mkcurve((220, 80, 80), "Landing Fx")
+            self._pg_curves["ry"] = mkcurve((80, 180, 220), "Landing Fy")
+            self._pg_curves["rz"] = mkcurve((120, 220, 120), "Landing Fz")
             for key in ("lx", "ly", "lz", "rx", "ry", "rz"):
                 try:
                     self._pg_curves[key].setVisible(False)  # type: ignore[union-attr]
@@ -747,21 +748,21 @@ class ForcePlotWidget(QtWidgets.QWidget):
                         path.lineTo(x, y)
                 p.drawPath(path)
         else:
-            # Dual-series overlay: Launch (base colors) and Landing (lighter variants)
-            # Lighter colors for landing
-            land_x = QtGui.QColor(255, 140, 140)
-            land_y = QtGui.QColor(140, 220, 255)
-            land_z = QtGui.QColor(160, 255, 160)
+            # Dual-series overlay: Launch (lighter colors) and Landing (base colors)
+            # Lighter colors for launch
+            launch_x = QtGui.QColor(255, 140, 140)
+            launch_y = QtGui.QColor(140, 220, 255)
+            launch_z = QtGui.QColor(160, 255, 160)
 
             series = []
             if self._legend_launch.isChecked() and self._samples_launch:
-                series.append((self._samples_launch, make_pen(base_x), 1))
-                series.append((self._samples_launch, make_pen(base_y), 2))
-                series.append((self._samples_launch, make_pen(base_z), 3))
+                series.append((self._samples_launch, make_pen(launch_x), 1))
+                series.append((self._samples_launch, make_pen(launch_y), 2))
+                series.append((self._samples_launch, make_pen(launch_z), 3))
             if self._legend_landing.isChecked() and self._samples_landing:
-                series.append((self._samples_landing, make_pen(land_x), 1))
-                series.append((self._samples_landing, make_pen(land_y), 2))
-                series.append((self._samples_landing, make_pen(land_z), 3))
+                series.append((self._samples_landing, make_pen(base_x), 1))
+                series.append((self._samples_landing, make_pen(base_y), 2))
+                series.append((self._samples_landing, make_pen(base_z), 3))
 
             # Draw each series path
             for samples, pen, comp in series:

@@ -24,6 +24,7 @@ class ViewState:
         "Upper Landing Zone": None,
         "Lower Landing Zone": None,
     })
+    mound_group_id: Optional[str] = None  # axfId of the virtual pitching mound group
     # Session defaults (persisted across sessions for convenience)
     last_tester_name: str = ""
     last_body_weight_n: float = 0.0

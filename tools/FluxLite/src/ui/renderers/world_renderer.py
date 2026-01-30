@@ -20,8 +20,11 @@ class WorldRenderer:
             
         self._draw_grid(p)
         self._draw_plates(p)
-        self.canvas._update_detect_button()
-        self.canvas._update_rotate_button()
+        # Detect-mound button was removed; keep renderer resilient.
+        try:
+            self.canvas._update_rotate_button()
+        except Exception:
+            pass
         
         if self.canvas.state.display_mode == "single":
             if self.canvas._single_snapshot is not None:
@@ -29,9 +32,8 @@ class WorldRenderer:
         else:
             all_configured = all(self.canvas.state.mound_devices.get(pos) for pos in ["Launch Zone", "Upper Landing Zone", "Lower Landing Zone"])
             if all_configured:
-                for name, snap in self.canvas._snapshots.items():
-                    if name in (LAUNCH_NAME, LANDING_NAME):
-                        self._draw_cop(p, name, snap)
+                for pos_id, snap in self.canvas._snapshots.items():
+                    self._draw_cop_mound(p, str(pos_id), snap)
                         
         self._draw_plate_names(p)
         
@@ -375,6 +377,61 @@ class WorldRenderer:
         p.drawText(zx - 70, int(zy - self.canvas.state.px_per_mm * (config.TYPE07_H_MM if name == LAUNCH_NAME else config.TYPE08_H_MM) * 0.6),
                    140, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
                    f"raw {raw_x_mm:.1f}, {raw_y_mm:.1f}")
+
+    def _draw_cop_mound(self, p: QtGui.QPainter, position_id: str, snap: Tuple[float, float, float, int, bool, float, float]) -> None:
+        """
+        Draw COP for mound mode.
+
+        Snapshots in mound mode are keyed by mound position IDs:
+        - "Launch Zone"
+        - "Landing Zone" (virtual midpoint between the two 08 plates)
+        - "Upper Landing Zone"
+        - "Lower Landing Zone"
+        """
+        if not self.canvas.state.flags.show_markers:
+            return
+        x_m, y_m, fz_n, _, is_visible, raw_x_m, raw_y_m = snap
+        if not is_visible:
+            return
+
+        # Convert m -> mm (local to that plate)
+        x_mm_local = self.canvas._scale_cop(x_m)
+        y_mm_local = self.canvas._scale_cop(y_m)
+        raw_x_mm = self.canvas._scale_cop(raw_x_m)
+        raw_y_mm = self.canvas._scale_cop(raw_y_m)
+
+        # Plate center in world mm coordinates (must match the layout in _draw_plates/_get_clicked_position)
+        center_mm = (0.0, 0.0)
+        pid = str(position_id or "").strip()
+        if pid == "Upper Landing Zone":
+            center_mm = tuple(config.LANDING_LOWER_CENTER_MM)
+        elif pid == "Lower Landing Zone":
+            center_mm = tuple(config.LANDING_UPPER_CENTER_MM)
+        elif pid == "Landing Zone":
+            center_mm = (0.0, float(config.LANDING_MID_Y_MM))
+
+        x_mm_world = float(center_mm[0]) + float(x_mm_local)
+        y_mm_world = float(center_mm[1]) + float(y_mm_local)
+
+        # Color: launch vs landing
+        color = config.COLOR_COP_LAUNCH if pid == "Launch Zone" else config.COLOR_COP_LANDING
+
+        cx, cy = self.canvas._to_screen(x_mm_world, y_mm_world)
+        r_px = max(config.COP_R_MIN_PX, min(config.COP_R_MAX_PX, self.canvas.state.cop_scale_k * abs(fz_n)))
+        p.setBrush(QtGui.QColor(*color))
+        p.setPen(QtGui.QPen(QtCore.Qt.black, 1))
+        p.drawEllipse(QtCore.QPoint(cx, cy), int(r_px), int(r_px))
+
+        # Minimal label: local COP for this plate
+        p.setPen(QtGui.QPen(QtGui.QColor(*config.COLOR_TEXT)))
+        label = f"{x_mm_local:.1f}, {y_mm_local:.1f}"
+        p.drawText(cx - 60, int(cy - r_px - 24), 120, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, label)
+
+        # Raw local COP (debug)
+        try:
+            p.drawText(cx - 70, int(cy + r_px + 8), 140, 18, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, f"raw {raw_x_mm:.1f}, {raw_y_mm:.1f}")
+        except Exception:
+            pass
 
     def _draw_cop_single(self, p: QtGui.QPainter, snap: Tuple[float, float, float, int, bool, float, float]) -> None:
         x_m, y_m, fz_n, _, is_visible, raw_x_m, raw_y_m = snap

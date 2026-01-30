@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Tuple
-import threading
+from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ... import config
-from ...infra.backend_address import BackendAddress, backend_address_from_config
-from ...infra.group_mapping import detect_existing_mound_mapping
 from ...app_services.geometry import GeometryService
 from ..state import ViewState
 from .grid_overlay import GridOverlay
@@ -17,7 +14,6 @@ from ..renderers.world_renderer import WorldRenderer
 
 class WorldCanvas(QtWidgets.QWidget):
     mound_device_selected = QtCore.Signal(str, str)  # position_id, device_id
-    mapping_ready = QtCore.Signal(object)  # Dict[str, str]
     rotation_changed = QtCore.Signal(int)  # quadrants 0..3
     live_cell_clicked = QtCore.Signal(int, int)  # row, col in canonical grid space
     live_background_clicked = QtCore.Signal()  # click outside grid/plate (used to collapse inspectors)
@@ -28,11 +24,12 @@ class WorldCanvas(QtWidgets.QWidget):
         self,
         state: ViewState,
         parent: Optional[QtWidgets.QWidget] = None,
-        backend_address_provider: Optional[Callable[[], BackendAddress]] = None,
+        # Back-compat: older callers provide this kwarg (previously used by the removed
+        # "Detect Existing Mound Configuration" feature). Keep it to avoid boot failures.
+        backend_address_provider: Any = None,
     ) -> None:
         super().__init__(parent)
         self.state = state
-        self._backend_address_provider: Callable[[], BackendAddress] = backend_address_provider or backend_address_from_config
         self._renderer = WorldRenderer(self)
         self._snapshots: Dict[str, Tuple[float, float, float, int, bool, float, float]] = {}
         self._single_snapshot: Optional[Tuple[float, float, float, int, bool, float, float]] = None
@@ -58,22 +55,6 @@ class WorldCanvas(QtWidgets.QWidget):
         # Live testing grid overlay
         self._grid_overlay = GridOverlay(self)
         self._grid_overlay.hide()
-
-        # Detect-existing-mound button (visible only in mound mode and until configured)
-        self._detect_btn = QtWidgets.QPushButton("Detect Existing Mound Configuration", self)
-        try:
-            self._detect_btn.setCursor(QtCore.Qt.PointingHandCursor)
-        except Exception:
-            pass
-        self._detect_btn.setVisible(False)
-        self._detect_btn.clicked.connect(self._on_detect_clicked)
-        self._detect_btn_visible_last: Optional[bool] = None
-
-        # Cross-thread apply for detection results
-        try:
-            self.mapping_ready.connect(self._on_mapping_ready)
-        except Exception:
-            pass
 
         # Single-view rotate button (90° clockwise per click)
         self._rotation_quadrants: int = 0  # 0,1,2,3 => 0°,90°,180°,270° clockwise
@@ -183,8 +164,6 @@ class WorldCanvas(QtWidgets.QWidget):
         self._fit_done = False
         super().showEvent(event)
         self.update()
-        self._position_detect_button()
-        self._update_detect_button()
         self._position_rotate_button()
         self._update_rotate_button()
         self._position_plate_action_buttons()
@@ -222,8 +201,6 @@ class WorldCanvas(QtWidgets.QWidget):
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
         self._fit_done = False
         super().resizeEvent(event)
-        self._position_detect_button()
-        self._update_detect_button()
         self._position_rotate_button()
         self._update_rotate_button()
         self._position_plate_action_buttons()
@@ -662,9 +639,12 @@ class WorldCanvas(QtWidgets.QWidget):
         else:
             required_type = "08"
         devices_for_picker: List[Tuple[str, str, str]] = []
+        print(f"[canvas] _show_device_picker: position={position_id}, required_type={required_type}, available={len(self._available_devices)} devices")
         for name, axf_id, dev_type in self._available_devices:
+            print(f"[canvas]   checking device: name={name}, axf_id={axf_id}, dev_type={dev_type}")
             if dev_type == required_type or (required_type == "07" and dev_type == "11"):
                 devices_for_picker.append((name, axf_id, dev_type))
+        print(f"[canvas]   filtered to {len(devices_for_picker)} devices for picker")
         dialog = DevicePickerDialog(position_id, required_type, devices_for_picker, self)
         result = dialog.exec()
         if result == QtWidgets.QDialog.Accepted and dialog.selected_device:
@@ -672,31 +652,6 @@ class WorldCanvas(QtWidgets.QWidget):
             self.state.mound_devices[position_id] = axf_id
             self.mound_device_selected.emit(position_id, axf_id)
             self.update()
-            self._update_detect_button()
-
-    # --- Detect existing mound configuration (HTTP to backend) ---
-    def _position_detect_button(self) -> None:
-        try:
-            hint = self._detect_btn.sizeHint()
-            w = min(max(220, hint.width() + 20), max(260, int(self.width() * 0.7)))
-            h = max(26, hint.height() + 6)
-            x = int((self.width() - w) / 2)
-            y = 8  # top padding
-            self._detect_btn.setGeometry(x, y, w, h)
-        except Exception:
-            pass
-
-    def _update_detect_button(self) -> None:
-        try:
-            is_mound = (self.state.display_mode == "mound")
-            all_configured = all(self.state.mound_devices.get(pos) for pos in ["Launch Zone", "Upper Landing Zone", "Lower Landing Zone"])
-            visible = bool(is_mound and not all_configured)
-            if self._detect_btn_visible_last is None or self._detect_btn_visible_last != visible:
-                self._detect_btn_visible_last = visible
-                print(f"[canvas] detect button visible -> {visible} (is_mound={is_mound}, configured={all_configured}, mound_devices={self.state.mound_devices})")
-            self._detect_btn.setVisible(visible)
-        except Exception:
-            pass
 
     def _position_rotate_button(self) -> None:
         try:
@@ -772,61 +727,4 @@ class WorldCanvas(QtWidgets.QWidget):
         except Exception:
             pass
 
-    def _http_base(self) -> str:
-        base = self._backend_address_provider().base_url()
-        try:
-            print(f"[canvas] http base resolved: {base}")
-        except Exception:
-            pass
-        return base
-
-    def _on_detect_clicked(self) -> None:
-        print("[canvas] detect clicked")
-        self._detect_btn.setEnabled(False)
-        t = threading.Thread(target=self._detect_worker, daemon=True)
-        t.start()
-
-    def _detect_worker(self) -> None:
-        mapping: Dict[str, str] = {}
-        try:
-            addr = self._backend_address_provider()
-            try:
-                print(f"[canvas] GET {addr.get_groups_url()}")
-            except Exception:
-                pass
-            mapping = detect_existing_mound_mapping(addr, timeout_s=4.0)
-        except Exception as e:
-            print(f"[canvas] get-groups error: {e}")
-        # Emit to UI thread to apply mapping immediately
-        try:
-            print(f"[canvas] emitting mapping_ready with: {mapping}")
-            self.mapping_ready.emit(mapping)
-        except Exception as ee:
-            print(f"[canvas] mapping emit failed: {ee}")
-
-    def _on_mapping_ready(self, mapping: Dict[str, str]) -> None:
-        try:
-            # Only set fields we found; do not emit selection signals (no group create/update)
-            changed = False
-            print(f"[canvas] applying mapping on UI thread: {mapping}")
-            for key in ("Launch Zone", "Upper Landing Zone", "Lower Landing Zone"):
-                val = mapping.get(key)
-                if val:
-                    if self.state.mound_devices.get(key) != val:
-                        self.state.mound_devices[key] = val
-                        changed = True
-            if changed:
-                print(f"[canvas] mound_devices updated: {self.state.mound_devices}")
-                self.update()
-            else:
-                print("[canvas] no changes to mound_devices")
-        except Exception as e:
-            print(f"[canvas] mapping apply error: {e}")
-        finally:
-            try:
-                self._detect_btn.setEnabled(True)
-                self._update_detect_button()
-            except Exception:
-                pass
-
-
+    # NOTE: "Detect Existing Mound Configuration" has been removed by design.

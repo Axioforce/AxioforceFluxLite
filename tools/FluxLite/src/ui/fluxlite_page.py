@@ -84,6 +84,21 @@ class FluxLitePage(QtWidgets.QWidget):
         # Some backends send missing/stale timestamps; maintain a monotonic stream clock for countdowns.
         self._stream_time_last_ms: int = 0
 
+        # --- Mound render throttling (smooth 60 Hz UI) ---
+        # We may receive mound packets at ~400-500 Hz. We buffer the latest Launch/Landing samples and
+        # render them at a fixed UI rate via a GUI-thread QTimer to avoid choppy/jittery updates.
+        self._mound_latest: dict[str, dict] = {}  # keys: "launch" | "landing" -> {t_ms, fx, fy, fz, cop_x, cop_y, moments, group_id}
+        self._mound_last_rendered_ms: dict[str, int] = {"launch": 0, "landing": 0}
+        self._mound_render_timer = QtCore.QTimer(self)
+        try:
+            hz = int(getattr(config, "UI_TICK_HZ", 60))
+        except Exception:
+            hz = 60
+        interval_ms = int(max(5, round(1000.0 / float(max(1, hz)))))
+        self._mound_render_timer.setInterval(interval_ms)
+        self._mound_render_timer.timeout.connect(self._on_mound_render_tick)
+        self._mound_render_timer.start()
+
         # Legacy Bridge (kept for compatibility)
         self.bridge = UiBridge()
 
@@ -93,6 +108,71 @@ class FluxLitePage(QtWidgets.QWidget):
 
         # Start Controller (triggers autoconnect)
         self.controller.start()
+
+    @QtCore.Slot()
+    def _on_mound_render_tick(self) -> None:
+        """
+        Render buffered mound Launch/Landing samples at a stable UI rate.
+
+        This avoids updating Qt widgets at backend packet rate and prevents "choppy" motion caused
+        by bursty packet arrival / uneven per-packet processing time.
+        """
+        try:
+            if self.state.display_mode != "mound":
+                return
+            mound_group_id = str(getattr(self.state, "mound_group_id", "") or "").strip()
+            if not mound_group_id:
+                return
+            latest = self._mound_latest or {}
+            if not latest:
+                return
+
+            # Ensure dual-series UI is enabled while in mound mode (idempotent).
+            try:
+                if self.sensor_plot_left:
+                    self.sensor_plot_left.set_dual_series_enabled(True)
+                if self.sensor_plot_right:
+                    self.sensor_plot_right.set_dual_series_enabled(True)
+            except Exception:
+                pass
+
+            snapshots = {}
+
+            # Launch zone
+            l = latest.get("launch") if isinstance(latest.get("launch"), dict) else None
+            if l:
+                is_visible = abs(float(l.get("fz", 0.0))) > 5.0
+                snap = (float(l.get("cop_x", 0.0)), float(l.get("cop_y", 0.0)), float(l.get("fz", 0.0)), int(l.get("t_ms", 0)), bool(is_visible), float(l.get("cop_x", 0.0)), float(l.get("cop_y", 0.0)))
+                snapshots["Launch Zone"] = snap
+                t_ms = int(l.get("t_ms", 0) or 0)
+                if t_ms and t_ms != int(self._mound_last_rendered_ms.get("launch", 0) or 0):
+                    self._mound_last_rendered_ms["launch"] = t_ms
+                    fx, fy, fz = float(l.get("fx", 0.0)), float(l.get("fy", 0.0)), float(l.get("fz", 0.0))
+                    if self.sensor_plot_left:
+                        self.sensor_plot_left.add_point_launch(t_ms, fx, fy, fz)
+                    if self.sensor_plot_right:
+                        self.sensor_plot_right.add_point_launch(t_ms, fx, fy, fz)
+
+            # Landing zone (virtual midpoint between the two 08 plates)
+            r = latest.get("landing") if isinstance(latest.get("landing"), dict) else None
+            if r:
+                is_visible = abs(float(r.get("fz", 0.0))) > 5.0
+                snap = (float(r.get("cop_x", 0.0)), float(r.get("cop_y", 0.0)), float(r.get("fz", 0.0)), int(r.get("t_ms", 0)), bool(is_visible), float(r.get("cop_x", 0.0)), float(r.get("cop_y", 0.0)))
+                snapshots["Landing Zone"] = snap
+                t_ms = int(r.get("t_ms", 0) or 0)
+                if t_ms and t_ms != int(self._mound_last_rendered_ms.get("landing", 0) or 0):
+                    self._mound_last_rendered_ms["landing"] = t_ms
+                    fx, fy, fz = float(r.get("fx", 0.0)), float(r.get("fy", 0.0)), float(r.get("fz", 0.0))
+                    if self.sensor_plot_left:
+                        self.sensor_plot_left.add_point_landing(t_ms, fx, fy, fz)
+                    if self.sensor_plot_right:
+                        self.sensor_plot_right.add_point_landing(t_ms, fx, fy, fz)
+
+            if snapshots:
+                self.canvas_left.set_snapshots(snapshots)
+                self.canvas_right.set_snapshots(snapshots)
+        except Exception:
+            return
 
     # --- Live Testing logging / enablement helpers ---
     def _lt_log(self, msg: str) -> None:
@@ -516,8 +596,18 @@ class FluxLitePage(QtWidgets.QWidget):
         # Hardware -> UI Signals
         self.controller.hardware.device_list_updated.connect(self.controls.set_available_devices)
         self.controller.hardware.device_list_updated.connect(self._on_device_list_updated)
+        # Also pass device list to canvases for mound device picker popups
+        self.controller.hardware.device_list_updated.connect(self.canvas_left.set_available_devices)
+        self.controller.hardware.device_list_updated.connect(self.canvas_right.set_available_devices)
         self.controller.hardware.active_devices_updated.connect(self.controls.update_active_devices)
         self.controller.hardware.active_devices_updated.connect(self._auto_select_active_device)
+
+        # Mound group signals
+        self.controller.hardware.mound_group_created.connect(self._on_mound_group_ready)
+        self.controller.hardware.mound_group_found.connect(self._on_mound_group_ready)
+        self.controller.hardware.mound_group_error.connect(
+            lambda err: print(f"[FluxLitePage] Mound group error: {err}")
+        )
 
         # When device/layout selection changes, re-fit the plate view so it returns
         # to the default framing (80% height/width target).
@@ -640,9 +730,56 @@ class FluxLitePage(QtWidgets.QWidget):
         self.canvas_left.update()
         self.canvas_right.update()
 
+        # Check if all three mound positions are now configured
+        launch = self.state.mound_devices.get("Launch Zone")
+        upper = self.state.mound_devices.get("Upper Landing Zone")
+        lower = self.state.mound_devices.get("Lower Landing Zone")
+
+        if launch and upper and lower:
+            print(f"[FluxLitePage] All mound devices configured: Launch={launch}, Upper={upper}, Lower={lower}")
+            # Find existing or create new mound group
+            self.controller.hardware.find_or_create_mound_group(
+                launch_device_id=launch,
+                upper_landing_device_id=upper,
+                lower_landing_device_id=lower,
+                group_name="Pitching Mound",
+            )
+
+    def _on_mound_group_ready(self, group: dict) -> None:
+        """Handle mound group found or created."""
+        try:
+            group_id = str(group.get("axfId") or group.get("groupId") or "").strip()
+            group_name = str(group.get("name") or group.get("groupName") or "Pitching Mound")
+            print(f"[FluxLitePage] Mound group ready: {group_name} ({group_id})")
+
+            # Store the mound group ID for capture operations
+            self.state.mound_group_id = group_id
+
+            # Update canvases to reflect the configured state
+            self.canvas_left.update()
+            self.canvas_right.update()
+        except Exception as e:
+            print(f"[FluxLitePage] Error handling mound group: {e}")
+
     def _on_live_data(self, payload: dict) -> None:
         """Handle live streaming data from the backend."""
         try:
+            def _cop_to_m(v: object) -> float:
+                """
+                Normalize COP units across backends.
+
+                Most streams provide COP in meters. Some provide COP in millimeters.
+                If magnitude is implausibly large for meters, assume mm and convert to m.
+                """
+                try:
+                    x = float(v or 0.0)
+                except Exception:
+                    return 0.0
+                # COP in meters should typically be within about +/-0.5 m.
+                if abs(x) > 2.0:
+                    return x / 1000.0
+                return x
+
             # Buffer raw payload for discrete temperature testing
             self.controller.testing.buffer_live_payload(payload)
 
@@ -658,6 +795,7 @@ class FluxLitePage(QtWidgets.QWidget):
                         sum_sensor = next((s for s in payload["sensors"] if s.get("name") == "Sum"), None)
                         if sum_sensor:
                             cop_data = payload.get("cop") or {}
+                            moments_data_raw = payload.get("moments") or {}
                             frames.append(
                                 {
                                     "id": did,
@@ -667,6 +805,12 @@ class FluxLitePage(QtWidgets.QWidget):
                                     "time": payload.get("time"),
                                     "avgTemperatureF": payload.get("avgTemperatureF"),
                                     "cop": {"x": float(cop_data.get("x", 0.0)), "y": float(cop_data.get("y", 0.0))},
+                                    "moments": {
+                                        "x": float(moments_data_raw.get("x", 0.0)),
+                                        "y": float(moments_data_raw.get("y", 0.0)),
+                                        "z": float(moments_data_raw.get("z", 0.0)),
+                                    },
+                                    "groupId": payload.get("groupId") or payload.get("group_id"),
                                 }
                             )
                 elif "devices" in payload and isinstance(payload["devices"], list):
@@ -679,14 +823,82 @@ class FluxLitePage(QtWidgets.QWidget):
 
             # Also support mound mode mapping
             mound_map = self.state.mound_devices if self.state.display_mode == "mound" else {}
+            launch_id = str(mound_map.get("Launch Zone") or "").strip()
+            upper_id = str(mound_map.get("Upper Landing Zone") or "").strip()
+            lower_id = str(mound_map.get("Lower Landing Zone") or "").strip()
+            mound_configured = bool(launch_id and upper_id and lower_id)
+            mound_group_id = str(getattr(self.state, "mound_group_id", "") or "").strip()
+
+            # PERF: Once a mound group is ready, ignore per-plate frames and only process mound virtual frames.
+            # This prevents bogging down the UI when both raw plates and virtual devices are streaming.
+            if self.state.display_mode == "mound" and mound_group_id and isinstance(frames, list) and frames:
+                try:
+                    filtered = []
+                    for fr in frames:
+                        did = str((fr or {}).get("id") or (fr or {}).get("deviceId") or "").strip()
+                        if did.startswith("Pitching Mound."):
+                            filtered.append(fr)
+                    if filtered:
+                        frames = filtered
+                except Exception:
+                    pass
+
+            # Smarter mound throttling:
+            # When the mound group is active, just buffer the latest virtual zone samples here (fast),
+            # and let the QTimer render at a stable UI rate.
+            if self.state.display_mode == "mound" and mound_group_id and isinstance(frames, list) and frames:
+                try:
+                    for frame in frames:
+                        did = str((frame or {}).get("id") or (frame or {}).get("deviceId") or "").strip()
+                        if did not in ("Pitching Mound.Launch Zone", "Pitching Mound.Landing Zone"):
+                            continue
+                        frame_group_id = str((frame or {}).get("groupId") or (frame or {}).get("group_id") or "").strip()
+                        if frame_group_id and frame_group_id != mound_group_id:
+                            continue
+                        t_ms = int((frame or {}).get("time") or (frame or {}).get("t") or 0)
+                        if t_ms <= 0:
+                            t_ms = int(time.time() * 1000)
+                        cop = (frame or {}).get("cop") or {}
+                        moments = (frame or {}).get("moments") or {}
+                        entry = {
+                            "t_ms": int(t_ms),
+                            "fx": float((frame or {}).get("fx", 0.0)),
+                            "fy": float((frame or {}).get("fy", 0.0)),
+                            "fz": float((frame or {}).get("fz", 0.0)),
+                            "cop_x": float(_cop_to_m(cop.get("x", 0.0))),
+                            "cop_y": float(_cop_to_m(cop.get("y", 0.0))),
+                            "moments": {"x": float(moments.get("x", 0.0)), "y": float(moments.get("y", 0.0)), "z": float(moments.get("z", 0.0))},
+                            "group_id": frame_group_id,
+                        }
+                        if did.endswith("Launch Zone"):
+                            self._mound_latest["launch"] = entry
+                        else:
+                            self._mound_latest["landing"] = entry
+                    return
+                except Exception:
+                    # If buffering fails, fall back to the legacy per-packet rendering logic below.
+                    pass
+
+            # Sensor View: enable dual-series legend in mound mode
+            try:
+                is_mound = (self.state.display_mode == "mound")
+                if self.sensor_plot_left:
+                    self.sensor_plot_left.set_dual_series_enabled(bool(is_mound))
+                if self.sensor_plot_right:
+                    self.sensor_plot_right.set_dual_series_enabled(bool(is_mound))
+            except Exception:
+                pass
 
             snapshots = {}  # For mound view
             moments_data = {}  # For moments view
+            mound_samples: dict[str, tuple[int, float, float, float]] = {}  # did -> (t_ms, fx, fy, fz) for this packet
+            mound_virtual: dict[str, tuple[int, float, float, float]] = {}  # "launch"/"landing" -> sample
 
             for frame in frames:
                 did = str(frame.get("id") or frame.get("deviceId") or "").strip()
                 if not did:
                     continue
+                frame_group_id = str(frame.get("groupId") or frame.get("group_id") or "").strip()
 
                 try:
                     fx = float(frame.get("fx", 0.0))
@@ -708,8 +920,8 @@ class FluxLitePage(QtWidgets.QWidget):
 
                     # COP
                     cop = frame.get("cop") or {}
-                    cop_x = float(cop.get("x", 0.0))
-                    cop_y = float(cop.get("y", 0.0))
+                    cop_x = _cop_to_m(cop.get("x", 0.0))
+                    cop_y = _cop_to_m(cop.get("y", 0.0))
 
                     # Moments
                     moments = frame.get("moments") or {}
@@ -787,6 +999,27 @@ class FluxLitePage(QtWidgets.QWidget):
 
                     # Mound mapping
                     if self.state.display_mode == "mound":
+                        # Preferred (newer backends): virtual zone devices stream directly.
+                        # Only trust these once a mound group is ready, and optionally match group id.
+                        if did in ("Pitching Mound.Launch Zone", "Pitching Mound.Landing Zone"):
+                            if mound_group_id and frame_group_id and frame_group_id != mound_group_id:
+                                # Ignore packets from a different mound group.
+                                pass
+                            else:
+                                is_visible = abs(fz) > 5.0
+                                snap = (cop_x, cop_y, fz, t_ms, is_visible, cop_x, cop_y)
+                                if did.endswith("Launch Zone"):
+                                    snapshots["Launch Zone"] = snap
+                                    mound_virtual["launch"] = (t_ms, fx, fy, fz)
+                                else:
+                                    # Draw landing COP centered between the two 08 plates.
+                                    snapshots["Landing Zone"] = snap
+                                    mound_virtual["landing"] = (t_ms, fx, fy, fz)
+
+                        # Collect samples so we can avoid interleaving the two landing plates into one series.
+                        if mound_configured and did in (launch_id, upper_id, lower_id):
+                            mound_samples[did] = (t_ms, fx, fy, fz)
+
                         for pos_name, mapped_id in mound_map.items():
                             if mapped_id == did:
                                 is_visible = abs(fz) > 5.0
@@ -800,6 +1033,46 @@ class FluxLitePage(QtWidgets.QWidget):
             if self.state.display_mode == "mound" and snapshots:
                 self.canvas_left.set_snapshots(snapshots)
                 self.canvas_right.set_snapshots(snapshots)
+
+            # Sensor View (dual-series): Launch vs best landing (Upper or Lower) to avoid flicker.
+            if self.state.display_mode == "mound":
+                try:
+                    if mound_virtual:
+                        # Use the explicit virtual zone packets when available.
+                        if "launch" in mound_virtual:
+                            t_ms, fx, fy, fz = mound_virtual["launch"]
+                            if self.sensor_plot_left:
+                                self.sensor_plot_left.add_point_launch(t_ms, fx, fy, fz)
+                            if self.sensor_plot_right:
+                                self.sensor_plot_right.add_point_launch(t_ms, fx, fy, fz)
+                        if "landing" in mound_virtual:
+                            t_ms, fx, fy, fz = mound_virtual["landing"]
+                            if self.sensor_plot_left:
+                                self.sensor_plot_left.add_point_landing(t_ms, fx, fy, fz)
+                            if self.sensor_plot_right:
+                                self.sensor_plot_right.add_point_landing(t_ms, fx, fy, fz)
+                    elif mound_configured and mound_samples:
+                        # Back-compat: Launch vs best landing (Upper or Lower) to avoid flicker.
+                        if launch_id in mound_samples:
+                            t_ms, fx, fy, fz = mound_samples[launch_id]
+                            if self.sensor_plot_left:
+                                self.sensor_plot_left.add_point_launch(t_ms, fx, fy, fz)
+                            if self.sensor_plot_right:
+                                self.sensor_plot_right.add_point_launch(t_ms, fx, fy, fz)
+
+                        cand = []
+                        if upper_id in mound_samples:
+                            cand.append(mound_samples[upper_id])
+                        if lower_id in mound_samples:
+                            cand.append(mound_samples[lower_id])
+                        if cand:
+                            t_ms, fx, fy, fz = max(cand, key=lambda s: abs(float(s[3])))
+                            if self.sensor_plot_left:
+                                self.sensor_plot_left.add_point_landing(t_ms, fx, fy, fz)
+                            if self.sensor_plot_right:
+                                self.sensor_plot_right.add_point_landing(t_ms, fx, fy, fz)
+                except Exception:
+                    pass
 
             if moments_data:
                 try:
