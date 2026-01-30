@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
+import sys
 from pathlib import Path
 from typing import Optional
 
-from PySide6 import QtWidgets, QtGui
+from PySide6 import QtWidgets, QtGui, QtCore
 
 from .dialogs.backend_log_dialog import BackendLogDialog
 from .tools.launcher_page import ToolLauncherPage
@@ -14,6 +16,9 @@ from .tools.web_tool_page import WebToolPage
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
+        self._logger = logging.getLogger(__name__)
+        self._backend_ready = False
+        self._backend_probe_attempts = 0
         self.setWindowTitle("FluxDeluxe")
 
         # Window icon (matches app icon set in fluxdeluxe/main.py)
@@ -70,7 +75,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_backend_logs.clicked.connect(self._show_backend_logs)
         self.statusBar().addPermanentWidget(self.btn_backend_logs)
 
-        # Start reading backend logs
+        # Start reading backend logs (and mark backend ready when detected)
         self._setup_backend_log_reader()
 
         # Always start at Home (tool grid)
@@ -83,6 +88,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.status_label.setText("")
         except Exception:
             pass
+
+    def is_backend_ready(self) -> bool:
+        return bool(self._backend_ready)
 
     def _ensure_fluxlite_page(self) -> QtWidgets.QWidget:
         if self._fluxlite_page is not None:
@@ -126,6 +134,14 @@ class MainWindow(QtWidgets.QMainWindow):
             return ph
 
     def open_tool(self, tool_id: str) -> None:
+        # Avoid UI-triggered races: do not open tools until backend is detected.
+        if not self._backend_ready:
+            try:
+                self.status_label.setText("Starting backend…")
+            except Exception:
+                pass
+            return
+
         tool_id = str(tool_id or "").strip()
         spec = self._tool_by_id.get(tool_id)
         if spec is None:
@@ -149,23 +165,47 @@ class MainWindow(QtWidgets.QMainWindow):
     def _setup_backend_log_reader(self) -> None:
         """Set up the backend log dialog to read from the DynamoDeluxe process."""
         try:
-            # Import the module directly to avoid relative import issues
-            import FluxDeluxe.main as main_module
+            main_module = self._resolve_main_module()
+            process = getattr(main_module, "get_dynamo_process", lambda: None)()
 
-            process = main_module.get_dynamo_process()
-            print(f"[DEBUG] _setup_backend_log_reader: process = {process}")
-            print(f"[DEBUG] main_module._dynamo_process = {main_module._dynamo_process}")
             if process is not None:
-                print(f"[DEBUG] Process PID: {process.pid}, stdout: {process.stdout}, stderr: {process.stderr}")
                 dialog = BackendLogDialog.get_instance(self)
                 dialog.start_reading(process)
-                print("[DEBUG] Log reader started")
+                self._backend_ready = True
+                try:
+                    self.status_label.setText("Backend ready")
+                except Exception:
+                    pass
+                return
+
+            # Backend handle not available yet: retry a few times.
+            self._backend_probe_attempts += 1
+            if self._backend_probe_attempts <= 25:
+                try:
+                    self.status_label.setText("Starting backend…")
+                except Exception:
+                    pass
+                QtCore.QTimer.singleShot(200, self._setup_backend_log_reader)
             else:
-                print("[DEBUG] No process found - backend may have failed to start")
-        except Exception as e:
-            print(f"[DEBUG] Error setting up log reader: {e}")
-            import traceback
-            traceback.print_exc()
+                self._logger.warning("Backend process handle not found after retries.")
+                try:
+                    self.status_label.setText("Backend not detected")
+                except Exception:
+                    pass
+        except Exception:
+            self._logger.exception("Error setting up backend log reader")
+
+    def _resolve_main_module(self):
+        """Resolve the running main module (works with `-m` and with normal imports)."""
+        # If launched via `python -m FluxDeluxe.main`, the process is stored on __main__.
+        mod = sys.modules.get("__main__")
+        if mod is not None and hasattr(mod, "get_dynamo_process"):
+            return mod
+
+        # Otherwise (or after our aliasing), this should work.
+        import FluxDeluxe.main as main_module  # type: ignore
+
+        return main_module
 
     def _show_backend_logs(self) -> None:
         """Show the backend log dialog."""

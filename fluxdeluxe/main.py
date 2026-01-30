@@ -7,6 +7,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+# If this module is executed via `python -m FluxDeluxe.main`, it runs as `__main__`.
+# Other parts of the app may later do `import FluxDeluxe.main`, which would otherwise
+# create a second module instance with a different `_dynamo_process`. Alias the running
+# module so imports see the same state.
+if __name__ == "__main__":
+    sys.modules.setdefault("FluxDeluxe.main", sys.modules[__name__])
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -206,6 +213,8 @@ def run_qt() -> int:
         pass
 
     from PySide6 import QtGui, QtWidgets  # type: ignore
+    from PySide6 import QtCore  # type: ignore
+    from PySide6.QtCore import Qt  # type: ignore
 
     from .ui.main_window import MainWindow
 
@@ -219,6 +228,20 @@ def run_qt() -> int:
             app.setWindowIcon(icon)
     except Exception:
         pass
+
+    # Splash screen while app + backend come up.
+    splash = None
+    try:
+        icon_path = Path(__file__).resolve().parent / "ui" / "assets" / "icons" / "fluxliteicon.svg"
+        pix = QtGui.QIcon(str(icon_path)).pixmap(256, 256)
+        if not pix.isNull():
+            splash = QtWidgets.QSplashScreen(pix)
+            splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            splash.setEnabled(False)
+            splash.show()
+            app.processEvents()
+    except Exception:
+        splash = None
 
     # Global theme (QSS). Rewrite url("assets/...") to absolute paths so icons work reliably.
     try:
@@ -244,6 +267,35 @@ def run_qt() -> int:
 
     win = MainWindow()
     win.showMaximized()
+
+    # Close splash once backend is detected (or after a short timeout).
+    if splash is not None:
+        try:
+            max_ms = 6000
+            interval_ms = 100
+            elapsed_ms = 0
+
+            def _tick() -> None:
+                nonlocal elapsed_ms
+                elapsed_ms += interval_ms
+                try:
+                    if win.is_backend_ready() or elapsed_ms >= max_ms:
+                        splash.finish(win)
+                        splash.deleteLater()
+                        return
+                except Exception:
+                    splash.finish(win)
+                    splash.deleteLater()
+                    return
+                QtCore.QTimer.singleShot(interval_ms, _tick)
+
+            QtCore.QTimer.singleShot(interval_ms, _tick)
+        except Exception:
+            try:
+                splash.finish(win)
+                splash.deleteLater()
+            except Exception:
+                pass
 
     rc = app.exec()
     return int(rc)
