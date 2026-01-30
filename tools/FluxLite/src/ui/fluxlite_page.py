@@ -8,10 +8,8 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from .. import config
 from ..app_services.live_measurement_engine import LiveMeasurementEngine
-from ..app_services.live_session_gate import LiveSessionGate
 from ..app_services.live_test_capture import CaptureContext, TemperatureLiveCaptureManager
 from ..app_services.temperature_post_correction import apply_post_correction_to_run_data, compute_delta_t_f
-from ..domain.models import TestResult
 from .bridge import UiBridge  # Keep for compatibility if needed by other components
 from .controllers.main_controller import MainController
 from .pane_switcher import PaneSwitcher
@@ -23,9 +21,12 @@ from .widgets.temp_coef_widget import TempCoefWidget
 from .widgets.temp_plot_widget import TempPlotWidget
 from .widgets.world_canvas import WorldCanvas
 from .widgets.live_cell_details import LiveCellDetailsPanel
-from .dialogs.warmup_prompt import WarmupPromptDialog
-from .dialogs.tare_prompt import TarePromptDialog
 from .dialogs.stage_switch_prompt import StageSwitchPromptDialog
+from .mound_render_throttler import MoundRenderThrottler
+from .periodic_tare import PeriodicTareController
+from .live_data_frames import extract_device_frames
+from .live_session_gate_ui import LiveSessionGateUi
+from .live_measurement_ui import LiveMeasurementUi
 
 
 class FluxLitePage(QtWidgets.QWidget):
@@ -60,12 +61,18 @@ class FluxLitePage(QtWidgets.QWidget):
         self._live_status_bar_last_text: str = ""
         self._live_status_bar_last_pct: int = -1
         self._live_status_bar_last_mode: str = "idle"
-        self._live_meas_active_cell_last: tuple[int, int] | None = None
+        self._live_measurement_ui = LiveMeasurementUi(engine=self._live_meas)
         # Live session gating: Warmup -> Off-plate tare -> Active session
-        self._live_gate = LiveSessionGate()
-        self._live_gate_phase_last: str = "inactive"
-        self._warmup_dialog: WarmupPromptDialog | None = None
-        self._tare_dialog: TarePromptDialog | None = None
+        self._live_gate_ui = LiveSessionGateUi(
+            parent=self,
+            log=self._lt_log,
+            tare=lambda: self.controller.hardware.tare(""),
+            on_enter_active=lambda t_ms: (
+                self._periodic_tare.start(int(t_ms)),
+                self._lt_log(f"Periodic tare timer started (interval={int(getattr(self._periodic_tare, 'interval_ms', 0) or 0)}ms)"),
+            ),
+            clear_gate_status=self._clear_gate_status,
+        )
         # Temperature live-testing CSV/raw capture lifecycle (backend-driven)
         self._temp_live_capture = TemperatureLiveCaptureManager(self.controller.hardware)
         self._temp_live_capture_ctx: CaptureContext | None = None
@@ -74,21 +81,20 @@ class FluxLitePage(QtWidgets.QWidget):
         self._stage_switch_pending: bool = False
         self._stage_switch_target_idx: int = -1
         # Periodic auto-tare (every 90 seconds after initial tare)
-        self._periodic_tare_interval_ms: int = 90_000  # 90 seconds
-        self._periodic_tare_last_ms: int = 0
-        self._periodic_tare_pending: bool = False
-        self._periodic_tare_countdown_start_ms: int = 0
-        self._periodic_tare_dialog: TarePromptDialog | None = None
-        self._periodic_tare_due: bool = False  # Timer expired but waiting for measurement
-        self._periodic_tare_waiting_cell: tuple[int, int] | None = None  # Cell we're waiting on
+        self._periodic_tare = PeriodicTareController(
+            parent=self,
+            tare=lambda: self.controller.hardware.tare(""),
+            log=self._lt_log,
+            get_stream_time_last_ms=lambda: int(getattr(self, "_stream_time_last_ms", 0) or 0),
+            interval_ms=90_000,
+        )
         # Some backends send missing/stale timestamps; maintain a monotonic stream clock for countdowns.
         self._stream_time_last_ms: int = 0
 
         # --- Mound render throttling (smooth 60 Hz UI) ---
         # We may receive mound packets at ~400-500 Hz. We buffer the latest Launch/Landing samples and
         # render them at a fixed UI rate via a GUI-thread QTimer to avoid choppy/jittery updates.
-        self._mound_latest: dict[str, dict] = {}  # keys: "launch" | "landing" -> {t_ms, fx, fy, fz, cop_x, cop_y, moments, group_id}
-        self._mound_last_rendered_ms: dict[str, int] = {"launch": 0, "landing": 0}
+        self._mound_throttler = MoundRenderThrottler()
         self._mound_render_timer = QtCore.QTimer(self)
         try:
             hz = int(getattr(config, "UI_TICK_HZ", 60))
@@ -118,59 +124,15 @@ class FluxLitePage(QtWidgets.QWidget):
         by bursty packet arrival / uneven per-packet processing time.
         """
         try:
-            if self.state.display_mode != "mound":
-                return
             mound_group_id = str(getattr(self.state, "mound_group_id", "") or "").strip()
-            if not mound_group_id:
-                return
-            latest = self._mound_latest or {}
-            if not latest:
-                return
-
-            # Ensure dual-series UI is enabled while in mound mode (idempotent).
-            try:
-                if self.sensor_plot_left:
-                    self.sensor_plot_left.set_dual_series_enabled(True)
-                if self.sensor_plot_right:
-                    self.sensor_plot_right.set_dual_series_enabled(True)
-            except Exception:
-                pass
-
-            snapshots = {}
-
-            # Launch zone
-            l = latest.get("launch") if isinstance(latest.get("launch"), dict) else None
-            if l:
-                is_visible = abs(float(l.get("fz", 0.0))) > 5.0
-                snap = (float(l.get("cop_x", 0.0)), float(l.get("cop_y", 0.0)), float(l.get("fz", 0.0)), int(l.get("t_ms", 0)), bool(is_visible), float(l.get("cop_x", 0.0)), float(l.get("cop_y", 0.0)))
-                snapshots["Launch Zone"] = snap
-                t_ms = int(l.get("t_ms", 0) or 0)
-                if t_ms and t_ms != int(self._mound_last_rendered_ms.get("launch", 0) or 0):
-                    self._mound_last_rendered_ms["launch"] = t_ms
-                    fx, fy, fz = float(l.get("fx", 0.0)), float(l.get("fy", 0.0)), float(l.get("fz", 0.0))
-                    if self.sensor_plot_left:
-                        self.sensor_plot_left.add_point_launch(t_ms, fx, fy, fz)
-                    if self.sensor_plot_right:
-                        self.sensor_plot_right.add_point_launch(t_ms, fx, fy, fz)
-
-            # Landing zone (virtual midpoint between the two 08 plates)
-            r = latest.get("landing") if isinstance(latest.get("landing"), dict) else None
-            if r:
-                is_visible = abs(float(r.get("fz", 0.0))) > 5.0
-                snap = (float(r.get("cop_x", 0.0)), float(r.get("cop_y", 0.0)), float(r.get("fz", 0.0)), int(r.get("t_ms", 0)), bool(is_visible), float(r.get("cop_x", 0.0)), float(r.get("cop_y", 0.0)))
-                snapshots["Landing Zone"] = snap
-                t_ms = int(r.get("t_ms", 0) or 0)
-                if t_ms and t_ms != int(self._mound_last_rendered_ms.get("landing", 0) or 0):
-                    self._mound_last_rendered_ms["landing"] = t_ms
-                    fx, fy, fz = float(r.get("fx", 0.0)), float(r.get("fy", 0.0)), float(r.get("fz", 0.0))
-                    if self.sensor_plot_left:
-                        self.sensor_plot_left.add_point_landing(t_ms, fx, fy, fz)
-                    if self.sensor_plot_right:
-                        self.sensor_plot_right.add_point_landing(t_ms, fx, fy, fz)
-
-            if snapshots:
-                self.canvas_left.set_snapshots(snapshots)
-                self.canvas_right.set_snapshots(snapshots)
+            self._mound_throttler.on_tick(
+                display_mode=str(getattr(self.state, "display_mode", "") or ""),
+                mound_group_id=mound_group_id,
+                canvas_left=getattr(self, "canvas_left", None),
+                canvas_right=getattr(self, "canvas_right", None),
+                sensor_plot_left=getattr(self, "sensor_plot_left", None),
+                sensor_plot_right=getattr(self, "sensor_plot_right", None),
+            )
         except Exception:
             return
 
@@ -261,56 +223,13 @@ class FluxLitePage(QtWidgets.QWidget):
         except Exception:
             pass
 
-    def _close_gate_dialogs(self) -> None:
-        """Close warmup/tare dialogs without ending the session."""
-        try:
-            if self._warmup_dialog is not None:
-                try:
-                    self._warmup_dialog.rejected.disconnect()
-                except Exception:
-                    pass
-                self._warmup_dialog.close()
-        except Exception:
-            pass
-        try:
-            if self._tare_dialog is not None:
-                try:
-                    self._tare_dialog.rejected.disconnect()
-                except Exception:
-                    pass
-                self._tare_dialog.close()
-        except Exception:
-            pass
-        self._warmup_dialog = None
-        self._tare_dialog = None
-
-    def _safe_close_gate_dialog(self, dlg: QtWidgets.QDialog | None) -> None:
-        """Close a single gate dialog, ensuring it can't end the session."""
-        if dlg is None:
-            return
-        try:
-            try:
-                dlg.rejected.disconnect()
-            except Exception:
-                pass
-            dlg.close()
-        except Exception:
-            pass
-
     def _reset_live_gate(self, reason: str = "") -> None:
         """Reset warmup/tare gating state."""
-        self._close_gate_dialogs()
         try:
-            self._live_gate.reset()
+            self._live_gate_ui.reset(reason=reason)
         except Exception:
             pass
-        self._live_gate_phase_last = "inactive"
         self._stream_time_last_ms = 0
-        if reason:
-            try:
-                self._lt_log(f"gate_reset: {reason}")
-            except Exception:
-                pass
 
     def _reset_live_measurement_engine(self, reason: str = "") -> None:
         """Reset only arming/stability/capture state (does NOT touch warmup/tare gate)."""
@@ -320,7 +239,10 @@ class FluxLitePage(QtWidgets.QWidget):
             pass
         self._live_meas_status_last = ""
         self._set_live_status_bar_state(mode="idle", text="", pct=None)
-        self._live_meas_active_cell_last = None
+        try:
+            self._live_measurement_ui.reset_ui_state()
+        except Exception:
+            pass
         try:
             self.canvas_left.set_live_active_cell(None, None)
             self.canvas_right.set_live_active_cell(None, None)
@@ -382,6 +304,14 @@ class FluxLitePage(QtWidgets.QWidget):
                 self.live_status_bar.setVisible(True)
         except Exception:
             pass
+
+    def _clear_gate_status(self) -> None:
+        """Clear gate-related UI status (overlay + bottom status bar)."""
+        try:
+            self.canvas_left.set_live_status(None)
+        except Exception:
+            pass
+        self._set_live_status_bar_state(mode="idle", text="", pct=None)
 
     def _setup_ui(self) -> None:
         outer = QtWidgets.QVBoxLayout(self)
@@ -784,39 +714,7 @@ class FluxLitePage(QtWidgets.QWidget):
             self.controller.testing.buffer_live_payload(payload)
 
             # Extract list of device frames
-            frames = []
-            if isinstance(payload, list):
-                frames = payload
-            elif isinstance(payload, dict):
-                # Check for "sensors" list (raw data stream) vs "devices" list (processed stream)
-                if "sensors" in payload and isinstance(payload["sensors"], list):
-                    did = str(payload.get("deviceId") or "").strip()
-                    if did:
-                        sum_sensor = next((s for s in payload["sensors"] if s.get("name") == "Sum"), None)
-                        if sum_sensor:
-                            cop_data = payload.get("cop") or {}
-                            moments_data_raw = payload.get("moments") or {}
-                            frames.append(
-                                {
-                                    "id": did,
-                                    "fx": float(sum_sensor.get("x", 0.0)),
-                                    "fy": float(sum_sensor.get("y", 0.0)),
-                                    "fz": float(sum_sensor.get("z", 0.0)),
-                                    "time": payload.get("time"),
-                                    "avgTemperatureF": payload.get("avgTemperatureF"),
-                                    "cop": {"x": float(cop_data.get("x", 0.0)), "y": float(cop_data.get("y", 0.0))},
-                                    "moments": {
-                                        "x": float(moments_data_raw.get("x", 0.0)),
-                                        "y": float(moments_data_raw.get("y", 0.0)),
-                                        "z": float(moments_data_raw.get("z", 0.0)),
-                                    },
-                                    "groupId": payload.get("groupId") or payload.get("group_id"),
-                                }
-                            )
-                elif "devices" in payload and isinstance(payload["devices"], list):
-                    frames = payload["devices"]
-                elif "id" in payload or "deviceId" in payload:
-                    frames = [payload]
+            frames = extract_device_frames(payload)
 
             # Find the "active" device selected in UI
             selected_id = (self.state.selected_device_id or "").strip()
@@ -846,38 +744,13 @@ class FluxLitePage(QtWidgets.QWidget):
             # Smarter mound throttling:
             # When the mound group is active, just buffer the latest virtual zone samples here (fast),
             # and let the QTimer render at a stable UI rate.
-            if self.state.display_mode == "mound" and mound_group_id and isinstance(frames, list) and frames:
-                try:
-                    for frame in frames:
-                        did = str((frame or {}).get("id") or (frame or {}).get("deviceId") or "").strip()
-                        if did not in ("Pitching Mound.Launch Zone", "Pitching Mound.Landing Zone"):
-                            continue
-                        frame_group_id = str((frame or {}).get("groupId") or (frame or {}).get("group_id") or "").strip()
-                        if frame_group_id and frame_group_id != mound_group_id:
-                            continue
-                        t_ms = int((frame or {}).get("time") or (frame or {}).get("t") or 0)
-                        if t_ms <= 0:
-                            t_ms = int(time.time() * 1000)
-                        cop = (frame or {}).get("cop") or {}
-                        moments = (frame or {}).get("moments") or {}
-                        entry = {
-                            "t_ms": int(t_ms),
-                            "fx": float((frame or {}).get("fx", 0.0)),
-                            "fy": float((frame or {}).get("fy", 0.0)),
-                            "fz": float((frame or {}).get("fz", 0.0)),
-                            "cop_x": float(_cop_to_m(cop.get("x", 0.0))),
-                            "cop_y": float(_cop_to_m(cop.get("y", 0.0))),
-                            "moments": {"x": float(moments.get("x", 0.0)), "y": float(moments.get("y", 0.0)), "z": float(moments.get("z", 0.0))},
-                            "group_id": frame_group_id,
-                        }
-                        if did.endswith("Launch Zone"):
-                            self._mound_latest["launch"] = entry
-                        else:
-                            self._mound_latest["landing"] = entry
-                    return
-                except Exception:
-                    # If buffering fails, fall back to the legacy per-packet rendering logic below.
-                    pass
+            if self._mound_throttler.try_buffer_virtual_zone_frames(
+                display_mode=str(getattr(self.state, "display_mode", "") or ""),
+                mound_group_id=str(mound_group_id or ""),
+                frames=frames if isinstance(frames, list) else [],
+                cop_to_m=_cop_to_m,
+            ):
+                return
 
             # Sensor View: enable dual-series legend in mound mode
             try:
@@ -958,13 +831,6 @@ class FluxLitePage(QtWidgets.QWidget):
                         self.canvas_left.set_single_snapshot(snap)
                         self.canvas_right.set_single_snapshot(snap)  # Sync if both showing plate
 
-                        # If tare dialog is showing, keep the live force label updated
-                        try:
-                            if self._tare_dialog is not None:
-                                self._tare_dialog.set_force(float(abs(fz)))
-                        except Exception:
-                            pass
-
                         # If stage switch dialog is showing, update force and check threshold
                         try:
                             if self._stage_switch_pending and self._stage_switch_dialog is not None:
@@ -974,20 +840,32 @@ class FluxLitePage(QtWidgets.QWidget):
 
                         # Live testing warmup/tare gating (must complete before measurement)
                         try:
-                            self._process_live_session_gate(t_ms=int(t_ms), fz_abs_n=float(abs(fz)))
+                            self._live_gate_ui.process_sample(
+                                t_ms=int(t_ms),
+                                fz_abs_n=float(abs(fz)),
+                                stage_switch_pending=bool(self._stage_switch_pending),
+                            )
                         except Exception:
                             pass
 
                         # Check periodic tare (every 90 seconds after initial tare)
                         try:
-                            self._check_periodic_tare(t_ms=int(t_ms), fz_abs_n=float(abs(fz)))
+                            self._periodic_tare.tick(
+                                t_ms=int(t_ms),
+                                fz_abs_n=float(abs(fz)),
+                                    gate_phase=str(getattr(self._live_gate_ui, "phase", "inactive") or "inactive"),
+                                stage_switch_pending=bool(getattr(self, "_stage_switch_pending", False)),
+                                live_meas_phase=str(getattr(self._live_meas, "phase", "idle") or "idle"),
+                                live_meas_active_cell=getattr(self._live_meas, "active_cell", None),
+                            )
                         except Exception:
                             pass
 
                         # Live testing measurement engine (arming -> stability -> capture)
-                        if self._live_gate.is_active():
+                        if self._live_gate_ui.is_active():
                             try:
-                                self._process_live_measurement(
+                                self._live_measurement_ui.process_sample(
+                                    self,
                                     t_ms=t_ms,
                                     cop_x_m=cop_x,
                                     cop_y_m=cop_y,
@@ -1140,20 +1018,9 @@ class FluxLitePage(QtWidgets.QWidget):
             pass
         self._update_live_stage_nav("session_started")
         try:
-            self._live_gate.begin()
-            self._live_gate_phase_last = self._live_gate.phase
+            self._live_gate_ui.start_session(warmup_duration_s=20)
         except Exception:
-            return
-        # Warmup dialog shown immediately; countdown begins on first >=50N contact.
-        try:
-            dlg = WarmupPromptDialog(self, duration_s=20)
-            dlg.set_waiting_for_trigger(True)
-            dlg.set_remaining(20)
-            dlg.rejected.connect(self._on_warmup_dialog_dismissed)
-            self._warmup_dialog = dlg
-            dlg.show()
-        except Exception:
-            self._warmup_dialog = None
+            pass
 
     def _on_live_session_ended(self) -> None:
         """Clean up when a live test session ends."""
@@ -1170,437 +1037,18 @@ class FluxLitePage(QtWidgets.QWidget):
         # Close stage switch dialog if open
         self._close_stage_switch_dialog()
         # Reset periodic tare state
-        self._reset_periodic_tare()
+        try:
+            self._periodic_tare.reset()
+        except Exception:
+            pass
         # Unlock session controls
         try:
             self.controls.live_testing_panel.set_session_controls_locked(False)
         except Exception:
             pass
 
-    def _on_warmup_dialog_dismissed(self) -> None:
-        """
-        User dismissed warmup dialog (X / Esc).
-        Treat warmup as done and proceed to tare.
-        """
-        try:
-            if self._live_gate.phase == "warmup":
-                self._lt_log("gate_skip: warmup dismissed -> tare")
-                self._live_gate.skip_warmup()
-        except Exception:
-            pass
-
-    def _on_tare_dialog_dismissed(self) -> None:
-        """
-        User dismissed tare dialog (X / Esc).
-        Treat tare stage as done WITHOUT taring, and allow testing.
-        """
-        try:
-            if self._live_gate.phase == "tare":
-                self._lt_log("gate_skip: tare dismissed -> active (no tare)")
-                self._live_gate.skip_tare()
-                # Clear any status from gating immediately.
-                try:
-                    self.canvas_left.set_live_status(None)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
     # --- Periodic Auto-Tare (every 90 seconds) ---
-
-    def _check_periodic_tare(self, t_ms: int, fz_abs_n: float) -> None:
-        """Check if periodic tare is due and handle the tare dialog."""
-        # Only run periodic tare when gate is active and no other dialogs are pending
-        if self._live_gate.phase != "active":
-            return
-        if self._stage_switch_pending:
-            return
-
-        # If periodic tare dialog is already showing, update it
-        if self._periodic_tare_pending:
-            self._update_periodic_tare_dialog(t_ms, fz_abs_n)
-            return
-
-        # Check if we're waiting for a measurement to complete before showing tare
-        if self._periodic_tare_due:
-            self._check_periodic_tare_waiting(t_ms)
-            return
-
-        # Check if interval has elapsed
-        elapsed = int(t_ms) - self._periodic_tare_last_ms
-        if elapsed >= self._periodic_tare_interval_ms:
-            # Check if we're mid-arming or mid-measurement
-            phase = str(getattr(self._live_meas, "phase", "idle") or "idle")
-            active_cell = getattr(self._live_meas, "active_cell", None)
-
-            if phase in ("arming", "measuring") and active_cell is not None:
-                # Don't interrupt - mark as due and wait
-                self._periodic_tare_due = True
-                self._periodic_tare_waiting_cell = active_cell
-                self._lt_log(f"Periodic tare due but waiting (phase={phase}, cell={active_cell})")
-            else:
-                # Safe to show dialog immediately
-                self._show_periodic_tare_dialog(t_ms)
-
-    def _check_periodic_tare_waiting(self, t_ms: int) -> None:
-        """Check if we should trigger periodic tare while waiting for measurement."""
-        phase = str(getattr(self._live_meas, "phase", "idle") or "idle")
-        active_cell = getattr(self._live_meas, "active_cell", None)
-
-        # If measurement completed (phase is idle), show the dialog
-        if phase == "idle":
-            self._lt_log("Periodic tare: measurement completed, showing dialog")
-            self._periodic_tare_due = False
-            self._periodic_tare_waiting_cell = None
-            self._show_periodic_tare_dialog(t_ms)
-            return
-
-        # If the cell changed while we were waiting, force tare immediately
-        if self._periodic_tare_waiting_cell is not None and active_cell != self._periodic_tare_waiting_cell:
-            self._lt_log(f"Periodic tare: cell changed from {self._periodic_tare_waiting_cell} to {active_cell}, forcing tare")
-            self._periodic_tare_due = False
-            self._periodic_tare_waiting_cell = None
-            self._show_periodic_tare_dialog(t_ms)
-
-    def _show_periodic_tare_dialog(self, t_ms: int) -> None:
-        """Show the periodic tare dialog."""
-        if self._periodic_tare_pending:
-            return
-
-        self._periodic_tare_pending = True
-        self._periodic_tare_countdown_start_ms = 0  # Will be set when force < 50N
-
-        try:
-            dlg = TarePromptDialog(self)
-            dlg.setWindowTitle("Periodic Tare")
-            dlg.rejected.connect(self._on_periodic_tare_dialog_dismissed)
-            self._periodic_tare_dialog = dlg
-            dlg.set_countdown(15)
-            dlg.show()
-            self._lt_log("Periodic tare dialog shown")
-        except Exception:
-            self._periodic_tare_pending = False
-            self._periodic_tare_dialog = None
-
-    def _update_periodic_tare_dialog(self, t_ms: int, fz_abs_n: float) -> None:
-        """Update the periodic tare dialog with force and countdown."""
-        if not self._periodic_tare_pending or self._periodic_tare_dialog is None:
-            return
-
-        try:
-            self._periodic_tare_dialog.set_force(float(fz_abs_n))
-        except Exception:
-            pass
-
-        # Check if force is below 50N
-        if fz_abs_n < 50.0:
-            # Start or continue countdown
-            if self._periodic_tare_countdown_start_ms == 0:
-                self._periodic_tare_countdown_start_ms = int(t_ms)
-                self._lt_log("Periodic tare countdown started (force < 50N)")
-
-            elapsed_s = (int(t_ms) - self._periodic_tare_countdown_start_ms) / 1000.0
-            remaining_s = max(0, 15 - int(elapsed_s))
-
-            try:
-                self._periodic_tare_dialog.set_countdown(remaining_s)
-            except Exception:
-                pass
-
-            # Check if countdown complete
-            if elapsed_s >= 15.0:
-                self._complete_periodic_tare(t_ms)
-        else:
-            # Force went back above 50N, reset countdown
-            if self._periodic_tare_countdown_start_ms != 0:
-                self._lt_log("Periodic tare countdown reset (force >= 50N)")
-            self._periodic_tare_countdown_start_ms = 0
-            try:
-                self._periodic_tare_dialog.set_countdown(15)
-            except Exception:
-                pass
-
-    def _complete_periodic_tare(self, t_ms: int) -> None:
-        """Complete the periodic tare: issue tare command and close dialog."""
-        try:
-            self.controller.hardware.tare("")
-            self._lt_log("Periodic tare: issued hardware tare")
-        except Exception:
-            pass
-
-        self._close_periodic_tare_dialog()
-        # Reset timer for next periodic tare
-        self._periodic_tare_last_ms = int(t_ms)
-
-    def _on_periodic_tare_dialog_dismissed(self) -> None:
-        """User dismissed the periodic tare dialog (X / Esc)."""
-        self._lt_log("Periodic tare dialog dismissed by user (skipping tare)")
-        self._close_periodic_tare_dialog()
-        # Reset timer anyway so they get another chance in 90 seconds
-        self._periodic_tare_last_ms = self._stream_time_last_ms
-
-    def _close_periodic_tare_dialog(self) -> None:
-        """Close the periodic tare dialog and reset state."""
-        try:
-            if self._periodic_tare_dialog is not None:
-                try:
-                    self._periodic_tare_dialog.rejected.disconnect()
-                except Exception:
-                    pass
-                self._periodic_tare_dialog.close()
-        except Exception:
-            pass
-        self._periodic_tare_dialog = None
-        self._periodic_tare_pending = False
-        self._periodic_tare_countdown_start_ms = 0
-
-    def _reset_periodic_tare(self) -> None:
-        """Reset periodic tare state (called when session ends)."""
-        self._close_periodic_tare_dialog()
-        self._periodic_tare_last_ms = 0
-        self._periodic_tare_due = False
-        self._periodic_tare_waiting_cell = None
-
-    def _process_live_session_gate(self, *, t_ms: int, fz_abs_n: float) -> None:
-        """Advance warmup/tare gating using the current force sample."""
-        sess = self.controller.testing.current_session
-        if not sess:
-            return
-        if bool(getattr(sess, "is_discrete_temp", False)):
-            return
-        if self._live_gate.phase == "inactive":
-            return
-
-        info = self._live_gate.update(now_ms=int(t_ms), fz_abs_n=float(fz_abs_n))
-        phase = str(info.get("phase") or "inactive")
-
-        # Phase transitions drive dialog lifecycle
-        if phase != self._live_gate_phase_last:
-            self._live_gate_phase_last = phase
-            try:
-                self._lt_log(f"gate_phase -> {phase}")
-            except Exception:
-                pass
-            # Close warmup dialog when leaving warmup
-            if phase != "warmup":
-                self._safe_close_gate_dialog(self._warmup_dialog)
-                self._warmup_dialog = None
-            # Show tare dialog when entering tare
-            if phase == "tare":
-                try:
-                    td = TarePromptDialog(self)
-                    td.rejected.connect(self._on_tare_dialog_dismissed)
-                    self._tare_dialog = td
-                    td.set_force(float(fz_abs_n))
-                    td.set_countdown(15)
-                    td.show()
-                except Exception:
-                    self._tare_dialog = None
-            # Close tare dialog when entering active
-            if phase == "active":
-                self._safe_close_gate_dialog(self._tare_dialog)
-                self._tare_dialog = None
-                # Start periodic tare timer
-                self._periodic_tare_last_ms = int(t_ms)
-                self._periodic_tare_pending = False
-                self._lt_log(f"Periodic tare timer started (interval={self._periodic_tare_interval_ms}ms)")
-                # Clear any status from gating (overlay + status bar)
-                try:
-                    self.canvas_left.set_live_status(None)
-                except Exception:
-                    pass
-                self._set_live_status_bar_state(mode="idle", text="", pct=None)
-
-        # Update dialog contents
-        if phase == "warmup":
-            try:
-                triggered = bool(info.get("warmup_triggered"))
-                remaining = info.get("warmup_remaining_s")
-                if self._warmup_dialog is not None:
-                    self._warmup_dialog.set_waiting_for_trigger(not triggered)
-                    if remaining is None:
-                        self._warmup_dialog.set_remaining(20)
-                    else:
-                        self._warmup_dialog.set_remaining(int(remaining))
-            except Exception:
-                pass
-            return
-
-        if phase == "tare":
-            try:
-                remaining = info.get("tare_remaining_s")
-                if self._tare_dialog is not None:
-                    self._tare_dialog.set_force(float(fz_abs_n))
-                    self._tare_dialog.set_countdown(int(remaining) if remaining is not None else 15)
-            except Exception:
-                pass
-
-        # Fire tare exactly once when the gate says so
-        if bool(info.get("should_tare")):
-            try:
-                self.controller.hardware.tare("")
-                self._lt_log("gate_tare: issued hardware tare")
-            except Exception:
-                pass
-
-    def _process_live_measurement(self, *, t_ms: int, cop_x_m: float, cop_y_m: float, fz_n: float, is_visible: bool) -> None:
-        """
-        Run arming/stability/capture for the currently-selected device when a live session is active.
-        """
-        sess = self.controller.testing.current_session
-        if not sess:
-            return
-        # Do not capture measurements while stage switch dialog is showing
-        if self._stage_switch_pending:
-            return
-        # Do not capture measurements while periodic tare dialog is showing
-        if self._periodic_tare_pending:
-            return
-        # Do not change discrete-temp capture behavior yet (it has its own flow).
-        if bool(getattr(sess, "is_discrete_temp", False)):
-            return
-        if self.state.display_mode != "single":
-            return
-
-        selected_id = (self.state.selected_device_id or "").strip()
-        if not selected_id:
-            return
-        # Session is tied to a specific device id
-        if str(getattr(sess, "device_id", "") or "").strip() != selected_id:
-            return
-
-        try:
-            stage_idx = int(getattr(self.controller.testing, "current_stage_index", 0))
-        except Exception:
-            stage_idx = 0
-        try:
-            stage = sess.stages[stage_idx]
-        except Exception:
-            return
-
-        dev_type = (self.state.selected_device_type or "").strip() or str(getattr(sess, "model_id", "") or "").strip() or "06"
-        rows = int(getattr(sess, "grid_rows", 0) or 0)
-        cols = int(getattr(sess, "grid_cols", 0) or 0)
-        if rows <= 0 or cols <= 0:
-            return
-
-        # COP from backend is in meters (renderer converts m->mm). Convert here too.
-        cop_x_mm = float(cop_x_m) * 1000.0
-        cop_y_mm = float(cop_y_m) * 1000.0
-
-        try:
-            rot_k = int(self.canvas_left.get_rotation_quadrants())
-        except Exception:
-            rot_k = 0
-
-        def _already_done(r: int, c: int) -> bool:
-            try:
-                existing = (stage.results or {}).get((int(r), int(c)))
-                return bool(existing and getattr(existing, "fz_mean_n", None) is not None)
-            except Exception:
-                return False
-
-        ev = self._live_meas.process_sample(
-            t_ms=int(t_ms),
-            cop_x_mm=float(cop_x_mm),
-            cop_y_mm=float(cop_y_mm),
-            fz_n=float(fz_n),
-            is_visible=bool(is_visible),
-            device_type=str(dev_type),
-            rows=int(rows),
-            cols=int(cols),
-            rotation_quadrants=int(rot_k),
-            is_cell_already_done=_already_done,
-        )
-
-        # Active cell highlight + status text (throttled to changes)
-        try:
-            active = self._live_meas.active_cell
-            if active != self._live_meas_active_cell_last:
-                self._live_meas_active_cell_last = active
-                if active is None:
-                    self.canvas_left.set_live_active_cell(None, None)
-                    self.canvas_right.set_live_active_cell(None, None)
-                else:
-                    self.canvas_left.set_live_active_cell(int(active[0]), int(active[1]))
-                    self.canvas_right.set_live_active_cell(int(active[0]), int(active[1]))
-        except Exception:
-            pass
-
-        # Replace verbose overlay assistant with a simple bottom status bar.
-        # Only show "Arming..." when we are *actually* arming in an unmeasured cell.
-        try:
-            phase = str(getattr(self._live_meas, "phase", "idle") or "idle")
-            prog = float(getattr(self._live_meas, "progress_01", 0.0) or 0.0)
-            pct = int(max(0, min(100, round(100.0 * prog))))
-            if phase == "arming":
-                self._set_live_status_bar_state(mode="arming", text="Arming...", pct=pct)
-            elif phase == "measuring":
-                self._set_live_status_bar_state(mode="measuring", text="Taking measurement...", pct=pct)
-            else:
-                self._set_live_status_bar_state(mode="idle", text="", pct=None)
-        except Exception:
-            self._set_live_status_bar_state(mode="idle", text="", pct=None)
-        # Keep overlay status empty for a cleaner plate view.
-        try:
-            self.canvas_left.set_live_status(None)
-        except Exception:
-            pass
-
-        if not ev:
-            return
-
-        # Captured: clear the status bar so it doesn't linger.
-        self._set_live_status_bar_state(mode="idle", text="", pct=None)
-
-        # Commit captured measurement into the session via TestingService
-        res = TestResult(
-            row=int(ev.row),
-            col=int(ev.col),
-            fz_mean_n=float(ev.mean_fz_n),
-            cop_x_mm=float(ev.mean_cop_x_mm),
-            cop_y_mm=float(ev.mean_cop_y_mm),
-        )
-        self.controller.testing.record_result(int(stage_idx), int(ev.row), int(ev.col), res)
-
-        # For Temperature Test mode: use stage-specific colors (no pass/fail)
-        is_temp_test = bool(getattr(sess, "is_temp_test", False))
-        if is_temp_test:
-            self._apply_temp_test_cell_color(stage, int(ev.row), int(ev.col))
-
-        # Update progress/Next button using existing LiveTestingPanel helpers
-        try:
-            completed = 0
-            for r in (stage.results or {}).values():
-                try:
-                    if r is not None and getattr(r, "fz_mean_n", None) is not None:
-                        completed += 1
-                except Exception:
-                    continue
-            total = int(getattr(stage, "total_cells", rows * cols) or (rows * cols))
-            stage_text = str(getattr(stage, "name", "") or "Stage")
-            self.controls.live_testing_panel.set_stage_progress(stage_text, completed, total)
-            # Navigation gating handled by `_update_live_stage_nav`.
-            self._update_live_stage_nav("cell_captured")
-            # Also update the per-stage summary tracker (Location A/B overview)
-            try:
-                sess2 = getattr(self.controller.testing, "current_session", None)
-                if sess2 and not bool(getattr(sess2, "is_discrete_temp", False)):
-                    total2 = int(getattr(sess2, "grid_rows", 0) or 0) * int(getattr(sess2, "grid_cols", 0) or 0)
-                    self.controls.live_testing_panel.set_stage_summary(
-                        getattr(sess2, "stages", []) or [],
-                        grid_total_cells=total2 if total2 > 0 else None,
-                        current_stage_index=int(stage_idx),
-                    )
-            except Exception:
-                pass
-
-            # Temperature Test mode: auto-switch stages after 2 cells or stage completion
-            if is_temp_test:
-                self._maybe_auto_switch_temp_test_stage(sess, stage_idx, completed, total)
-        except Exception:
-            pass
-
+    # (moved to ui/periodic_tare.py)
     def _update_live_stage_nav(self, reason: str = "") -> None:
         """
         Normal live testing navigation rule:
