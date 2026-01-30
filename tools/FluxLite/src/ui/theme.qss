@@ -1,0 +1,443 @@
+/*
+AxioforceFluxLite Qt stylesheet (QSS)
+
+Tinker knobs (search/replace these hex values):
+  - BG      :#121212  (main background)
+  - SURFACE : #1A1A1A  (panels)
+  - SURFACE2: #202020  (controls on panels)
+  - BORDER  : #2A2A2A
+  - BORDER2 : #333333
+  - TEXT    : #E0E0E0
+  - MUTED   : #BDBDBD
+  - ACCENT  : #3D7EFF
+*/
+
+/* Global defaults */
+QWidget {
+  background-color: #121212;
+  color: #E0E0E0;
+}
+
+QWidget {
+  font-family: "Tahoma";
+  font-size: 9pt;
+}
+
+/* ---- Temperature Testing tab continuity (fix nested wrapper blocks) ---- */
+#temperature_testing_panel QWidget { background: transparent; }
+#temperature_testing_panel QGroupBox { background-color: #1A1A1A; }
+
+/*
+Continuity fixes for nested panes:
+- Many "layout wrapper" QWidgets inherit the global BG and paint it, which creates
+  dark rectangles inside lighter surfaces (GroupBoxes / Tabs).
+- Make generic containers transparent inside surfaces, then let interactive
+  widgets (inputs/buttons/views) re-apply their own backgrounds.
+*/
+QGroupBox QWidget {
+  background: transparent;
+}
+
+QTabWidget QStackedWidget {
+  background: #1A1A1A;
+}
+
+QTabWidget QStackedWidget QWidget {
+  background: transparent;
+}
+
+QScrollArea::viewport {
+  background: transparent;
+}
+
+QMainWindow::separator {
+  background: #2A2A2A;
+  width: 1px;
+  height: 1px;
+}
+
+/* Sensor View: let the tab surface show around the plot widget */
+ForcePlotWidget {
+  background: transparent;
+}
+
+#force_plot_legend_container, #force_plot_temp_label {
+  background: transparent;
+}
+
+/* Plate view overlay action buttons (bottom-right) */
+#plate_refresh_btn, #plate_tare_btn, #plate_rotate_btn {
+  /* "Frosted" look: slightly transparent surface, no border until hover */
+  background: rgba(32, 32, 32, 235);
+  border: 1px solid transparent;
+  border-radius: 15px;
+  color: #E0E0E0;
+}
+
+#plate_refresh_btn {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+#plate_tare_btn {
+  /* Slightly smaller so "0.0" doesn't get elided to "..." */
+  font-size: 14px;
+  font-weight: 700;
+}
+
+#plate_rotate_btn {
+  font-size: 28px;
+  font-weight: 400;
+  /* Nudge the glyph up a touch (font baseline sits low). */
+  padding-bottom: 6px;
+}
+
+#plate_refresh_btn:hover, #plate_tare_btn:hover, #plate_rotate_btn:hover {
+  border-color: rgba(224, 224, 224, 90);
+}
+
+/* Rotate disabled state: visible but muted, and no hover border */
+#plate_rotate_btn:disabled {
+  color: rgba(224, 224, 224, 120);
+  background: rgba(32, 32, 32, 180);
+  border-color: transparent;
+}
+
+/* ---- Slick checkboxes + radios (indicator theming) ---- */
+QCheckBox, QRadioButton {
+  background: transparent; /* keep continuity inside panels */
+  spacing: 8px;
+}
+
+QCheckBox::indicator {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: #202020; /* surface2 */
+  border: 1px solid rgba(224, 224, 224, 70);
+}
+
+QCheckBox::indicator:hover {
+  border: 1px solid rgba(224, 224, 224, 120);
+}
+
+QCheckBox::indicator:checked {
+  /* Keep the border, but use an inset fill so it feels less "flat". */
+  background: #202020;
+  border: 1px solid rgba(224, 224, 224, 175);
+  image: url("assets/icons/checkbox_fill_inset.svg");
+}
+
+QCheckBox::indicator:checked:hover {
+  background: #202020;
+  border: 1px solid rgba(224, 224, 224, 200);
+  image: url("assets/icons/checkbox_fill_inset_hover.svg");
+}
+
+QCheckBox::indicator:disabled {
+  background: rgba(32, 32, 32, 160);
+  border: 1px solid rgba(224, 224, 224, 35);
+}
+
+QRadioButton::indicator {
+  width: 14px;
+  height: 14px;
+  border-radius: 7px;
+  background: #202020; /* surface2 */
+  border: 1px solid rgba(224, 224, 224, 70);
+}
+
+QRadioButton::indicator:hover {
+  border: 1px solid rgba(224, 224, 224, 120);
+}
+
+QRadioButton::indicator:checked {
+  /* Border + inset dot (matches checkbox "gap" style). */
+  background: #202020;
+  border: 1px solid rgba(224, 224, 224, 175);
+  image: url("assets/icons/radio_dot_inset.svg");
+}
+
+QRadioButton::indicator:checked:hover {
+  background: #202020;
+  border: 1px solid rgba(224, 224, 224, 200);
+  image: url("assets/icons/radio_dot_inset_hover.svg");
+}
+
+QRadioButton::indicator:disabled {
+  background: rgba(32, 32, 32, 160);
+  border: 1px solid rgba(224, 224, 224, 35);
+}
+
+/* Group boxes (panels) */
+QGroupBox {
+  background-color: #1A1A1A;
+  border: none;
+  border-radius: 8px;
+  margin-top: 10px;
+  padding: 6px;
+}
+
+/* Depth: nested panels step up a surface shade automatically */
+QGroupBox QGroupBox {
+  background-color: #202020;
+}
+
+QGroupBox QGroupBox QGroupBox {
+  background-color: #1A1A1A;
+}
+
+QGroupBox::title {
+  subcontrol-origin: margin;
+  subcontrol-position: top left;
+  padding: 0 6px;
+  left: 8px;
+  color: #BDBDBD;
+}
+
+/* Tabs */
+QTabWidget::pane {
+  background: #1A1A1A;
+  border: none;
+  border-radius: 8px;
+  top: -1px;
+}
+
+QTabBar::tab {
+  background: #121212;
+  border: none;
+  padding: 4px 8px;
+  margin-right: 2px;
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+  color: #BDBDBD;
+}
+
+QTabBar::tab:selected {
+  background: #1A1A1A;
+  color: #E0E0E0;
+  border: none;
+}
+
+QTabBar::tab:hover {
+  background: #202020;
+}
+
+/* Buttons */
+QPushButton {
+  /* Default: on BG -> Surface1 */
+  background-color: #1A1A1A;
+  border: 1px solid transparent; /* keep layout stable; only show on focus */
+  border-radius: 8px;
+  padding: 4px 8px;
+}
+
+QPushButton:hover {
+  /* Keep to the 3-surface system */
+  background-color: #1A1A1A;
+  border-color: #333333;
+}
+
+QPushButton:pressed {
+  background-color: #1A1A1A;
+}
+
+QPushButton:focus {
+  border-color:rgb(109, 155, 247);
+}
+
+QPushButton:disabled {
+  color: #777777;
+  border-color: transparent;
+  background-color: #202020;
+}
+
+/* Inputs */
+QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QDateTimeEdit {
+  /* Default: on BG -> Surface1 */
+  background-color: #1A1A1A;
+  border: 1px solid transparent; /* no borders unless interacting */
+  border-radius: 6px;
+  padding: 3px 6px;
+  selection-background-color: #3D7EFF;
+  selection-color: #121212;
+}
+
+QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover,
+QSpinBox:hover, QDoubleSpinBox:hover, QDateTimeEdit:hover {
+  background-color: #202020;
+}
+
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus,
+QSpinBox:focus, QDoubleSpinBox:focus, QDateTimeEdit:focus {
+  border-color: #3D7EFF;
+}
+
+/* Combo boxes */
+QComboBox {
+  /* Default: on BG -> Surface1 */
+  background-color: #1A1A1A;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 22px 3px 6px; /* leave room for arrow */
+}
+
+QComboBox:hover {
+  background-color: #1A1A1A;
+  border-color: #333333;
+}
+
+QComboBox:focus {
+  border-color: #3D7EFF;
+}
+
+QComboBox::drop-down {
+  subcontrol-origin: padding;
+  subcontrol-position: top right;
+  width: 18px;
+  border-left: none;
+  background: transparent;
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+QComboBox QAbstractItemView {
+  background-color: #1A1A1A;
+  border: none;
+  selection-background-color: #3D7EFF;
+  selection-color: #121212;
+}
+
+/* Controls should be one surface higher than the panel they sit on (BG->S1, S1->S2). */
+QGroupBox QPushButton,
+QTabWidget QStackedWidget QPushButton {
+  background-color: #202020;
+}
+
+QGroupBox QLineEdit, QGroupBox QTextEdit, QGroupBox QPlainTextEdit,
+QGroupBox QSpinBox, QGroupBox QDoubleSpinBox, QGroupBox QDateTimeEdit,
+QGroupBox QComboBox,
+QTabWidget QStackedWidget QLineEdit, QTabWidget QStackedWidget QTextEdit, QTabWidget QStackedWidget QPlainTextEdit,
+QTabWidget QStackedWidget QSpinBox, QTabWidget QStackedWidget QDoubleSpinBox, QTabWidget QStackedWidget QDateTimeEdit,
+QTabWidget QStackedWidget QComboBox {
+  background-color: #202020;
+}
+
+/* Lists/Tables (depth without borders) */
+QAbstractItemView {
+  background-color: #1A1A1A;
+  border: none;
+  border-radius: 8px;
+  selection-background-color: #3D7EFF;
+  selection-color: #121212;
+}
+
+QAbstractItemView::item {
+  padding: 4px 6px;
+  border: none;
+}
+
+QAbstractItemView::item:hover {
+  background: #202020;
+}
+
+QAbstractItemView::item:selected {
+  background: #3D7EFF;
+  color: #121212;
+}
+
+QHeaderView::section {
+  background-color: #202020;
+  color: #BDBDBD;
+  border: none;
+  padding: 3px 6px;
+}
+
+/* Tables: subtle gridlines for readability */
+QTableView, QTableWidget {
+  gridline-color: #3A3A3A;
+}
+
+QTableView::item, QTableWidget::item {
+  border-bottom: 1px solid #2F2F2F;
+  border-right: 1px solid #2F2F2F;
+}
+
+QHeaderView::section {
+  border-bottom: 1px solid #2F2F2F;
+}
+
+/* Scroll areas (make them blend in) */
+QScrollArea {
+  background: transparent;
+}
+
+QScrollArea > QWidget > QWidget {
+  background: transparent;
+}
+
+/* Modern thin scrollbars */
+QScrollBar:vertical {
+  background: transparent;
+  width: 10px;
+  margin: 0px;
+}
+
+QScrollBar::handle:vertical {
+  background: #2A2A2A;
+  min-height: 28px;
+  border-radius: 5px;
+}
+
+QScrollBar::handle:vertical:hover {
+  background: #333333;
+}
+
+QScrollBar::handle:vertical:pressed {
+  background: #3D7EFF;
+}
+
+QScrollBar:horizontal {
+  background: transparent;
+  height: 10px;
+  margin: 0px;
+}
+
+QScrollBar::handle:horizontal {
+  background: #2A2A2A;
+  min-width: 28px;
+  border-radius: 5px;
+}
+
+QScrollBar::handle:horizontal:hover {
+  background: #333333;
+}
+
+QScrollBar::handle:horizontal:pressed {
+  background: #3D7EFF;
+}
+
+QScrollBar::add-line, QScrollBar::sub-line {
+  width: 0px;
+  height: 0px;
+}
+
+QScrollBar::add-page, QScrollBar::sub-page {
+  background: transparent;
+}
+
+/* Tooltips */
+QToolTip {
+  background-color: #202020;
+  color: #E0E0E0;
+  border: 1px solid #333333;
+  padding: 4px 6px;
+}
+
+/* Status bar */
+QStatusBar {
+  background-color: #121212;
+  color: #BDBDBD;
+  border-top: none;
+}
+
