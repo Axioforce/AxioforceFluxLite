@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import configparser
 import logging
 import os
 import subprocess
@@ -29,6 +30,41 @@ def _get_dynamo_path() -> Path:
     return Path(__file__).resolve().parent / "DynamoDeluxe"
 
 
+def _get_dynamo_tracking_branch() -> str:
+    """Return the configured tracking branch for the DynamoDeluxe submodule.
+
+    Falls back to "main" if configuration can't be determined.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    gitmodules_path = repo_root / ".gitmodules"
+    if not gitmodules_path.exists():
+        return "main"
+
+    try:
+        cfg = configparser.RawConfigParser()
+        cfg.read(gitmodules_path, encoding="utf-8")
+        for section in cfg.sections():
+            sub_path = cfg.get(section, "path", fallback="")
+            if sub_path.replace("\\", "/").lower().endswith("dynamodeluxe"):
+                branch = cfg.get(section, "branch", fallback="main").strip()
+                return branch or "main"
+    except Exception:
+        # Keep startup resilient if parsing fails.
+        return "main"
+
+    return "main"
+
+
+def _git_run(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
 def _update_dynamo_deluxe() -> None:
     """Check for and pull the latest DynamoDeluxe submodule if updates are available."""
     submodule_path = _get_dynamo_path()
@@ -37,32 +73,31 @@ def _update_dynamo_deluxe() -> None:
         return
 
     try:
+        branch = _get_dynamo_tracking_branch()
+
+        status = _git_run(["status", "--porcelain"], cwd=submodule_path)
+        if status.stdout.strip():
+            _logger.warning("DynamoDeluxe has local changes; skipping auto-update (branch=%s).", branch)
+            return
+
         # Fetch latest from remote
-        subprocess.run(
-            ["git", "fetch", "origin", "main"],
-            cwd=submodule_path,
-            capture_output=True,
-            check=True,
-        )
+        _git_run(["fetch", "origin", branch], cwd=submodule_path)
+
+        # Ensure we are on the configured branch so pulls work even if detached.
+        current_branch = _git_run(["rev-parse", "--abbrev-ref", "HEAD"], cwd=submodule_path).stdout.strip()
+        if current_branch != branch:
+            try:
+                _git_run(["checkout", branch], cwd=submodule_path)
+            except subprocess.CalledProcessError:
+                _git_run(["checkout", "-B", branch, f"origin/{branch}"], cwd=submodule_path)
 
         # Check if we're behind
-        result = subprocess.run(
-            ["git", "rev-list", "--count", "HEAD..origin/main"],
-            cwd=submodule_path,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        result = _git_run(["rev-list", "--count", f"HEAD..origin/{branch}"], cwd=submodule_path)
         commits_behind = int(result.stdout.strip() or "0")
 
         if commits_behind > 0:
             _logger.info("DynamoDeluxe is %d commit(s) behind. Pulling updates...", commits_behind)
-            subprocess.run(
-                ["git", "pull", "origin", "main"],
-                cwd=submodule_path,
-                capture_output=True,
-                check=True,
-            )
+            _git_run(["pull", "origin", branch], cwd=submodule_path)
             _logger.info("DynamoDeluxe updated successfully.")
         else:
             _logger.info("DynamoDeluxe is up to date.")
