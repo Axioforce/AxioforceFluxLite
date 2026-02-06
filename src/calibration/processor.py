@@ -318,7 +318,7 @@ def _process_generic(csv_path: str, model_id: str, plate_type: str, device_id: s
             pass
     else:
         # Dumbbell tolerance (fixed N by model)
-        db_by_model = getattr(config, "THRESHOLDS_DB_N_BY_MODEL", {"06": 5.0, "07": 6.0, "08": 8.0, "11": 6.0})
+        db_by_model = getattr(config, "THRESHOLDS_DB_N_BY_MODEL", {"06": 5.0, "07": 6.0, "08": 8.0, "10": 5.0, "11": 6.0, "12": 8.0})
         base_tol_n = float(db_by_model.get((model_id or "06").strip(), db_by_model.get("06", 5.0)))
 
     points: List[HeatPoint] = []

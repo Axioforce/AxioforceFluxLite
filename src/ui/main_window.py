@@ -4246,9 +4246,11 @@ class MainWindow(QtWidgets.QMainWindow):
                         # Plate dims
                         if self.state.selected_device_type == "08":
                             w_mm, h_mm = config.TYPE08_W_MM, config.TYPE08_H_MM
+                        elif self.state.selected_device_type == "12":
+                            w_mm, h_mm = config.TYPE12_W_MM, config.TYPE12_H_MM
                         elif self.state.selected_device_type == "07":
                             w_mm, h_mm = config.TYPE07_W_MM, config.TYPE07_H_MM
-                        elif self.state.selected_device_type == "06":
+                        elif self.state.selected_device_type in ("06", "10"):
                             w_mm, h_mm = config.TYPE06_W_MM, config.TYPE06_H_MM
                         elif self.state.selected_device_type == "11":
                             w_mm, h_mm = config.TYPE11_W_MM, config.TYPE11_H_MM
@@ -5519,7 +5521,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _cell_from_mm(self, x_mm_val: float, y_mm_val: float, dev_type: str, rows: int, cols: int) -> Optional[tuple[int, int]]:
         # Map COP (x_mm, y_mm) to grid cell using canonical device space (no rotation)
         rx, ry = x_mm_val, y_mm_val
-        if dev_type == "06":
+        if dev_type in ("06", "10"):
             w_mm = config.TYPE06_W_MM
             h_mm = config.TYPE06_H_MM
         elif dev_type == "07":
@@ -5528,6 +5530,9 @@ class MainWindow(QtWidgets.QMainWindow):
         elif dev_type == "11":
             w_mm = config.TYPE11_W_MM
             h_mm = config.TYPE11_H_MM
+        elif dev_type == "12":
+            w_mm = config.TYPE12_W_MM
+            h_mm = config.TYPE12_H_MM
         else:
             w_mm = config.TYPE08_W_MM
             h_mm = config.TYPE08_H_MM
@@ -5835,7 +5840,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # IMPORTANT: Do not rotate here; cell assignment is in canonical device space
             rx, ry = x_mm_val, y_mm_val
             dev_type = (self.state.selected_device_type or "06").strip()
-            if dev_type == "06":
+            if dev_type in ("06", "10"):
                 w_mm = config.TYPE06_W_MM
                 h_mm = config.TYPE06_H_MM
             elif dev_type == "07":
@@ -5844,6 +5849,9 @@ class MainWindow(QtWidgets.QMainWindow):
             elif dev_type == "11":
                 w_mm = config.TYPE11_W_MM
                 h_mm = config.TYPE11_H_MM
+            elif dev_type == "12":
+                w_mm = config.TYPE12_W_MM
+                h_mm = config.TYPE12_H_MM
             else:
                 w_mm = config.TYPE08_W_MM
                 h_mm = config.TYPE08_H_MM
@@ -5894,7 +5902,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Fractions within plate footprint for debug (0..1). Column uses Y/width, Row uses X/height (top=0)
         dev_type = (self.state.selected_device_type or "06").strip()
-        if dev_type == "06":
+        if dev_type in ("06", "10"):
             w_mm = config.TYPE06_W_MM
             h_mm = config.TYPE06_H_MM
         elif dev_type == "07":
@@ -5903,6 +5911,9 @@ class MainWindow(QtWidgets.QMainWindow):
         elif dev_type == "11":
             w_mm = config.TYPE11_W_MM
             h_mm = config.TYPE11_H_MM
+        elif dev_type == "12":
+            w_mm = config.TYPE12_W_MM
+            h_mm = config.TYPE12_H_MM
         else:
             w_mm = config.TYPE08_W_MM
             h_mm = config.TYPE08_H_MM

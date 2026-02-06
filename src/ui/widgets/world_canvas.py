@@ -152,10 +152,10 @@ class WorldCanvas(QtWidgets.QWidget):
     def _compute_world_bounds(self) -> None:
         if self.state.display_mode == "single":
             # Auto-zoom the view around the selected plate so that all plate types
-            # (06/07/08/11) render with a consistent on-screen margin, regardless
+            # (06/07/08/10/11/12) render with a consistent on-screen margin, regardless
             # of their physical dimensions.
             dev_type = (self.state.selected_device_type or "").strip()
-            if dev_type == "06":
+            if dev_type in ("06", "10"):
                 w_mm = float(config.TYPE06_W_MM)
                 h_mm = float(config.TYPE06_H_MM)
             elif dev_type == "07":
@@ -164,6 +164,9 @@ class WorldCanvas(QtWidgets.QWidget):
             elif dev_type == "11":
                 w_mm = float(config.TYPE11_W_MM)
                 h_mm = float(config.TYPE11_H_MM)
+            elif dev_type == "12":
+                w_mm = float(config.TYPE12_W_MM)
+                h_mm = float(config.TYPE12_H_MM)
             else:
                 # Default to XL plate geometry when device type is unknown/08.
                 w_mm = float(config.TYPE08_W_MM)
@@ -314,7 +317,7 @@ class WorldCanvas(QtWidgets.QWidget):
                 else:
                     prefix, tail = full_id[:2], full_id
                 suffix = tail[-2:] if len(tail) >= 2 else tail
-                type_prefix = dev_type if dev_type in ("06", "07", "08", "11") else (prefix if prefix in ("06", "07", "08", "11") else "")
+                type_prefix = dev_type if dev_type in ("06", "07", "08", "10", "11", "12") else (prefix if prefix in ("06", "07", "08", "10", "11", "12") else "")
                 short = f"{type_prefix}-{suffix}" if type_prefix else suffix
             except Exception:
                 short = full_id[-2:] if len(full_id) >= 2 else full_id
@@ -325,8 +328,8 @@ class WorldCanvas(QtWidgets.QWidget):
     def _draw_plate_logo_single(self, p: QtGui.QPainter, center_mm: Tuple[float, float], w_mm: float, h_mm: float, dev_type: str) -> None:
         if self.state.display_mode != "single":
             return
-        # No logo for type 06 plates
-        if (dev_type or "").strip() == "06":
+        # No logo for type 06/10 plates
+        if (dev_type or "").strip() in ("06", "10"):
             return
         cx, cy = self._to_screen(center_mm[0], center_mm[1])
         scale = self.state.px_per_mm
@@ -346,7 +349,7 @@ class WorldCanvas(QtWidgets.QWidget):
         font = p.font()
         font.setPointSize(max(9, int(10 * scale / max(scale, 1))))
         p.setFont(font)
-        # Determine base side for logo by device type: 07/11 -> left (vertical), 08 -> top (horizontal)
+        # Determine base side for logo by device type: 07/11 -> left (vertical), 08/12 -> top (horizontal)
         base_side = "left" if dev_type in ("07", "11") else "top"
         # Apply rotation to pick actual side
         sides = ["top", "right", "bottom", "left"]
@@ -373,7 +376,7 @@ class WorldCanvas(QtWidgets.QWidget):
         p.restore()
 
     def _draw_connection_port_single(self, p: QtGui.QPainter, center_mm: Tuple[float, float], w_mm: float, h_mm: float, dev_type: str) -> None:
-        if self.state.display_mode != "single" or dev_type not in ("07", "11", "06"):
+        if self.state.display_mode != "single" or dev_type not in ("07", "11", "06", "10"):
             return
         cx, cy = self._to_screen(center_mm[0], center_mm[1])
         scale = self.state.px_per_mm
@@ -497,7 +500,7 @@ class WorldCanvas(QtWidgets.QWidget):
             return config.TYPE07_W_MM, config.TYPE07_H_MM
         for name, axf_id, dev_type in self._available_devices:
             if axf_id == device_id:
-                if dev_type == "06":
+                if dev_type in ("06", "10"):
                     return config.TYPE06_W_MM, config.TYPE06_H_MM
                 elif dev_type == "07":
                     return config.TYPE07_W_MM, config.TYPE07_H_MM
@@ -505,6 +508,8 @@ class WorldCanvas(QtWidgets.QWidget):
                     return config.TYPE08_W_MM, config.TYPE08_H_MM
                 elif dev_type == "11":
                     return config.TYPE11_W_MM, config.TYPE11_H_MM
+                elif dev_type == "12":
+                    return config.TYPE12_W_MM, config.TYPE12_H_MM
         return config.TYPE07_W_MM, config.TYPE07_H_MM
 
     def _draw_plates(self, p: QtGui.QPainter) -> None:
@@ -515,7 +520,7 @@ class WorldCanvas(QtWidgets.QWidget):
                 self._draw_placeholder_plate(p)
                 return
             dev_type = (self.state.selected_device_type or "").strip()
-            if dev_type == "06":
+            if dev_type in ("06", "10"):
                 w_mm = config.TYPE06_W_MM
                 h_mm = config.TYPE06_H_MM
             elif dev_type == "07":
@@ -524,6 +529,9 @@ class WorldCanvas(QtWidgets.QWidget):
             elif dev_type == "11":
                 w_mm = config.TYPE11_W_MM
                 h_mm = config.TYPE11_H_MM
+            elif dev_type == "12":
+                w_mm = config.TYPE12_W_MM
+                h_mm = config.TYPE12_H_MM
             else:
                 w_mm = config.TYPE08_W_MM
                 h_mm = config.TYPE08_H_MM
@@ -634,7 +642,7 @@ class WorldCanvas(QtWidgets.QWidget):
         try:
             if self.state.display_mode == "single" and (self.state.selected_device_type or "").strip():
                 dev_type = (self.state.selected_device_type or "").strip()
-                if dev_type == "06":
+                if dev_type in ("06", "10"):
                     w_mm = config.TYPE06_W_MM
                     h_mm = config.TYPE06_H_MM
                 elif dev_type == "07":
@@ -643,6 +651,9 @@ class WorldCanvas(QtWidgets.QWidget):
                 elif dev_type == "11":
                     w_mm = config.TYPE11_W_MM
                     h_mm = config.TYPE11_H_MM
+                elif dev_type == "12":
+                    w_mm = config.TYPE12_W_MM
+                    h_mm = config.TYPE12_H_MM
                 else:
                     w_mm = config.TYPE08_W_MM
                     h_mm = config.TYPE08_H_MM
@@ -717,7 +728,7 @@ class WorldCanvas(QtWidgets.QWidget):
         return (rows - 1 - c), r
 
     def _map_cell_for_device(self, row: int, col: int) -> Tuple[int, int]:
-        """Apply device-specific overlay mapping. For 06 and 08, mirror across the
+        """Apply device-specific overlay mapping. For 06/10 and 08/12, mirror across the
         bottom-left to top-right axis (anti-diagonal). Others: identity.
         """
         try:
@@ -726,7 +737,7 @@ class WorldCanvas(QtWidgets.QWidget):
         except Exception:
             return int(row), int(col)
         dev_type = (self.state.selected_device_type or "").strip()
-        if dev_type in ("06", "08"):
+        if dev_type in ("06", "08", "10", "12"):
             # Anti-diagonal mirror: (r, c) -> (rows-1-c, cols-1-r)
             return (rows - 1 - int(col), cols - 1 - int(row))
         return int(row), int(col)
@@ -900,7 +911,7 @@ class WorldCanvas(QtWidgets.QWidget):
             if self.state.display_mode != "single" or not (self.state.selected_device_type or "").strip():
                 return None
             dev_type = (self.state.selected_device_type or "").strip()
-            if dev_type == "06":
+            if dev_type in ("06", "10"):
                 w_mm = config.TYPE06_W_MM
                 h_mm = config.TYPE06_H_MM
             elif dev_type == "07":
@@ -909,6 +920,9 @@ class WorldCanvas(QtWidgets.QWidget):
             elif dev_type == "11":
                 w_mm = config.TYPE11_W_MM
                 h_mm = config.TYPE11_H_MM
+            elif dev_type == "12":
+                w_mm = config.TYPE12_W_MM
+                h_mm = config.TYPE12_H_MM
             else:
                 w_mm = config.TYPE08_W_MM
                 h_mm = config.TYPE08_H_MM
@@ -976,7 +990,7 @@ class WorldCanvas(QtWidgets.QWidget):
         except Exception:
             return int(row), int(col)
         dev_type = (self.state.selected_device_type or "").strip()
-        if dev_type in ("06", "08"):
+        if dev_type in ("06", "08", "10", "12"):
             # Inverse of anti-diagonal mirror is itself
             return (rows - 1 - int(col)), (cols - 1 - int(row))
         return int(row), int(col)
@@ -999,7 +1013,7 @@ class WorldCanvas(QtWidgets.QWidget):
             else:
                 prefix, tail = full[:2], full
             suffix = tail[-2:] if len(tail) >= 2 else tail
-            type_prefix = dev_type_hint if dev_type_hint in ("06", "07", "08", "11") else (prefix if prefix in ("06", "07", "08", "11") else "")
+            type_prefix = dev_type_hint if dev_type_hint in ("06", "07", "08", "10", "11", "12") else (prefix if prefix in ("06", "07", "08", "10", "11", "12") else "")
             return f"{type_prefix}-{suffix}" if type_prefix else suffix
         except Exception:
             return full[-2:] if len(full) >= 2 else full
@@ -1053,7 +1067,7 @@ class WorldCanvas(QtWidgets.QWidget):
             required_type = "08"
         devices_for_picker: List[Tuple[str, str, str]] = []
         for name, axf_id, dev_type in self._available_devices:
-            if dev_type == required_type or (required_type == "07" and dev_type == "11"):
+            if dev_type == required_type or (required_type == "07" and dev_type == "11") or (required_type == "08" and dev_type == "12"):
                 devices_for_picker.append((name, axf_id, dev_type))
         dialog = DevicePickerDialog(position_id, required_type, devices_for_picker, self)
         result = dialog.exec()

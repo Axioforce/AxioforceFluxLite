@@ -567,13 +567,13 @@ class ControlPanel(QtWidgets.QWidget):
         self.device_list.blockSignals(True)
         self.device_list.clear()
         for name, axf_id, dev_type in self._all_devices:
-            if dev_type == "06" and not show06:
+            if dev_type in ("06", "10") and not show06:
                 continue
             if dev_type == "07" and not show07:
                 continue
             if dev_type == "11" and not show07:  # 11 uses same filter as 07 (identical dimensions)
                 continue
-            if dev_type == "08" and not show08:
+            if dev_type in ("08", "12") and not show08:
                 continue
             display = f"{name} ({axf_id})"
             item = QtWidgets.QListWidgetItem(display)

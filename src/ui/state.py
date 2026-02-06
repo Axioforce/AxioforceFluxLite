@@ -16,7 +16,7 @@ class ViewState:
     # Display configuration
     display_mode: str = "mound"  # "mound" or "single"
     selected_device_id: Optional[str] = None  # axfId / full device id
-    selected_device_type: Optional[str] = None  # "06", "07", "08", or "11"
+    selected_device_type: Optional[str] = None  # "06", "07", "08", "10", "11", or "12"
     selected_device_name: Optional[str] = None  # human-friendly name
     plate_device_ids: Dict[str, str] = field(default_factory=dict)
     mound_devices: Dict[str, Optional[str]] = field(default_factory=lambda: {

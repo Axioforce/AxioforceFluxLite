@@ -53,6 +53,10 @@ TYPE08_W_MM: float = 658.1
 TYPE08_H_MM: float = 607.3
 TYPE11_W_MM: float = 353.3  # Identical to TYPE07
 TYPE11_H_MM: float = 607.3  # Identical to TYPE07
+TYPE10_W_MM: float = 353.2  # Identical to TYPE06
+TYPE10_H_MM: float = 404.0  # Identical to TYPE06
+TYPE12_W_MM: float = 658.1  # Identical to TYPE08
+TYPE12_H_MM: float = 607.3  # Identical to TYPE08
 
 # Precompute half-extents
 TYPE06_HALF_W_MM: float = TYPE06_W_MM / 2.0
@@ -63,6 +67,10 @@ TYPE08_HALF_W_MM: float = TYPE08_W_MM / 2.0
 TYPE08_HALF_H_MM: float = TYPE08_H_MM / 2.0
 TYPE11_HALF_W_MM: float = TYPE11_W_MM / 2.0
 TYPE11_HALF_H_MM: float = TYPE11_H_MM / 2.0
+TYPE10_HALF_W_MM: float = TYPE10_W_MM / 2.0
+TYPE10_HALF_H_MM: float = TYPE10_H_MM / 2.0
+TYPE12_HALF_W_MM: float = TYPE12_W_MM / 2.0
+TYPE12_HALF_H_MM: float = TYPE12_H_MM / 2.0
 
 
 # Landing zone placements (mm) - exact centers
@@ -88,12 +96,14 @@ SMOOTH_ALPHA: float = 0.2  # EWMA weight
 
 
 # Live Testing thresholds (N), per model id
-# 06 (Lite): DB=5, BW=8 | 07 (Launch): DB=6, BW=11 | 08 (XL): DB=8, BW=15 | 11 (Launch): DB=6, BW=11 (identical to 07)
+# 06/10 (Lite): DB=5, BW=8 | 07/11 (Launch): DB=6, BW=11 | 08/12 (XL): DB=8, BW=15
 THRESHOLDS_DB_N_BY_MODEL = {
     "06": 5.0,
     "07": 6.0,
     "08": 8.0,
     "11": 6.0,
+    "10": 5.0,
+    "12": 8.0,
 }
 
 # Canonical target load for the "45 lb DB" stage (in Newtons).
@@ -103,12 +113,14 @@ DUMBBELL_45LB_TARGET_N: float = 206.3
 
 # Bodyweight tolerance percentages (fraction of body weight), per model id
 # These supersede fixed-N BW tolerances for pass/fail; UI still displays N (rounded)
-# 06 → 1.0%, 07 → 1.5%, 08 → 2.0%, 11 → 1.5% (identical to 07)
+# 06/10 → 1.0%, 07/11 → 1.5%, 08/12 → 2.0%
 THRESHOLDS_BW_PCT_BY_MODEL = {
     "06": 0.010,
     "07": 0.015,
     "08": 0.020,
     "11": 0.015,
+    "10": 0.010,
+    "12": 0.020,
 }
 
 # Cell color bins as multipliers of the passing threshold T
@@ -122,12 +134,14 @@ COLOR_BIN_MULTIPLIERS = {
 
 
 # Live Testing grid dimensions (rows, cols) per model id
-# 06: 3x3, 07: 3x5, 08: 5x5, 11: 3x5 (identical to 07)
+# 06/10: 3x3, 07/11: 3x5, 08/12: 5x5
 GRID_DIMS_BY_MODEL = {
     "06": (3, 3),
     "07": (5, 3),
     "08": (5, 5),
     "11": (5, 3),
+    "10": (3, 3),
+    "12": (5, 5),
 }
 
 
