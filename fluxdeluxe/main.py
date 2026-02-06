@@ -7,6 +7,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+if __name__ == "__main__" and __package__ is None:
+    package_root = Path(__file__).resolve().parent.parent
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
+    __package__ = "FluxDeluxe"
+
 # If this module is executed via `python -m FluxDeluxe.main`, it runs as `__main__`.
 # Other parts of the app may later do `import FluxDeluxe.main`, which would otherwise
 # create a second module instance with a different `_dynamo_process`. Alias the running
