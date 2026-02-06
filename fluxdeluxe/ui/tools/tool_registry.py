@@ -32,6 +32,12 @@ def default_tools() -> List[ToolSpec]:
             description="Connect, visualize, and test plates/mounds.",
         ),
         ToolSpec(
+            tool_id="metrics_editor",
+            name="Metrics Editor",
+            kind="qt",
+            description="Compile/edit metrics truth store (Streamlit).",
+        ),
+        ToolSpec(
             tool_id=str(axiodash_spec.TOOL_ID),
             name=str(axiodash_spec.NAME),
             kind=str(axiodash_spec.KIND),

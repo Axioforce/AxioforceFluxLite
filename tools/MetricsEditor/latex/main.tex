@@ -1,0 +1,203 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{hyperref}
+
+\setlength{\parindent}{0pt}
+
+\newcommand{\DeclareMetric}[5]{%
+  \subsection*{#1}%
+  \if\relax\detokenize{#2}\relax\textbf{Units}: N/A\\\else\textbf{Units}: #2\\\fi
+  \textbf{Equation}:
+  \[
+    #3
+  \]
+  \textbf{Description}: #4 \\
+  \textbf{How you use this}: #5
+  \bigskip
+}
+
+\begin{document}
+\section*{Axioforce Metrics}
+
+\DeclareMetric{Average}{}{\overline{x} = \frac{\sum x}{n}}{Average value of the dataset.}
+
+\DeclareMetric{Average Over 1 Second}{}{\overline{x}_{[t-1\,\mathrm{s},t]} = \frac{\sum_{[t-1\,\mathrm{s},t]} x}{n_{[t-1\,\mathrm{s},t]}}}{Average over the last 1 second.}
+
+\DeclareMetric{Average Force}{\%}{\overline{F} = \frac{\sum F}{n}}{Average force during a phase, multiple phases, or a capture.}
+
+\DeclareMetric{Average Power}{W}{\overline{F \cdot v} = \frac{\sum (F \cdot v)}{n}}{Average power during a phase, multiple phases, or a capture.}
+
+\DeclareMetric{Average RFD}{N/s}{\mathrm{RFD} = \frac{\Delta F}{\Delta t}}{Rate at which force is developed.}
+
+\DeclareMetric{Average Relative Power}{W/kg}{\overline{P}_{\text{rel}} = \frac{\overline{F \cdot v}}{m_{\text{system}}}}{Average power relative to system mass during a phase, multiple phases, or a capture.}
+
+\DeclareMetric{Average Velocity}{m/s, ft/s}{\overline{v} = \frac{\sum v}{n}}{Average velocity during a phase, across multiple phases, or for a capture.}
+
+\DeclareMetric{Count}{}{\mathrm{count} = n}{Number of data points in the dataset.}
+
+\DeclareMetric{Countermovement Depth}{cm, in}{\mathrm{countermovement\_depth} = \min(P_{z})}{Peak negative vertical displacement during braking and propulsive phases of a countermovement jump.}
+
+\DeclareMetric{Estimated Airborne Displacement}{cm, in}{d = \lVert \vec{v}_{xy} \rVert \cdot \frac{2\,v_{z}}{g}}{Estimated horizontal center-of-mass displacement during airborne phase using takeoff velocity.}
+
+\DeclareMetric{Estimated Jump Distance}{cm, in}{(Z) : h = \frac{v_{z}^{2}}{2 g}\;\quad(X/Y) : d = 2\,\Delta x_{\text{contact}} + v_{x}\left(\frac{2 v_{z}}{g}\right)}{Estimated jump distance from COM displacement and takeoff velocity, assuming a symmetric flight arc.}
+
+\DeclareMetric{Estimated Jump Distance From Impulse}{cm, in}{d = \frac{J}{m} \cdot \frac{2 v_{z}}{g}}{Estimated jump distance from net impulse and time in air.}
+
+\DeclareMetric{Estimated Time in Air}{s}{t_{\text{flight}} = \frac{2\,v_{z}}{g}}{Estimated time in the air based on vertical velocity at takeoff.}
+
+\DeclareMetric{Force at Minimum Displacement}{\%}{F_{\text{min-}P_z} = F_{z}\!\left(t_{\text{min-}P_z}\right)}{Vertical GRF at the instant of minimum vertical displacement.}
+
+\DeclareMetric{Hang Time}{ms}{t_{\text{hang}} = t_{\text{land}}-t_{\text{lift\_off}}}{Time in the air.}
+
+\DeclareMetric{Impulse}{Ns, lbf$\cdot$ s}{J = \int F\,dt}{Net change in momentum.}
+
+\DeclareMetric{Impulse Ratio}{}{\mathrm{ratio}_{J} = \frac{J_{\text{propulsive}}}{J_{\text{braking}}}}{Ratio of propulsive to braking impulse in a CMJ.}
+
+\DeclareMetric{Interquartile Range}{}{\mathrm{IQR} = Q_{3} - Q_{1}}{Range between the first and third quartiles.}
+
+\DeclareMetric{Jump Height}{cm, in}{h = \frac{t_{\text{hang}}^{2}\,g}{8}}{Jump height calculated from hang time.}
+
+\DeclareMetric{Jumping Stiffness}{N/m, lbf/ft}{k_{\text{jump}} = \frac{F_{z}\!\left(t_{\text{min-}P_z}\right)}{\left|\min\!\left(P_{z}\right)\right|}}{Vertical GRF at peak negative displacement divided by magnitude of peak negative displacement during jumping phases.}
+
+\DeclareMetric{Jump Momentum}{kg$\cdot$ m/s}{p_{\text{jump}} = m \cdot v_{z}}{Jump momentum from takeoff velocity and mass.}
+
+\DeclareMetric{Kurtosis}{}{\mathrm{kurtosis} = \frac{1}{n}\sum_{i=1}^{n}\frac{(x_{i}-\overline{x})^{4}}{\sigma^{4}}}{Tailedness of the distribution.}
+
+\DeclareMetric{Landing Stiffness}{N/m, lbf/ft}{k_{\text{land}} = \frac{F_{z}\!\left(t_{\text{min-}P_z}\right)}{\left|\min\!\left(P_{z}\right)\right|}}{Vertical GRF at peak negative displacement divided by magnitude of peak negative displacement during landing phase.}
+
+\DeclareMetric{Left Force at Peak Force}{\%}{F_{z,\text{left}}(t_{\text{peak\_parent}}) = F_{z,\text{left}}(t_{\text{peak\_parent}})}{Left GRF at the parent's peak force time.}
+
+\DeclareMetric{L/R Asymmetry Average Force}{\%}{\mathrm{asymmetry} = 100\cdot \frac{\overline{F}_{\text{Right}}-\overline{F}_{\text{Left}}}{\max\left(\overline{F}_{\text{Right}},\,\overline{F}_{\text{Left}}\right)}}{Asymmetry between left and right average force.}
+
+\DeclareMetric{L/R Asymmetry Average RFD}{\%}{\mathrm{asymmetry} = 100\cdot \frac{\overline{\mathrm{RFD}}_{\text{Right}}-\overline{\mathrm{RFD}}_{\text{Left}}}{\max\left(\overline{\mathrm{RFD}}_{\text{Right}},\,\overline{\mathrm{RFD}}_{\text{Left}}\right)}}{Asymmetry between left and right average RFD.}
+
+\DeclareMetric{L/R Asymmetry Impulse}{\%}{\mathrm{asymmetry} = 100\cdot \frac{J_{\text{Right}}-J_{\text{Left}}}{\max\left(J_{\text{Right}},\,J_{\text{Left}}\right)}}{Asymmetry between left and right impulse.}
+
+\DeclareMetric{L/R Asymmetry Index Average Force}{\%}{\mathrm{asymmetry\_index} = 100\cdot \frac{\overline{F}_{\text{Right}}-\overline{F}_{\text{Left}}}{0.5\big(\overline{F}_{\text{Right}}+\overline{F}_{\text{Left}}\big)}}{Asymmetry index between left and right average force.}
+
+\DeclareMetric{L/R Asymmetry Index Average RFD}{\%}{\mathrm{asymmetry\_index} = 100\cdot \frac{\overline{\mathrm{RFD}}_{\text{Right}}-\overline{\mathrm{RFD}}_{\text{Left}}}{0.5\big(\overline{\mathrm{RFD}}_{\text{Right}}+\overline{\mathrm{RFD}}_{\text{Left}}\big)}}{Asymmetry index between left and right average RFD.}
+
+\DeclareMetric{L/R Asymmetry Index Impulse}{\%}{\mathrm{asymmetry\_index} = 100\cdot \frac{J_{\text{Right}}-J_{\text{Left}}}{0.5\big(J_{\text{Right}}+J_{\text{Left}}\big)}}{Asymmetry index between left and right impulse.}
+
+\DeclareMetric{L/R Asymmetry Peak Force}{\%}{\mathrm{asymmetry} = 100\cdot \frac{|F|_{\text{Right}}-|F|_{\text{Left}}}{\max\left(|F|_{\text{Right}},\,|F|_{\text{Left}}\right)}}{Asymmetry at peak force.}
+
+\DeclareMetric{L/R Asymmetry Peak RFD}{\%}{\mathrm{asymmetry} = 100\cdot \frac{\mathrm{RFD}_{\text{Right}}-\mathrm{RFD}_{\text{Left}}}{\max\left(\mathrm{RFD}_{\text{Right}},\,\mathrm{RFD}_{\text{Left}}\right)}}{Asymmetry at peak RFD.}
+
+\DeclareMetric{L/R Asymmetry RFD}{\%}{\mathrm{asymmetry} = 100\cdot \frac{\mathrm{RFD}_{\text{Right}}-\mathrm{RFD}_{\text{Left}}}{\max\left(\mathrm{RFD}_{\text{Right}},\,\mathrm{RFD}_{\text{Left}}\right)}}{Asymmetry between left and right RFD.}
+
+\DeclareMetric{L/R Asymmetry RFD-100}{\%}{\mathrm{asymmetry} = 100\cdot \frac{\mathrm{RFD}_{\text{Right}}-\mathrm{RFD}_{\text{Left}}}{\max\left(\mathrm{RFD}_{\text{Right}},\,\mathrm{RFD}_{\text{Left}}\right)}}{Asymmetry between left and right RFD in the first 100 ms.}
+
+\DeclareMetric{L/R Asymmetry RFD-150}{\%}{\mathrm{asymmetry} = 100\cdot \frac{\mathrm{RFD}_{\text{Right}}-\mathrm{RFD}_{\text{Left}}}{\max\left(\mathrm{RFD}_{\text{Right}},\,\mathrm{RFD}_{\text{Left}}\right)}}{Asymmetry between left and right RFD in the first 150 ms.}
+
+\DeclareMetric{L/R Asymmetry RFD-200}{\%}{\mathrm{asymmetry} = 100\cdot \frac{\mathrm{RFD}_{\text{Right}}-\mathrm{RFD}_{\text{Left}}}{\max\left(\mathrm{RFD}_{\text{Right}},\,\mathrm{RFD}_{\text{Left}}\right)}}{Asymmetry between left and right RFD in the first 200 ms.}
+
+\DeclareMetric{L/R Asymmetry RFD-50}{\%}{\mathrm{asymmetry} = 100\cdot \frac{\mathrm{RFD}_{\text{Right}}-\mathrm{RFD}_{\text{Left}}}{\max\left(\mathrm{RFD}_{\text{Right}},\,\mathrm{RFD}_{\text{Left}}\right)}}{Asymmetry between left and right RFD in the first 50 ms.}
+
+\DeclareMetric{Max}{}{\mathrm{max} = \max\left(x\right)}{Maximum value in the dataset.}
+
+\DeclareMetric{Median}{}{Q_{2} = x_{\left(\frac{n+1}{2}\right)}}{Median (2nd quartile) of the dataset.}
+
+\DeclareMetric{Min}{}{\mathrm{min} = \min\left(x\right)}{Minimum value in the dataset.}
+
+\DeclareMetric{Mode}{}{\mathrm{mode} = \text{mode}\left(x\right)}{Most frequently occurring value.}
+
+\DeclareMetric{mRSI}{m/s, ft/s}{\mathrm{mRSI} = \frac{\mathrm{jump\_height}}{\mathrm{contact\_time}\ \text{or}\ \mathrm{time\_to\_takeoff}}}{Modified Reactive Strength Index (mRSI): jump height divided by contact time or time to takeoff.}
+
+\DeclareMetric{mRSI-Lateral}{m/s, ft/s}{\mathrm{mRSI\_lateral} = \frac{\mathrm{jump\_distance}}{\mathrm{contact\_time}\ \text{or}\ \mathrm{time\_to\_takeoff}}}{Modified RSI adapted for lateral jumps.}
+
+\DeclareMetric{Momentum at Peak Force}{kg$\cdot$ m/s}{p_{\text{peakF}} = m\,\lVert \vec{v}_{t_{\text{peak\_force}}} \rVert}{Momentum at peak force during a phase, multiple phases, or a capture.}
+
+\DeclareMetric{Net Impulse}{Ns, lbf$\cdot$ s}{J_{\text{net}} = \int F\,dt}{Net impulse.}
+
+\DeclareMetric{Peak}{}{\mathrm{peak} = \max\left(\left|x\right|\right)}{Largest absolute value in the dataset.}
+
+\DeclareMetric{Peak Direction}{}{t_{\text{peak}} = \operatorname{arg\,max}_{t}\, \lVert \vec{v}(t)\rVert;\quad \theta_{\text{peak}} = \operatorname{atan2}\left(v_{y}(t_{\text{peak}}),\,v_{x}(t_{\text{peak}})\right)}{Direction at the peak of \(\lVert \vec{v}(t)\rVert\).}
+
+\DeclareMetric{Peak Direction Phi}{}{\phi_{\text{peak\_direction}} = \phi_{\text{peak\_direction}}}{Phi value of the peak direction.}
+
+\DeclareMetric{Peak Direction Rho}{}{\rho_{\text{peak\_direction}} = \rho_{\text{peak\_direction}}}{Rho value of the peak direction.}
+
+\DeclareMetric{Peak Direction Theta}{}{\theta\left(t_{\text{peak\_direction}}\right) = \theta\left(t_{\text{peak\_direction}}\right)}{Theta value of the peak direction.}
+
+\DeclareMetric{Peak Force}{\%}{F_{\text{peak}} = \max\left(\left|F\right|\right)}{Peak force (positive or negative) during a phase, multiple phases, or a capture.}
+
+\DeclareMetric{Peak Impulse}{Ns, lbf$\cdot$ s}{J_{\text{peak}} = \max\left(J\right)}{Maximum impulse value in the dataset.}
+
+\DeclareMetric{Peak Momentum XY}{kg$\cdot$ m/s}{p_{xy,\text{peak}} = \max\left(m\,\lVert \vec{v}_{xy} \rVert\right)}{Peak momentum in the XY plane during a phase, multiple phases, or a capture.}
+
+\DeclareMetric{Peak Power}{W}{P_{\text{peak}} = \max\left(\left|F \cdot v\right|\right)}{Peak instantaneous power (positive or negative) during a phase, multiple phases, or a capture.}
+
+\DeclareMetric{Peak RFD}{N/s}{\mathrm{RFD}_{\text{peak}} = \max\left(\frac{dF}{dt}\right)}{Peak instantaneous rate of force development.}
+
+\DeclareMetric{Peak Relative Power}{W/kg}{P_{\text{peak,rel}} = \frac{\max\left(\left|F \cdot v\right|\right)}{m_{\text{system}}}}{Peak instantaneous power relative to system mass.}
+
+\DeclareMetric{Peak-to-Peak Amplitude}{}{A_{\text{p2p}} = x_{\max} - x_{\min}}{Difference between maximum and minimum values.}
+
+\DeclareMetric{Peak Velocity}{m/s, ft/s}{v_{\text{peak}} = \max\left(\left|v\right|\right)}{Peak velocity (positive or negative) during a phase, multiple phases, or a capture.}
+
+\DeclareMetric{Pitch Tempo}{ms}{\mathrm{pitch\_tempo} = t_{\text{peak }\,|F_y|,\,\text{Delivery}} - t_{\text{last up-cross }\,|F_y|=10\,\mathrm{N},\,\text{Loading}}}{Time between last upward crossing of \(|F_y|=10\,\mathrm{N}\) in Loading and the peak \(|F_y|\) in Delivery.}
+
+\DeclareMetric{Positive Impulse}{Ns, lbf$\cdot$ s}{J_{+} = \int F\,dt}{Impulse during braking and propulsive phases.}
+
+\DeclareMetric{Positive Net Impulse}{Ns, lbf$\cdot$ s}{J_{\text{net},+} = \int F\,dt}{Net impulse during braking and propulsive phases.}
+
+\DeclareMetric{Pre-Takeoff Displacement}{cm, in}{d_{\text{pre}} = \sqrt{P_{x}^{2} + P_{y}^{2}}}{Horizontal COM displacement at end of propulsive phase.}
+
+\DeclareMetric{First Quartile}{}{Q_{1} = x_{\left(0.25\,(n+1)\right)}}{First quartile of the dataset.}
+
+\DeclareMetric{Third Quartile}{}{Q_{3} = x_{\left(0.75\,(n+1)\right)}}{Third quartile of the dataset.}
+
+\DeclareMetric{Range}{}{\mathrm{range} = x_{\max} - x_{\min}}{Difference between maximum and minimum values.}
+
+\DeclareMetric{Rate of Force Development}{N/s}{\mathrm{RFD} = \frac{\Delta F}{\Delta t}}{Rate at which force is developed.}
+
+\DeclareMetric{RFD-100}{N/s}{\mathrm{RFD} = \frac{\Delta F}{\Delta t}}{Rate of force development; 100 ms window noted in description only.}
+
+\DeclareMetric{RFD-150}{N/s}{\mathrm{RFD} = \frac{\Delta F}{\Delta t}}{Rate of force development; 150 ms window noted in description only.}
+
+\DeclareMetric{RFD-200}{N/s}{\mathrm{RFD} = \frac{\Delta F}{\Delta t}}{Rate of force development; 200 ms window noted in description only.}
+
+\DeclareMetric{RFD-50}{N/s}{\mathrm{RFD} = \frac{\Delta F}{\Delta t}}{Rate of force development; 50 ms window noted in description only.}
+
+\DeclareMetric{Reaction Time}{ms}{\mathrm{duration} = t_{2}-t_{1}}{Duration of the reaction phase.}
+
+\DeclareMetric{Reaction Time to Takeoff}{ms}{t_{\text{takeoff}}-t_{\text{stimulus}}}{Time from onset of the visual stimulus to takeoff.}
+
+\DeclareMetric{True Quickness}{ms}{t_{\text{61cm\_displacement}} - t_{\text{stimulus}}}{Time from start of visual stimulus until estimated COM displacement reaches 61 cm (\(\approx\) 2 ft).}
+
+\DeclareMetric{RSI}{}{\mathrm{RSI} = \frac{t_{\text{flight\_time}}}{t_{\text{contact\_time}}}\ \text{or}\ \frac{t_{\text{flight\_time}}}{t_{\text{time\_to\_takeoff}}}}{Reactive Strength Index.}
+
+\DeclareMetric{Recoil Time}{ms}{t_{\text{F\_y\_zero\_up}} - t_{\text{F\_y\_first\_neg\_after\_contact}}}{Time from first negative \(F_y\) after delivery contact to first zero-crossing back to \(\ge 0\).}
+
+\DeclareMetric{Relative Net Impulse}{Ns/kg, lbf$\cdot$ s/lb}{J_{\text{net,rel}} = \frac{J_{\text{net}}}{m_{\text{system}}}}{Net impulse relative to system mass.}
+
+\DeclareMetric{Relative Positive Impulse}{Ns/kg, lbf$\cdot$ s/lb}{J_{+\!,\text{rel}} = \frac{J_{+}}{m_{\text{system}}}}{Positive impulse relative to system mass.}
+
+\DeclareMetric{Right Force at Peak Force}{\%}{F_{z}^{\text{right}}(t_{\text{peak\_parent}}) = F_{z}^{\text{right}}(t_{\text{peak\_parent}})}{Right GRF at the parent's peak force time.}
+
+\DeclareMetric{Skewness}{}{\mathrm{skewness} = \frac{1}{n} \sum_{i=1}^{n} \left(\frac{x_{i}-\overline{x}}{\sigma}\right)^{3}}{Asymmetry of the distribution.}
+
+\DeclareMetric{Standard Deviation}{}{s = \sqrt{\frac{1}{n}\sum (x-\overline{x})^{2}}}{Amount of variation or dispersion in the data.}
+
+\DeclareMetric{Stride Length}{cm, in}{\mathrm{COP}_{y,\text{delivery}} - \mathrm{COP}_{y,\text{loading}}}{Forward distance between Launch Zone COP at loading peak \(F_z\) and Landing Zone COP at delivery peak \(F_z\).}
+
+\DeclareMetric{Stride Width}{cm, in}{\mathrm{COP}_{x,\text{delivery}} - \mathrm{COP}_{x,\text{loading}}}{Lateral distance between Launch Zone COP at loading peak \(F_z\) and Landing Zone COP at delivery peak \(F_z\).}
+
+\DeclareMetric{Takeoff Velocity}{m/s, ft/s}{v_{\text{takeoff}} = \vec{v}(t_{\text{takeoff}})}{Velocity of the center of mass at the instant of takeoff.}
+
+\DeclareMetric{Time to Peak Force}{ms}{t_{\text{to\_peak\_force}} = t_{\text{peak\_force}}-t_{\text{initial\_movement}}}{Time from initiation of movement to peak force.}
+
+\DeclareMetric{Time to Takeoff}{ms}{t_{\text{to\_takeoff}} = t_{\text{takeoff}}-t_{\text{start}}}{Time from initial movement to takeoff.}
+
+\DeclareMetric{Trend}{}{\mathrm{trend} = \frac{y_{2}-y_{1}}{x_{2}-x_{1}}}{Overall direction of the data over time.}
+
+\DeclareMetric{Variance}{}{\mathrm{variance} = \frac{1}{n} \sum_{i=1}^{n} \left(x_{i}-\overline{x}\right)^{2}}{How far values are spread from their mean.}
+
+\DeclareMetric{Vertical Leap}{cm, in}{\frac{(\mathrm{initial\_velocity})^{2} \cdot \sin^{2}\left(\theta\right)}{2\,g}}{Vertical distance jumped.}
+
+\DeclareMetric{Jump Height from Takeoff Velocity}{cm, in}{h = \frac{v_{z}^{2}}{2\,g}}{Vertical leap height based on takeoff velocity.}
+
+\end{document}

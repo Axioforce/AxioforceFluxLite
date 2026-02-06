@@ -6,6 +6,7 @@ import sys
 import time
 from dataclasses import dataclass
 from typing import Optional
+from pathlib import Path
 
 import requests
 from PySide6 import QtCore, QtWidgets
@@ -25,11 +26,10 @@ class StreamlitEndpoint:
 
 class MetricsEditorPage(QtWidgets.QWidget):
     """
-    A small "tool page" that can embed a Streamlit app.
+    A small "tool page" that launches a Streamlit app and opens it in the default browser.
 
-    - Tries to embed using QtWebEngine if available.
     - Launches Streamlit as a subprocess (optional; requires streamlit installed).
-    - Falls back to an instructional placeholder if embedding isn't possible.
+    - Shows a lightweight status page inside FluxDeluxe.
     """
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
@@ -84,41 +84,77 @@ class MetricsEditorPage(QtWidgets.QWidget):
         ph.setContentsMargins(0, 0, 0, 0)
         ph.setSpacing(8)
 
+        self._busy = QtWidgets.QProgressBar()
+        self._busy.setRange(0, 0)  # indeterminate
+        self._busy.setTextVisible(False)
+        self._busy.setMaximumWidth(420)
+
         self._placeholder_text = QtWidgets.QLabel("")
         self._placeholder_text.setWordWrap(True)
+        ph.addWidget(self._busy, 0, QtCore.Qt.AlignLeft)
         ph.addWidget(self._placeholder_text)
         ph.addStretch(1)
 
         self._content.addWidget(self._placeholder)
 
-        # WebEngine content (optional)
-        self._webview = None
-        try:
-            from PySide6 import QtWebEngineWidgets  # type: ignore
-
-            self._webview = QtWebEngineWidgets.QWebEngineView()
-            self._content.addWidget(self._webview)
-        except Exception:
-            self._webview = None
-
         self._show_placeholder(
-            "Select this tool to embed a Streamlit app.\n\n"
-            "To configure it, set environment variable:\n"
+            "This tool runs the Metrics Editor (Streamlit) and opens it in your browser.\n\n"
+            "To configure it, set:\n"
             "  METRICS_EDITOR_STREAMLIT_ENTRYPOINT=<path to your streamlit app.py>\n\n"
-            f"Default URL target: {self._endpoint.url}\n"
+            f"Target URL: {self._endpoint.url}\n"
         )
+
+    def _set_loading(self, text: str) -> None:
+        self._busy.setVisible(True)
+        self._show_placeholder(text)
+
+    def _set_idle_placeholder(self, text: str) -> None:
+        self._busy.setVisible(False)
+        self._show_placeholder(text)
+
+    def _repo_root(self) -> Path:
+        # FluxDeluxe/ui/tools/metrics_editor_page.py -> repo root
+        return Path(__file__).resolve().parents[3]
+
+    def _default_entrypoint(self) -> str:
+        # Standard location in this monorepo
+        return str((self._repo_root() / "tools" / "MetricsEditor" / "metrics_editor_app.py").resolve())
+
+    def _resolve_dynamo_root(self) -> Path:
+        # Prefer explicit env override
+        env = (os.environ.get("METRICS_EDITOR_DYNAMO_ROOT") or "").strip()
+        if env:
+            p = Path(env).expanduser().resolve()
+            if p.exists():
+                return p
+        # Repo-local default
+        return (self._repo_root() / "FluxDeluxe" / "DynamoDeluxe").resolve()
+
+    def _resolve_entrypoint(self) -> str:
+        ep = (os.environ.get("METRICS_EDITOR_STREAMLIT_ENTRYPOINT") or self._entrypoint or "").strip()
+        if not ep:
+            ep = self._default_entrypoint()
+
+        p = Path(ep)
+        if not p.is_absolute():
+            p = (self._repo_root() / p).resolve()
+        return str(p)
 
     def ensure_started(self) -> None:
         """
         Start Streamlit (if configured) and load the page if embedding is possible.
         Safe to call multiple times.
         """
-        if not self._entrypoint:
+        # Re-evaluate entrypoint each time (allows env override without restart).
+        self._entrypoint = self._resolve_entrypoint()
+
+        if not self._entrypoint or not Path(self._entrypoint).exists():
             self.status.setText("Metrics Editor is not configured (no entrypoint set).")
-            self._show_placeholder(
+            self._set_idle_placeholder(
                 "No Streamlit entrypoint configured.\n\n"
                 "Set environment variable:\n"
                 "  METRICS_EDITOR_STREAMLIT_ENTRYPOINT=<path to your streamlit app.py>\n\n"
+                f"Default expected location:\n  {self._default_entrypoint()}\n\n"
                 "Then restart the app (or click Restart here)."
             )
             return
@@ -130,12 +166,17 @@ class MetricsEditorPage(QtWidgets.QWidget):
 
         # Try to load once it's ready (poll timer handles readiness)
         self.status.setText(f"Starting Streamlit… {self._endpoint.url}")
+        self._set_loading(
+            "Starting Streamlit…\n\n"
+            "If you see a browser error briefly, it usually means Streamlit is still booting.\n"
+            "This page should switch to the editor automatically once it’s ready."
+        )
         self._poll_timer.start()
 
     def restart(self) -> None:
         self.shutdown()
         # Re-read env in case user changed it without restarting python
-        self._entrypoint = os.environ.get("METRICS_EDITOR_STREAMLIT_ENTRYPOINT", self._entrypoint).strip()
+        self._entrypoint = self._resolve_entrypoint()
         self.ensure_started()
 
     def shutdown(self) -> None:
@@ -154,15 +195,42 @@ class MetricsEditorPage(QtWidgets.QWidget):
             except Exception:
                 pass
         self._proc = None
+        try:
+            self._set_idle_placeholder("Streamlit stopped.")
+        except Exception:
+            pass
 
     def _start_streamlit(self) -> bool:
+        entrypoint = self._resolve_entrypoint()
+        dynamo_root = self._resolve_dynamo_root()
+        repo_root = self._repo_root()
+
+        # Ensure both packages are importable:
+        # - repo root => `tools.*`
+        # - dynamo root => `app.*` (DynamoDeluxe)
+        env = os.environ.copy()
+        # Ensure DynamoDeluxe runs in "dev" layout (uses ../file_system relative to cwd)
+        # so importing app.config.dynamo_config can find file_system/paths.cfg.
+        env.setdefault("APP_ENV", "development")
+        env.setdefault("PYTHONUNBUFFERED", "1")
+        pythonpath_parts = [str(repo_root)]
+        if dynamo_root.exists():
+            pythonpath_parts.append(str(dynamo_root))
+            env.setdefault("METRICS_EDITOR_DYNAMO_ROOT", str(dynamo_root))
+        if env.get("PYTHONPATH"):
+            pythonpath_parts.append(env["PYTHONPATH"])
+        env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
+
+        # data_maintenance.py uses ../file_system relative to DynamoDeluxe/app
+        cwd = (dynamo_root / "app") if (dynamo_root / "app").exists() else Path(entrypoint).resolve().parent
+
         # Start: python -m streamlit run <entrypoint> --server.address ... --server.port ...
         cmd = [
             sys.executable,
             "-m",
             "streamlit",
             "run",
-            self._entrypoint,
+            entrypoint,
             "--server.headless",
             "true",
             "--server.address",
@@ -178,12 +246,13 @@ class MetricsEditorPage(QtWidgets.QWidget):
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                cwd=os.path.dirname(self._entrypoint) or None,
+                cwd=str(cwd),
+                env=env,
                 text=True,
             )
         except Exception as exc:
             self.status.setText(f"Failed to launch Streamlit: {exc}")
-            self._show_placeholder(
+            self._set_idle_placeholder(
                 "Could not launch Streamlit.\n\n"
                 "Make sure Streamlit is installed in this environment:\n"
                 "  pip install streamlit\n"
@@ -192,6 +261,25 @@ class MetricsEditorPage(QtWidgets.QWidget):
 
         self.status.setText(f"Launching Streamlit… {self._endpoint.url}")
         return True
+
+    def _is_streamlit_ready(self) -> bool:
+        """
+        Prefer Streamlit's internal health endpoint when available.
+        Fall back to probing the base URL.
+        """
+        base = self._endpoint.url
+        try:
+            r = requests.get(f"{base}/_stcore/health", timeout=0.25)
+            if r.status_code == 200:
+                return True
+        except Exception:
+            pass
+
+        try:
+            r2 = requests.get(base, timeout=0.25)
+            return r2.status_code == 200
+        except Exception:
+            return False
 
     def _poll_ready(self) -> None:
         url = self._endpoint.url
@@ -203,35 +291,25 @@ class MetricsEditorPage(QtWidgets.QWidget):
             self._show_placeholder(self._read_recent_output() or "Streamlit exited unexpectedly.")
             return
 
-        # Probe readiness quickly (no UI blocking)
-        try:
-            r = requests.get(url, timeout=0.2)
-            if 200 <= r.status_code < 500:
-                self._poll_timer.stop()
-                self._load(url)
-                return
-        except Exception:
+        # Probe readiness quickly (no UI blocking).
+        # IMPORTANT: don't treat 404/500 as "ready" — that causes the embedded view
+        # to show a Chromium error page before Streamlit is actually serving.
+        if self._is_streamlit_ready():
+            self._poll_timer.stop()
+            self._load(url)
             return
 
         # If it takes a while, keep the user informed.
         self.status.setText(f"Waiting for Streamlit… {url}")
+        self._set_loading(f"Waiting for Streamlit…\n\n{url}")
 
     def _load(self, url: str) -> None:
-        if self._webview is None:
-            self.status.setText("Qt WebEngine not available; opening in browser instead.")
-            self._show_placeholder(
-                "Qt WebEngine (PySide6.QtWebEngineWidgets) is not available in this environment.\n\n"
-                f"Open Streamlit in your browser: {url}\n"
-            )
-            self._open_in_browser()
-            return
+        self.status.setText(f"Opened in browser: {url}")
+        self._set_idle_placeholder(f"Opened in your browser:\n\n{url}\n")
+        self._open_in_browser(url)
 
-        self.status.setText(f"Loaded: {url}")
-        self._content.setCurrentWidget(self._webview)
-        self._webview.setUrl(QtCore.QUrl(url))
-
-    def _open_in_browser(self) -> None:
-        QtCore.QDesktopServices.openUrl(QtCore.QUrl(self._endpoint.url))
+    def _open_in_browser(self, url: str | None = None) -> None:
+        QtCore.QDesktopServices.openUrl(QtCore.QUrl(url or self._endpoint.url))
 
     def _show_placeholder(self, text: str) -> None:
         self._content.setCurrentWidget(self._placeholder)

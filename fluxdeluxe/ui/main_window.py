@@ -10,6 +10,7 @@ from PySide6 import QtWidgets, QtGui, QtCore
 from .dialogs.backend_log_dialog import BackendLogDialog
 from .tools.launcher_page import ToolLauncherPage
 from .tools.tool_registry import ToolSpec, default_tools
+from .tools.metrics_editor_page import MetricsEditorPage
 from .tools.web_tool_page import WebToolPage
 
 
@@ -50,6 +51,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # --- FluxLite tool page (lazy loaded) ---
         self._fluxlite_page: Optional[QtWidgets.QWidget] = None
+        # --- Metrics Editor tool page (lazy loaded; does NOT require backend) ---
+        self._metrics_editor_page: Optional[MetricsEditorPage] = None
 
         # --- Web tool host page (hosted Streamlit, etc) ---
         self.web_tool_page = WebToolPage()
@@ -133,9 +136,25 @@ class MainWindow(QtWidgets.QMainWindow):
             self.tool_stack.addWidget(ph)
             return ph
 
+    def _ensure_metrics_editor_page(self) -> MetricsEditorPage:
+        if self._metrics_editor_page is not None:
+            return self._metrics_editor_page
+
+        page = MetricsEditorPage()
+        self._metrics_editor_page = page
+        self.tool_stack.addWidget(page)
+
+        # Ensure the tool can clean up on close.
+        try:
+            self.destroyed.connect(page.shutdown)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+        return page
+
     def open_tool(self, tool_id: str) -> None:
         # Avoid UI-triggered races: do not open tools until backend is detected.
-        if not self._backend_ready:
+        if not self._backend_ready and str(tool_id or "").strip() != "metrics_editor":
             try:
                 self.status_label.setText("Starting backend…")
             except Exception:
@@ -149,6 +168,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if spec.kind == "qt" and spec.tool_id == "fluxlite":
             page = self._ensure_fluxlite_page()
+            self.tool_stack.setCurrentWidget(page)
+            self.tool_title.setText(spec.name)
+            return
+
+        if spec.kind == "qt" and spec.tool_id == "metrics_editor":
+            page = self._ensure_metrics_editor_page()
+            try:
+                page.ensure_started()
+            except Exception:
+                pass
             self.tool_stack.setCurrentWidget(page)
             self.tool_title.setText(spec.name)
             return
@@ -230,6 +259,11 @@ class MainWindow(QtWidgets.QMainWindow):
             page = self._fluxlite_page
             if page is not None and hasattr(page, "shutdown"):
                 page.shutdown()  # type: ignore[misc]
+        except Exception:
+            pass
+        try:
+            if self._metrics_editor_page is not None:
+                self._metrics_editor_page.shutdown()
         except Exception:
             pass
         super().closeEvent(event)
