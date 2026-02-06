@@ -40,7 +40,17 @@ def get_dynamo_process() -> "subprocess.Popen[bytes] | None":
 
 def _get_dynamo_path() -> Path:
     """Return the path to the DynamoDeluxe submodule."""
-    return Path(__file__).resolve().parent / "DynamoDeluxe"
+    base = Path(__file__).resolve().parent / "DynamoDeluxe"
+    if (base / "app" / "main.py").exists():
+        return base
+
+    # Handle nested submodule layouts like DynamoDeluxe/AxioforceDynamoPy/...
+    if base.exists():
+        for child in base.iterdir():
+            if child.is_dir() and (child / "app" / "main.py").exists():
+                return child
+
+    return base
 
 
 def _get_dynamo_tracking_branch() -> str:
